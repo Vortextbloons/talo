@@ -1,4 +1,4 @@
-//! Lifecycle and protocol bridge for the bundled Node/Pi worker.
+//! Lifecycle and protocol bridge for the bundled Pi worker.
 //!
 //! The worker is started lazily, speaks newline-delimited JSON on stdin/stdout, and is
 //! contained by a Windows Job Object. Requests are correlated by id on a reader thread, so a
@@ -195,7 +195,7 @@ impl Supervisor {
         let root = &self.root;
         let dependencies = self.dependencies.get_or_insert_with(|| {
             json!({
-            "node":root.join("runtime/node/node.exe").is_file(),
+            "runtime":crate::runtime::Runtime::locate(root).is_some(),
             "chromium":root.join("runtime/chromium/chrome-win64/chrome.exe").is_file(),
             "donsetch":root.join("bundle/node_modules/donsetch/binaries/donsetch.exe").is_file(),
             "pi":root.join("bundle/node_modules/@earendil-works/pi-coding-agent/package.json").is_file(),
@@ -203,7 +203,7 @@ impl Supervisor {
             "mcpAdapter":root.join("bundle/node_modules/pi-mcp-adapter/package.json").is_file()
             })
         });
-        json!({"database":"ready", "services":services, "dependencies":dependencies.clone(),"browser":self.browser.as_ref().and_then(|b| b.state.lock().ok().map(|s| s.clone())).unwrap_or(json!({"state":"stopped","owner":"paused","tabs":[],"busy":false}))})
+        json!({"database":"ready", "services":services, "dependencies":dependencies.clone(),"browserSessions":self.browser.as_ref().and_then(|b| b.sessions.lock().ok().map(|s|s.clone())).unwrap_or(json!({})),"browser":self.browser.as_ref().and_then(|b| b.state.lock().ok().map(|s| s.clone())).unwrap_or(json!({"state":"stopped","owner":"paused","tabs":[],"busy":false}))})
     }
 
     pub fn start(&mut self, id: &str) -> Result<(), String> {
@@ -267,10 +267,7 @@ impl Supervisor {
     }
 
     fn spawn_pi(&mut self) -> Result<(), String> {
-        let node = self.root.join("runtime/node/node.exe");
-        if !node.is_file() {
-            return Err("Bundled Node runtime is missing; run npm run vendor".into());
-        }
+        let runtime = crate::runtime::Runtime::require(&self.root)?;
         let script = self.root.join("bundle/workers/pi/src/main.js");
         if !script.is_file() {
             return Err("Bundled Pi worker is missing; run npm run prepare:bundle".into());
@@ -287,9 +284,8 @@ impl Supervisor {
             .append(true)
             .open(logs.join("pi.stderr.log"))
             .map_err(|error| error.to_string())?;
-        let mut command = Command::new(&node);
+        let mut command = runtime.command(&script);
         command
-            .arg(&script)
             .current_dir(self.root.join("bundle"))
             .env("TALO_DATA_DIR", &self.data)
             .env("TALO_VENDOR_DIR", &self.root)
@@ -750,7 +746,8 @@ mod tests {
             let pid_file=data.join(if crash{"crash.pid"}else{"stop.pid"});
             let mut supervisor=Supervisor::new(root.clone(),data.clone());
             supervisor.ensure_worker().unwrap();
-            supervisor.request("tools.configure",json!({"servers":[{"id":"fixture","transport":"stdio","command":root.join("runtime/node/node.exe"),"args":[fixture.to_string_lossy(),"--spawn-child",pid_file.to_string_lossy()],"enabled":true,"trusted":true}]}),Duration::from_secs(10)).unwrap();
+            let runtime=crate::runtime::Runtime::require(&root).unwrap();
+            supervisor.request("tools.configure",json!({"servers":[{"id":"fixture","transport":"stdio","command":runtime.path().to_string_lossy(),"args":[fixture.to_string_lossy(),"--spawn-child",pid_file.to_string_lossy()],"enabled":true,"trusted":true}]}),Duration::from_secs(10)).unwrap();
             supervisor.request("tools.test",json!({"server":"fixture"}),Duration::from_secs(10)).unwrap();
             let until=Instant::now()+Duration::from_secs(15);
             while !pid_file.exists(){assert!(Instant::now()<until,"MCP child did not start");std::thread::sleep(Duration::from_millis(30));}

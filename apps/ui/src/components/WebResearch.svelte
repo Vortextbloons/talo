@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ResearchActivity } from '../../../../packages/contracts/src/chat';
   import { invoke } from '@tauri-apps/api/core';
+  import { openBrowserSource } from '../lib/browser.svelte';
   import { sendMessage } from '../lib/chat.svelte';
   let { items, onCancel, working }: { items: ResearchActivity[]; onCancel: () => void; working: boolean } = $props();
   let openError = $state('');
@@ -14,7 +15,7 @@
   }
   async function openSource(event: MouseEvent, url: string) {
     event.preventDefault();
-    try { await invoke('research_source_open', { url }); }
+    try { await openBrowserSource(url); }
     catch (error) { openError = String(error); }
   }
 </script>

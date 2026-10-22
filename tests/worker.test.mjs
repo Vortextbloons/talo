@@ -175,7 +175,7 @@ test('real Pi streaming, authenticated provider validation, cancellation, and re
     assert.ok(chatRequest.body.messages.some(message =>
       message.role === 'system' && /You are Talo|default name is Talo/u.test(JSON.stringify(message.content))),
     'chat should use the Talo persona');
-    assert.deepEqual(chatRequest.body.tools.map(tool => tool.function.name).sort(), ['browser_ai','browser_download','browser_handoff','browser_interact','browser_open','browser_screenshot','browser_snapshot','browser_tabs','edit','mcp','read','web_crawl','web_fetch','web_screenshot','web_search','write'], 'native research, browser, guarded Pi file tools and one MCP proxy are registered without shell tools');
+    assert.deepEqual(chatRequest.body.tools.map(tool => tool.function.name).sort(), ['edit','read','tools','write'], 'one managed Pi extension discovers MCP groups; file tools remain native and shell stays off');
     assert.ok(!chatRequest.body.messages.some(message => message.role === 'tool'),
       'worker must not send tool results');
     assert.equal(chatRequest.body.stream, true);

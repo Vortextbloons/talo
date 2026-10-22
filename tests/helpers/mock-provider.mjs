@@ -97,7 +97,7 @@ export async function startMockProvider(options = {}) {
         });
         if (['web-tool','mcp-tool'].includes(state.mode) && !parsed.messages?.some(message => message.role === 'tool')) {
           const chunk = (delta, finish_reason = null) => res.write(`data: ${JSON.stringify({id:'mock-tool',object:'chat.completion.chunk',created:1,model:parsed.model,choices:[{index:0,delta,finish_reason}]})}\n\n`);
-          chunk({role:'assistant', tool_calls:[{index:0,id:'call-web-1',type:'function',function:state.mode==='mcp-tool'?{name:'mcp',arguments:JSON.stringify({operation:'call',server:'fixture',tool:'echo',arguments:{text:'Pi executed real MCP'}})}:{name:'web_search',arguments:JSON.stringify({query:'Rust documentation'})}}]});
+          chunk({role:'assistant', tool_calls:[{index:0,id:'call-web-1',type:'function',function:state.mode==='mcp-tool'?{name:'tools',arguments:JSON.stringify({operation:'call',server:'fixture',tool:'echo',arguments:{text:'Pi executed real MCP'}})}:{name:'tools',arguments:JSON.stringify({operation:'call',server:'talo-research',tool:'web_search',arguments:{query:'Rust documentation'}})}}]});
           chunk({}, 'tool_calls');
           res.end('data: [DONE]\n\n');
           return;

@@ -4,6 +4,7 @@ import { createInterface } from 'node:readline';
 import os from 'node:os';
 import path from 'node:path';
 import { release, sha256 } from './donsetch.mjs';
+import { runtimeArgs, runtimePath } from './runtime.mjs';
 
 for (const [name, expected] of Object.entries(release.files)) {
   if (sha256(await readFile(path.join('vendor/bundle/node_modules/donsetch/binaries', name))) !== expected) throw new Error(`Bundled DonSeTch checksum mismatch: ${name}`);
@@ -17,8 +18,9 @@ if (sha256(await readFile(`vendor/bundle/donsetch-v${release.version}-source.tar
 const data = await mkdtemp(path.join(os.tmpdir(), 'talo-bundle-check-'));
 let child;
 try {
-  child = spawn(path.resolve('vendor/runtime/node/node.exe'),
-    [path.resolve('vendor/bundle/workers/pi/src/main.js')], {
+  const runtime = runtimePath();
+  child = spawn(runtime,
+    runtimeArgs(runtime, path.resolve('vendor/bundle/workers/pi/src/main.js')), {
       cwd: path.resolve('vendor/bundle'),
       env: { ...process.env, NODE_OPTIONS: '', NODE_PATH: '', TALO_DATA_DIR: data, TALO_IDLE_MS: '120000' },
       windowsHide: true,
@@ -31,7 +33,7 @@ try {
     const finish = (error) => { clearTimeout(timeout); error ? reject(error) : resolve(); };
     // Diagnostics may contain provider information; do not echo subprocess output.
     child.stderr.resume();
-    child.once('error', () => finish(new Error('Unable to launch bundled Node runtime')));
+    child.once('error', () => finish(new Error('Unable to launch bundled runtime')));
     child.stdin.on('error', () => finish(new Error('Bundled Pi protocol pipe closed')));
     createInterface({ input: child.stdout }).on('line', line => {
       let event;
@@ -51,7 +53,7 @@ try {
     });
     child.once('exit', code => finish(code === 0 && verified ? undefined : new Error('Bundled Pi exited before completing its health check')));
   });
-  console.log('Bundled Node launches Pi and completes its IPC health check.');
+  console.log('Bundled runtime launches Pi and completes its IPC health check.');
 } finally {
   if (child?.pid && child.exitCode === null && child.signalCode === null) {
     const exited = new Promise(resolve => child.once('exit', resolve));

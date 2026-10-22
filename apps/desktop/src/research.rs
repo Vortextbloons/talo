@@ -306,9 +306,9 @@ mod tests {
     }
     fn fixture() -> Research {
         let root = root();
-        let mut cmd = Command::new(root.join("vendor/runtime/node/node.exe"));
-        cmd.arg(root.join("tests/fixtures/web-mcp.mjs"))
-            .stdin(Stdio::piped())
+        let runtime = crate::runtime::Runtime::require(&root.join("vendor")).unwrap();
+        let mut cmd = runtime.command(&root.join("tests/fixtures/web-mcp.mjs"));
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         #[cfg(windows)]

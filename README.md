@@ -1,10 +1,10 @@
 # Talo
 
-A Windows-first, local desktop AI assistant foundation. Tauri 2 owns the tray, persistence, permissions, and service lifecycle. Svelte 5 provides the interface. The unmodified, published Pi SDK runs in a bundled Node process.
+A Windows-first, local desktop AI assistant foundation. Tauri 2 owns the tray, persistence, permissions, and service lifecycle. Svelte 5 provides the interface. The unmodified, published Pi SDK runs in a bundled Bun process.
 
 Slice 4 adds built-in, API-key-free public web research through pinned DonSeTch 4.10.1: search, fetch, crawl and screenshots. The Windows supervisor starts research on demand, keeps active work alive, and removes the worker and renderers after two idle minutes. Chat includes expandable evidence, source links, cancellation and retries. See [Slice 4 architecture and verification](docs/SLICE-4.md) and [redistribution requirements](docs/DONSETCH-REDISTRIBUTION.md).
 
-Slice 5 adds a persistent Chromium browser inside Talo, eight Pi browser tools, local Stagehand v4 intelligence, approvals, exclusive input ownership and crash recovery. Use the Browser chip in the composer to open a side preview, then click the preview for a larger view. Opening the view watches Pi; Take Over explicitly enables manual input. Turn activity is bundled into one collapsed group. Open **Browser** to watch, pause, take over, return control or stop. Closing the Talo interface and Pi hibernation leave Chromium running; **Quit Talo** stops all services. See [Slice 5 architecture and verification](docs/SLICE-5.md).
+Slice 5 adds a persistent Chromium browser inside Talo, eight Pi browser tools, local Stagehand v4 intelligence, automatic per-thread actions, exclusive input ownership and crash recovery. Use the Browser chip in the composer to open a side preview, then click the preview for a larger view. Opening the view watches Pi; Take Over explicitly enables manual input. Turn activity is bundled into one collapsed group. Open **Browser** to watch, pause, take over, return control or stop. Closing the Talo interface and Pi hibernation leave Chromium running; **Quit Talo** stops all services. See [Slice 5 architecture and verification](docs/SLICE-5.md).
 
 ## Develop (Windows x64)
 
@@ -29,4 +29,4 @@ Closing the window destroys its WebView2 tree and leaves Talo in the tray; Open 
 
 See [architecture](docs/ARCHITECTURE.md), [model providers](docs/PROVIDERS.md), [feature boundaries](docs/PLACEHOLDERS.md), [runtime setup](docs/SETUP.md), [design](docs/DESIGN.md), and [third-party notices](docs/THIRD-PARTY-NOTICES.md).
 
-The chat companion panel keeps the animated agent, current activity and browser on the right. Click the agent name to rename it; the saved identity is applied to the system prompt on the next turn, including resumed conversations and retries, independently of memory settings. Browser viewing remains opt-in, and manual interaction requires Take Over.
+The chat companion panel keeps the animated agent, current activity and browser on the right. Click the agent name to rename it; the saved identity is applied to the system prompt on the next turn, including resumed conversations and retries, independently of memory settings. The visible chat gets an automatic live browser thumbnail. Each chat keeps separate tabs and control state, while website logins are shared. Browser actions run without approval prompts; manual interaction requires Take Over. Agent status appears beside the animated logo instead of a separate Pi badge.

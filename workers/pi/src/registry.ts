@@ -10,7 +10,7 @@ export class ToolRegistry {
   wrap(tools: ToolDefinition[]):ToolDefinition[] {
     if(new Set(tools.map(t=>t.name)).size!==tools.length)throw new Error('Duplicate tool registration.');
     return tools.map(tool=>{
-      const category = tool.name.startsWith('web_')?'Web Research':tool.name.startsWith('browser_')?'Browser':tool.name==='mcp'?'Integrations':'Files';
+      const category = tool.name.startsWith('web_')?'Web Research':tool.name.startsWith('browser_')?'Browser':['mcp','tools'].includes(tool.name)?'Integrations':'Files';
       const permissions = category==='Web Research'?['web.public']:category==='Browser'?['browser.session','browser.action']:category==='Files'?['files.approve']:['mcp.call'];
       const descriptor:ManagedTool = {id:tool.name,description:tool.description,category,permissions,availability:'available',timeoutMs:category==='Browser'?145_000:65_000,maxResultBytes:category==='Browser'?98_304:16_384,resources:[category==='Web Research'?'DonSeTch':category==='Browser'?'Chromium / Playwright / Stagehand':category==='Files'?'approved file':'MCP on demand']};
       const previous=this.entries.get(tool.name);

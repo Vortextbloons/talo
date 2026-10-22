@@ -1,19 +1,21 @@
 import { createInterface } from 'node:readline';
-import { BrowserManager } from './manager.js';
+import { BrowserSessions } from './sessions.js';
 const root = process.env.TALO_VENDOR_DIR;
 const data = process.env.TALO_DATA_DIR;
 if (!root || !data) throw new Error('Host runtime paths required');
 const send = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');
-const manager = new BrowserManager(root, data, state => send({ type: 'browser_state', state }), frame => send({ type: 'browser_frame', frame }));
+const sessions = new BrowserSessions(root, data,
+  (sessionId, state) => send({ type: 'browser_state', sessionId, state }),
+  (sessionId, frame) => send({ type: 'browser_frame', sessionId, frame }));
 const requests = new Map<string, AbortController>();
 let stopping = false;
 async function stop() {
   if (stopping) return;
   stopping = true;
   for (const controller of requests.values()) controller.abort();
-  await manager.dispose(); process.exit(0);
+  await sessions.dispose(); process.exit(0);
 }
-await manager.acquire();
+await sessions.acquire();
 const input = createInterface({ input: process.stdin });
 input.on('close', () => void stop());
 input.on('line', line => {
@@ -27,8 +29,11 @@ input.on('line', line => {
   void (async () => {
     try {
       let result;
+      const sessionId = String(value.params?.sessionId ?? 'primary');
+      if (value.method === 'forget') { await sessions.forget(sessionId); send({id, result: true}); return; }
+      const manager = sessions.get(sessionId);
       if (value.method === 'state') result = await manager.state();
-      else if (value.method === 'view') { await manager.viewing(value.params?.enabled === true, String(value.params?.leaseId)); result = await manager.state(); }
+      else if (value.method === 'view') { await sessions.viewing(sessionId, value.params?.enabled === true, String(value.params?.leaseId)); result = await manager.state(); }
       else if (value.method === 'input') { await manager.input(value.params); result = true; }
       else if (value.method === 'control') {
         const action = value.params?.action;

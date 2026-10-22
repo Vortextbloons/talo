@@ -14,6 +14,7 @@ mod scheduler;
 mod storage;
 mod supervisor;
 mod research;
+mod runtime;
 use permissions::Permissions;
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -79,7 +80,7 @@ impl Host {
     /// Drain worker protocol messages, persist/emit chat transitions and enforce idle sleep.
     /// Running this under the same mutex as commands is what makes snapshots and events
     /// race-safe: a generation cannot advance while a command is mutating it.
-    fn browser_message(&mut self, app: &tauri::AppHandle, mut message: Value) {
+    fn browser_message(&mut self, _app: &tauri::AppHandle, mut message: Value) {
         if message["method"] == "notifications/cancelled" {
             let request = message["params"]["requestId"].clone();
             let ids: Vec<_> = self.browser_approvals.iter().filter(|(_, (m,_,_))| m["id"] == request).map(|(id,_)| id.clone()).collect();
@@ -91,27 +92,16 @@ impl Host {
         if !["browser_open","browser_tabs","browser_snapshot","browser_interact","browser_ai","browser_screenshot","browser_download","browser_handoff"].contains(&name.as_str()) {
             self.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Unknown browser tool"}})); return;
         }
-        // Model-supplied flags can never authorize a browser operation.
-        if let Some(params) = message["params"].as_object_mut() { params.remove("approved"); }
-        if ["browser_interact","browser_ai","browser_download"].contains(&name.as_str()) {
-            let attended=app.get_webview_window("main").is_some_and(|w|w.is_visible().unwrap_or(false));
-            if permissions::policy("browser.action","",&Value::Null,attended)==permissions::Decision::Deny {
-                self.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Unapproved browser actions cannot run unattended."}}));return;
-            }
-            if self.browser_approvals.len() >= 8 { self.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Too many pending browser approvals"}})); return; }
-            if let Ok(browser) = self.supervisor.ensure_browser() {
-                if let Ok(state) = browser.state.lock() {
-                    if let Some(tab) = state["tabs"].as_array().and_then(|tabs| tabs.iter().find(|tab| tab["id"] == state["activeTab"])) {
-                        message["params"]["target"] = json!({"tabId":tab["id"],"revision":tab["revision"]});
-                        message["params"]["page"] = json!({"url":tab["url"],"title":tab["title"]});
-                    }
-                }
-            }
-            let resource = json!({"tool":name,"arguments":message["params"]["arguments"],"target":message["params"]["target"]}).to_string();
-            let id = self.permissions.request("browser.action".into(), resource);
-            self.browser_approvals.insert(id, (message, Instant::now(), self.supervisor.worker_epoch()));
-            open_main(app);
-        } else { self.supervisor.browser_request(message); }
+        // Browser automation is enabled by the user for every chat. Bind routing to
+        // the worker's conversation; tool arguments never choose another session.
+        let session = message["params"]["sessionId"].as_str().unwrap_or("");
+        let exists = self.db.query_row("SELECT COUNT(*) FROM chat_conversations WHERE id=?1", [session], |row| row.get::<_, i64>(0)).unwrap_or(0) > 0;
+        if !exists {
+            self.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Browser requires a valid chat thread."}})); return;
+        }
+        message["params"]["approved"] = json!(true);
+        if let Some(params) = message["params"].as_object_mut() { params.remove("target"); }
+        self.supervisor.browser_request(message);
     }
     fn pump(&mut self, app: &tauri::AppHandle) {
         if let Some(frame) = self.supervisor.take_browser_frame() { let _ = app.emit_to("main", "browser-frame", frame); }
@@ -356,7 +346,7 @@ async fn service_control(
     app: tauri::AppHandle,
     service: String,
     start: bool,
-    grant: Option<String>,
+    _grant: Option<String>,
 ) -> Result<Value, String> {
     run_blocking(app, move |app| {
         let shared = app.state::<Shared>();
@@ -369,13 +359,7 @@ async fn service_control(
                 "Pi is generating a response; stop the response before shutting it down".into(),
             );
         }
-        if start && service == "browser" {
-            h.permissions.consume(
-                grant.as_deref().unwrap_or(""),
-                "browser.start",
-                "persistent-profile",
-            )?;
-        }
+
         if start {
             h.supervisor.start(&service)?;
         } else {

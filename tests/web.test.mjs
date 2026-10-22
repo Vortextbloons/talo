@@ -72,7 +72,7 @@ test('real Pi invokes native web tool and consumes a bounded host MCP reply', {t
     assert.equal(completed.event.activity.sources[0], 'https://doc.rust-lang.org/');
     const tools = provider.state.requests.find(value => value.body.tools)?.body.tools;
     assert.equal(new Set(tools.map(tool => tool.function.name)).size, tools.length);
-    assert.deepEqual(tools.map(tool=>tool.function.name).filter(name=>name.startsWith('web_')).sort(),[...WEB_TOOLS].sort());
+    assert.deepEqual(tools.map(tool=>tool.function.name).sort(),['edit','read','tools','write']);
     await worker.request('open-cancel-web','session.open',{conversationId:'web-cancel',provider:'custom',model:'mock-model',baseUrl:provider.url,apiKey:provider.state.key});
     const mark = worker.mark();
     await worker.request('prompt-cancel-web','session.prompt',{conversationId:'web-cancel',generationId:'cancel-web-generation',text:'Search now'});

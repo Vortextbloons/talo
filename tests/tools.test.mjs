@@ -88,7 +88,7 @@ test('Pi model executes real MCP through the single guarded proxy', {timeout:400
     const messages=provider.state.requests.filter(r=>r.url.endsWith('/chat/completions'));
     assert.ok(messages[1].body.messages.some(m=>m.role==='tool'&&m.content.includes('Pi executed real MCP')));
     const names=messages[0].body.tools.map(t=>t.function.name);
-    assert.equal(new Set(names).size,names.length);assert.ok(names.includes('mcp'));assert.ok(!names.includes('fixture_echo'));assert.ok(!names.includes('bash'));
+    assert.equal(new Set(names).size,names.length);assert.ok(names.includes('tools'));assert.ok(!names.includes('fixture_echo'));assert.ok(!names.includes('bash'));
     assert.match(await readFile(opened.path,'utf8'),/Pi executed real MCP/);
     await worker.request('shutdown','shutdown');assert.equal(await worker.exited,0);
   }finally{await worker.kill();await provider.close();await rm(data,{recursive:true,force:true});}

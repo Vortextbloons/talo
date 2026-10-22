@@ -65,7 +65,7 @@
     if(!isTauri()){error='Open the desktop app to manage local services.';return;}
     try{busy=true;status=await invoke<RuntimeStatus>('service_control',{service,start,grant:grant??null});}catch(e){error=String(e);}finally{busy=false;}
   }
-  function browserStart(){return permission('browser.start','persistent-profile',id=>control('browser',true,id));}
+  function browserStart(){return control('browser',true);}
   async function renameAgent(name: string) {
     if (!isTauri()) throw new Error('Open the desktop app to save your agent name.');
     const next = {...settings, agentName: name};

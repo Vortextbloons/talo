@@ -2,20 +2,24 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import fs from 'node:fs';
 import path from 'node:path';
+import { runtimeArgs, runtimePath } from '../../scripts/runtime.mjs';
 
 function bundledRuntime() {
-  const node = path.resolve('vendor/runtime/node/node.exe');
-  return fs.existsSync(node) ? node : process.execPath;
+  try {
+    return runtimePath();
+  } catch {
+    return process.execPath;
+  }
 }
 
 export function workerLocation() {
   const bundled = path.resolve('vendor/bundle/workers/pi/src/main.js');
   if (fs.existsSync(bundled)) {
-    return { script: bundled, cwd: path.resolve('vendor/bundle'), node: bundledRuntime() };
+    return { script: bundled, cwd: path.resolve('vendor/bundle'), runtime: bundledRuntime() };
   }
   const dist = path.resolve('dist/workers/pi/src/main.js');
   if (fs.existsSync(dist)) {
-    return { script: dist, cwd: path.resolve('.'), node: bundledRuntime() };
+    return { script: dist, cwd: path.resolve('.'), runtime: bundledRuntime() };
   }
   throw new Error('Build the Pi worker before running its tests');
 }
@@ -26,7 +30,7 @@ export function workerLocation() {
  */
 export function startWorker(data, options = {}) {
   const location = workerLocation();
-  const child = spawn(location.node, [location.script], {
+  const child = spawn(location.runtime, runtimeArgs(location.runtime, location.script), {
     cwd: location.cwd,
     env: {
       ...process.env,

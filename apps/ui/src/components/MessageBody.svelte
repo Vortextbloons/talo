@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { invoke, isTauri } from '@tauri-apps/api/core';
+  import { isTauri } from '@tauri-apps/api/core';
+  import { openBrowserSource } from '../lib/browser.svelte';
   import katex from 'katex';
   import { parseMarkdown } from '../lib/markdown';
   import type { Align, Block, Inline, ListItem } from '../lib/markdown';
@@ -21,7 +22,7 @@
     }
   }
 
-  /* Open HTTP(S) sources in the system browser; copying remains the fallback. */
+  /* Open HTTP(S) sources inside Talo; copying remains the fallback. */
   let copied = $state('');
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -48,8 +49,8 @@
   async function copyLink(event: MouseEvent, href: string): Promise<void> {
     event.preventDefault();
     if (isTauri() && /^https?:\/\//iu.test(href)) {
-      try { await invoke('research_source_open', { url: href }); return; }
-      catch { /* copy remains available if the system cannot open a browser */ }
+      try { await openBrowserSource(href); return; }
+      catch { /* copy remains available if the in-app browser is unavailable */ }
     }
     let ok = false;
     try {

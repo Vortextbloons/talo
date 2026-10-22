@@ -1,7 +1,7 @@
 <script lang="ts">
   import LibrarySidebar from './LibrarySidebar.svelte';
   import { library, mutateLibrary } from '../lib/library.svelte';
-  import { tick } from 'svelte';
+  import { tick, untrack, onMount } from 'svelte';
   import mascot from '../../../../packages/design/mascot.svg';
   import type { ChatMessage } from '../../../../packages/contracts/src/chat';
   import type { ThinkingLevelName } from '../../../../packages/contracts/src/index';
@@ -9,7 +9,7 @@
   import Reasoning from './Reasoning.svelte';
   import WebResearch from './WebResearch.svelte';
   import AgentCompanion from './AgentCompanion.svelte';
-  import { browser, openBrowser, closeBrowser } from '../lib/browser.svelte';
+  import { browser, openBrowser, closeBrowser, selectBrowserSession, setBrowserWorkspaceVisible } from '../lib/browser.svelte';
   import {
     chat,
     chooseModel,
@@ -142,13 +142,6 @@
     if (chat.thinkingLevel && thinkingOptions.includes(chat.thinkingLevel)) return chat.thinkingLevel;
     return thinkingOptions.includes('medium') ? 'medium' : thinkingOptions[0] ?? '';
   });
-  const workerLabel = $derived(
-    chat.preview ? 'Interface preview'
-      : chat.worker.state === 'ready' ? 'Pi ready'
-        : chat.worker.state === 'starting' ? 'Waking Pi'
-          : chat.worker.state === 'failed' ? 'Pi needs attention'
-            : 'Pi resting',
-  );
   const composerHint = $derived(
     !connected.length ? 'Connect a provider to begin'
       : !selection ? 'Choose a model below'
@@ -162,6 +155,12 @@
         : !selectionAvailable ? 'Choose a connected model below'
           : 'What is on your mind?',
   );
+
+  $effect(() => {
+    const id = chat.active?.conversation.id ?? 'primary';
+    untrack(() => selectBrowserSession(id));
+  });
+  onMount(() => { setBrowserWorkspaceVisible(true); return () => setBrowserWorkspaceVisible(false); });
 
   $effect(() => {
     const conversationId = chat.active?.conversation.id ?? null;
@@ -471,11 +470,7 @@
       && !working;
   }
 
-  function statusClass(): string {
-    return chat.worker.state === 'ready' ? 'ready'
-      : chat.worker.state === 'failed' ? 'failed'
-        : chat.worker.state === 'starting' ? 'starting' : 'resting';
-  }
+
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} onkeydown={(event) => { if (event.key === 'Escape' && (confirmingDelete || viewingImage)) { confirmingDelete = null; viewingImage = null; } }} />
@@ -560,9 +555,7 @@
           <span>{selection ? selectionLabel(selection) : 'No model chosen yet'}</span>
         </div>
       </div>
-      <span class="worker {statusClass()}" title={chat.worker.error || 'Local Pi runtime'}>
-        <span class="worker-dot" aria-hidden="true"></span>{workerLabel}
-      </span>
+
     </div>
 
     {#if active?.error && active.error !== chat.error}<div class="chat-message error" role="alert">{active.error}</div>{/if}
@@ -934,11 +927,6 @@
   .conversation-title{min-width:0}
   .conversation-title strong{display:block;font-size:15px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .conversation-title span{display:block;font-size:11px;color:var(--muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .worker{display:inline-flex;align-items:center;gap:7px;font-size:10.5px;color:var(--muted);white-space:nowrap;border:1px solid var(--line);background:var(--soft);border-radius:20px;padding:5px 11px}
-  .worker-dot{width:6px;height:6px;border-radius:50%;background:var(--faint)}
-  .worker.ready .worker-dot{background:var(--yellow-deep)}
-  .worker.starting .worker-dot{background:var(--yellow);animation:pulse 1.4s ease-in-out infinite}
-  .worker.failed .worker-dot{background:#d0844c}
   .chat-message{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 13px;border-radius:9px;font-size:12.5px;margin-bottom:12px;line-height:1.5}
   .chat-message.error{background:var(--error-bg);border:1px solid var(--error-line);color:var(--error-text)}
   .chat-message.notice{background:#211f16;border:1px solid #4e4324;color:#e8d59e}
@@ -1041,7 +1029,8 @@
   .thinking-option .picker-dot{width:6px;height:6px;border-radius:50%;border:1px solid var(--line-strong);flex-shrink:0}
   .thinking-option.selected .picker-dot{background:var(--yellow);border-color:var(--yellow)}
   .thinking-option.selected{font-weight:600}
-  @media(prefers-reduced-motion:reduce){.thinking-chevron{transition:none}}
+  @media(prefers-reduced-motion:reduce){
+    .typing i,.cursor,.send[aria-busy="true"] svg,.loading-dot{animation:none}.thinking-chevron{transition:none}}
   .send-area{display:flex;align-items:center;gap:11px;flex-shrink:0}
   .composer-hint{font-size:10px;color:var(--faint);white-space:nowrap}
   .send{background:var(--yellow);color:var(--black);border:0;border-radius:9px;width:34px;height:32px;padding:0;display:grid;place-items:center;flex-shrink:0;line-height:0;transition:background .15s ease}
@@ -1083,7 +1072,7 @@
     .welcome{padding:18px 4px}
   }
   @media(prefers-reduced-motion:reduce){
-    .worker.starting .worker-dot,.typing i,.cursor,.send[aria-busy="true"] svg,.loading-dot{animation:none}
+    .typing i,.cursor,.send[aria-busy="true"] svg,.loading-dot{animation:none}
     .picker-chevron,.chat-layout,.threads,.rail-inner,.conversation{transition:none}
   }
 </style>

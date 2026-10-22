@@ -91,6 +91,7 @@ pub fn message(h: &mut crate::Host, app: &tauri::AppHandle, message: Value) {
             "browser_download",
             "browser_handoff",
             "mcp",
+            "tools",
             "read",
             "write",
             "edit",
@@ -249,7 +250,7 @@ fn catalog(config: &Value) -> Value {
             "Web Research",
             vec!["web_search", "web_fetch", "web_crawl", "web_screenshot"],
             "web.public",
-            "DonSeTch",
+            "Research MCP / DonSeTch",
         ),
         (
             "Browser",
@@ -264,7 +265,7 @@ fn catalog(config: &Value) -> Value {
                 "browser_handoff",
             ],
             "browser.action",
-            "Chromium / Playwright / Stagehand",
+            "Browser MCP / Chromium / Playwright / Stagehand",
         ),
         (
             "Files",
@@ -284,7 +285,18 @@ fn catalog(config: &Value) -> Value {
             "memory.consent",
             "Existing local memory",
         ),
-        ("Integrations", vec!["mcp"], "mcp.call", "MCP on demand"),
+        (
+            "Integrations",
+            vec!["tools"],
+            "tool.use",
+            "Managed Pi extension / discovery and routing",
+        ),
+        (
+            "Integrations",
+            vec!["mcp"],
+            "mcp.call",
+            "External MCP integrations / through tools",
+        ),
     ];
     json!(groups.into_iter().flat_map(|(category,names,permission,resource)|names.into_iter().map(move|id|(category,id,permission,resource))).map(|(category,id,permission,resource)|{
         let disabled=config["disabled"].as_array().is_some_and(|a|a.iter().any(|x|x==id));

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { isTauri } from '@tauri-apps/api/core';
-  import { browser, openBrowser, closeBrowser, controlBrowser, sendBrowserInput, resolveBrowserApproval } from '../lib/browser.svelte';
+  import { browser, openBrowser, controlBrowser, sendBrowserInput, resolveBrowserApproval } from '../lib/browser.svelte';
   import BrowserSurface from './BrowserSurface.svelte';
   let { pageView = false }: { pageView?: boolean } = $props();
   let address = $state('');
@@ -17,13 +17,13 @@
 
 {#snippet viewer()}
   <div class="browser-head">
-    <div class="browser-title"><span class:connected class="connection-dot"></span><strong>Browser</strong><span class="owner">{manual ? 'You have control' : browser.status.owner === 'paused' ? 'Paused' : 'Watching Pi'}</span></div>
+    <div class="browser-title"><span class:connected class="connection-dot"></span><strong>Browser</strong><span class="owner">{manual ? 'You have control' : browser.status.owner === 'paused' ? 'Paused' : 'Watching agent'}</span></div>
     <div class="browser-actions">
       {#if !connected || browser.view === 'closed'}<button class="primary" disabled={browser.busy || !isTauri()} onclick={() => void openBrowser('large')}>Open Browser</button>
       {:else if manual}<button class="primary" disabled={browser.busy} onclick={() => void controlBrowser('return')}>Return Control</button>
       {:else}<button class="primary" disabled={browser.busy} onclick={() => void controlBrowser('take_over')}>Take Over</button>{#if browser.status.owner === 'paused'}<button disabled={browser.busy} onclick={() => void controlBrowser('return')}>Return Control</button>{:else}<button disabled={browser.busy} onclick={() => void controlBrowser('pause')}>Pause</button>{/if}{/if}
       {#if connected}<button disabled={browser.busy} onclick={() => void controlBrowser('stop')}>Stop</button>{/if}
-      {#if !pageView}<button class="close" onclick={closeBrowser} aria-label="Close browser view" title="Close view. Pi can keep browsing.">&times;</button>{/if}
+      {#if !pageView}<button class="close" onclick={() => void openBrowser('side')} aria-label="Close browser view" title="Close view. Pi can keep browsing.">&times;</button>{/if}
     </div>
   </div>
   <div class="page-bar">
@@ -41,7 +41,7 @@
 {#if pageView}
   <section class="viewer inline" aria-label="Browser">{@render viewer()}</section>
 {:else if browser.view === 'large'}
-  <dialog class="browser-dialog" aria-label="Browser" oncancel={event => { event.preventDefault(); closeBrowser(); }} {@attach element => { element.showModal(); return () => element.close(); }}>
+  <dialog class="browser-dialog" aria-label="Browser" oncancel={event => { event.preventDefault(); void openBrowser('side'); }} {@attach element => { element.showModal(); return () => element.close(); }}>
     <div class="viewer">{@render viewer()}</div>
   </dialog>
 {/if}

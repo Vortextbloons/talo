@@ -305,7 +305,21 @@ pub async fn library_action(
         {
             return Err("Wait for the current reply to finish before changing the library".into());
         }
-        action(&mut host.db, &operation, &payload.unwrap_or(json!({})))
+        let payload = payload.unwrap_or(json!({}));
+        let mut release = Vec::<String>::new();
+        if operation == "conversation_delete" {
+            release.push(field(&payload, "id")?.to_string());
+        } else if operation == "workspace_delete" {
+            let mut statement = host.db.prepare("SELECT id FROM chat_conversations WHERE workspace_id=?1").map_err(|e|e.to_string())?;
+            release = statement.query_map([field(&payload, "id")?], |row|row.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<std::result::Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+        }
+        let result = action(&mut host.db, &operation, &payload)?;
+        if !release.is_empty() && host.supervisor.browser_running() {
+            if let Ok(browser) = host.supervisor.ensure_browser() {
+                for session_id in release { let _ = browser.request_view("forget", json!({"sessionId":session_id})); }
+            }
+        }
+        Ok(result)
     })
     .await
 }

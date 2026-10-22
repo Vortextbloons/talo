@@ -3,18 +3,44 @@ import { listen } from '@tauri-apps/api/event';
 import type { BrowserStatus, BrowserFrame, BrowserInput, BrowserControlAction } from '../../../../packages/contracts/src/browser';
 
 export interface BrowserApproval { id: string; tool: string; arguments: Record<string, unknown>; page?: { url?: string; title?: string } }
+const stopped = (sessionId: string): BrowserStatus => ({sessionId, state: 'stopped', owner: 'agent', tabs: [], busy: false});
 export const browser = $state({
-  status: { state: 'stopped', owner: 'agent', tabs: [], busy: false } as BrowserStatus,
-  frame: null as BrowserFrame | null,
+  sessionId: 'primary', sessions: {} as Record<string, BrowserStatus>,
+  status: stopped('primary'), frame: null as BrowserFrame | null,
   view: 'closed' as 'closed' | 'side' | 'large',
   busy: false, error: '', approvals: [] as BrowserApproval[],
 });
-const leaseId = crypto.randomUUID();
+let leaseId = crypto.randomUUID();
 let heartbeat: ReturnType<typeof setInterval> | undefined;
-let renewing = false;
+const renewing = new Set<string>();
 let initialized = false;
+let workspaceVisible = false;
+let hiddenPreview = false;
 const viewIsOpen = () => browser.view !== 'closed';
 
+function updateStatus(status: BrowserStatus) {
+  if (status.sessionId && status.sessionId !== browser.sessionId) return;
+  if (status.state === 'stopped' && browser.busy) return;
+  browser.status = status;
+  if (status.state === 'crashed' || status.state === 'stopped') {
+    if (browser.view !== 'closed') closeBrowser(false);
+    return;
+  }
+  if (workspaceVisible && !document.hidden && !hiddenPreview && status.state === 'connected' && browser.view === 'closed') void openBrowser('side');
+}
+/** Selection changes detach the old view; its tabs keep running with their own owner. */
+export function selectBrowserSession(sessionId: string) {
+  if (browser.sessionId === sessionId) return;
+  closeBrowser(false);
+  leaseId = crypto.randomUUID(); browser.sessionId = sessionId;
+  browser.error = ''; browser.busy = false; hiddenPreview = false;
+  updateStatus(browser.sessions[sessionId] ?? stopped(sessionId));
+}
+export function setBrowserWorkspaceVisible(visible: boolean) {
+  workspaceVisible = visible; hiddenPreview = false;
+  if (!visible) closeBrowser(false);
+  else updateStatus(browser.sessions[browser.sessionId] ?? browser.status);
+}
 export function initBrowser() {
   if (!isTauri() || initialized) return () => {};
   initialized = true;
@@ -24,55 +50,88 @@ export function initBrowser() {
     const stop = await listen<T>(name, event => { if (active) handler(event.payload); });
     if (active) stops.push(stop); else stop();
   };
+  const status = (value: {browser?: BrowserStatus; browserSessions?: Record<string, BrowserStatus>}) => {
+    browser.sessions = value.browserSessions ?? {};
+    updateStatus(browser.sessions[browser.sessionId] ?? (browser.sessionId === 'primary' && value.browser ? value.browser : stopped(browser.sessionId)));
+  };
   void Promise.all([
-    subscribe<{ browser?: BrowserStatus }>('runtime-status', value => { if (value.browser) browser.status = value.browser; }),
+    subscribe('runtime-status', status),
     subscribe<BrowserApproval[]>('browser-approvals', value => { browser.approvals = value; }),
-    subscribe<BrowserFrame | null>('browser-frame', frame => { if (browser.view !== 'closed') browser.frame = frame; }),
+    subscribe<{sessionId: string; frame: BrowserFrame | null}>('browser-frame', value => {
+      if (value.sessionId === browser.sessionId && browser.view !== 'closed') browser.frame = value.frame;
+    }),
   ]).catch(() => { if (active) browser.error = 'Browser connection unavailable. Reopen Talo to reconnect.'; });
-  void invoke<{ browser?: BrowserStatus }>('runtime_status').then(value => { if (active && value.browser) browser.status = value.browser; }).catch(() => {});
-  const hide = () => { if (document.hidden) closeBrowser(); };
-  document.addEventListener('visibilitychange', hide);
-  return () => { active = false; initialized = false; closeBrowser(); stops.forEach(stop => stop()); document.removeEventListener('visibilitychange', hide); };
+  void invoke<Parameters<typeof status>[0]>('runtime_status').then(value => { if (active) status(value); }).catch(() => {});
+  const visibility = () => { if (document.hidden) closeBrowser(false); else if (workspaceVisible) updateStatus(browser.status); };
+  document.addEventListener('visibilitychange', visibility);
+  return () => { active = false; initialized = false; closeBrowser(false); stops.forEach(stop => stop()); document.removeEventListener('visibilitychange', visibility); };
 }
-
 async function renewView() {
-  if (renewing || browser.view === 'closed' || !isTauri()) return;
-  renewing = true;
+  const sessionId = browser.sessionId, lease = leaseId;
+  if (renewing.has(lease) || browser.view === 'closed' || !isTauri()) return;
+  renewing.add(lease);
   try {
-    const status = await invoke<BrowserStatus>('browser_view', { enabled: true, leaseId });
-    if (viewIsOpen()) browser.status = status;
-  } finally { renewing = false; }
+    const status = await invoke<BrowserStatus>('browser_view', {enabled: true, leaseId: lease, sessionId});
+    if (leaseId === lease && viewIsOpen()) browser.status = status;
+  } finally { renewing.delete(lease); }
 }
 export async function openBrowser(view: 'side' | 'large' = 'large') {
-  browser.view = view; browser.error = '';
+  browser.view = view; browser.error = ''; hiddenPreview = false;
   if (!isTauri()) return;
+  const lease = leaseId;
   browser.busy = true;
   try {
     await renewView();
-    if (viewIsOpen() && !heartbeat) heartbeat = setInterval(() => {
-      void renewView().catch(() => { browser.error = 'The browser view disconnected. Close and reopen it to reconnect.'; closeBrowser(); });
+    if (lease === leaseId && viewIsOpen() && !heartbeat) heartbeat = setInterval(() => {
+      const currentLease = leaseId;
+      void renewView().catch(() => {
+        if (leaseId !== currentLease) return;
+        browser.error = 'The browser view disconnected. Open it again to reconnect.'; closeBrowser();
+      });
     }, 2500);
-  } catch (e) { browser.error = String(e); } finally { browser.busy = false; }
+  } catch { if (lease === leaseId) { browser.error = 'The browser could not connect. Open it again to retry.'; closeBrowser(); } }
+  finally { if (lease === leaseId) browser.busy = false; }
 }
-export function closeBrowser() {
+export function closeBrowser(suppressPreview = true) {
+  const sessionId = browser.sessionId, lease = leaseId;
   browser.view = 'closed'; browser.frame = null;
+  hiddenPreview = suppressPreview;
   clearInterval(heartbeat); heartbeat = undefined;
-  if (isTauri()) void invoke('browser_view', { enabled: false, leaseId }).catch(() => {});
+  if (isTauri()) void invoke('browser_view', {enabled: false, leaseId: lease, sessionId}).catch(() => {});
 }
 export async function controlBrowser(action: BrowserControlAction) {
   if (!isTauri()) { browser.error = 'Open the desktop app to use the browser.'; return; }
+  const sessionId = browser.sessionId;
   browser.busy = true; browser.error = '';
-  if (action === 'stop') { closeBrowser(); }
-  try { browser.status = await invoke<BrowserStatus>('browser_control', { action }); }
-  catch (e) { browser.error = String(e); } finally { browser.busy = false; }
+  if (action === 'stop') closeBrowser();
+  try { const status = await invoke<BrowserStatus>('browser_control', {action, sessionId}); if (browser.sessionId === sessionId) browser.status = status; }
+  catch (e) { if (browser.sessionId === sessionId) browser.error = String(e); }
+  finally { if (browser.sessionId === sessionId) browser.busy = false; }
 }
 export async function sendBrowserInput(input: Omit<BrowserInput, 'leaseId' | 'tabId'>) {
   if (browser.status.owner !== 'human' || browser.view === 'closed' || !browser.frame || !isTauri()) return;
-  try { await invoke('browser_input', { input: { ...input, leaseId, tabId: browser.frame.tabId } }); }
-  catch { browser.error = 'The page changed or control was returned to Pi. Reopen the view or take over again.'; }
+  const sessionId = browser.sessionId;
+  try { await invoke('browser_input', {input: {...input, sessionId, leaseId, tabId: browser.frame.tabId}}); }
+  catch { if (browser.sessionId === sessionId) browser.error = 'The page changed or control was returned. Take over again to interact.'; }
+}
+/** Clicking a chat source explicitly hands navigation to the user, inside Talo. */
+export async function openBrowserSource(url: string) {
+  const parsed = new URL(url);
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('Only public HTTP(S) sources can be opened.');
+  if (!isTauri()) throw new Error('Open the desktop app to view this source.');
+  const sessionId = browser.sessionId;
+  await openBrowser('large');
+  if (browser.sessionId !== sessionId || !viewIsOpen() || browser.error) throw new Error('The browser could not open. Try again.');
+  await controlBrowser('take_over');
+  if (browser.sessionId !== sessionId || browser.status.owner !== 'human' || browser.error) throw new Error('The browser could not take control. Try again.');
+  // Cancelling an in-flight agent action may close its tab; attach to a fresh page.
+  await openBrowser('large');
+  if (browser.sessionId !== sessionId || !browser.status.activeTab || browser.error) throw new Error('The browser page could not open. Try again.');
+  // Navigation uses the private input queue, so it cannot race with agent actions.
+  await invoke('browser_input', {input: {type: 'navigate', url: parsed.href, sessionId, leaseId, tabId: browser.status.activeTab}});
 }
 export async function resolveBrowserApproval(id: string, allowed: boolean) {
   browser.busy = true;
-  try { await invoke('resolve_permission', { id, allowed }); browser.approvals = browser.approvals.filter(item => item.id !== id); }
+  try { await invoke('resolve_permission', {id, allowed}); browser.approvals = browser.approvals.filter(item => item.id !== id); }
   catch (e) { browser.error = String(e); } finally { browser.busy = false; }
 }

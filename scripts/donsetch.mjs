@@ -32,6 +32,8 @@ async function verified(url, file, expected) {
   await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, bytes);
   return bytes;
 }
+/** GNU tar reads `C:\...` as a remote host and eats backslashes, so `-C` gets a portable path. */
+const tarDir = target => path.relative(process.cwd(), target).split(path.sep).join('/');
 export async function bundleDonsetch(destination) {
   const archive = `vendor/downloads/${release.asset}`;
   await verified(`https://github.com/dondai44423/donsetch/releases/download/v${release.version}/${release.asset}`, archive, release.archiveSha256);
@@ -39,7 +41,9 @@ export async function bundleDonsetch(destination) {
   await mkdir(binaryDir, { recursive: true });
   const entries = execFileSync('tar.exe', ['tzf', archive], { encoding: 'utf8', windowsHide: true }).trim().split(/\r?\n/u);
   if (entries.some(name => !/^(\.\/)?(donsetch\.exe|onnxruntime\.dll|pdfium\.dll)$/u.test(name))) throw new Error('Unexpected path in DonSeTch archive');
-  execFileSync('tar.exe', ['xzf', archive, '-C', binaryDir], { windowsHide: true });
+  // `-C` takes a portable relative path: GNU tar reads `C:\...` as a remote host and eats
+  // backslashes as escapes.
+  execFileSync('tar.exe', ['xzf', archive, '-C', tarDir(binaryDir)], { windowsHide: true });
   const files = {};
   for (const name of ['donsetch.exe', 'onnxruntime.dll', 'pdfium.dll']) {
     files[name] = sha256(await readFile(path.join(binaryDir, name)));
@@ -64,7 +68,7 @@ export async function bundleDonsetch(destination) {
   await cp('node_modules/playwright/LICENSE', path.join(notices, 'APACHE-2.0.txt'));
   const pdfiumArchive = 'vendor/downloads/pdfium-licenses.tgz';
   await verified('https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7802/pdfium-win-x64.tgz', pdfiumArchive, '487156c28d81bd162107ca0ba85849cbfbb0127be4210a7cfec6def66802082d');
-  execFileSync('tar.exe', ['xzf', pdfiumArchive, '-C', notices, 'LICENSE', 'licenses'], { windowsHide: true });
+  execFileSync('tar.exe', ['xzf', pdfiumArchive, '-C', tarDir(notices), 'LICENSE', 'licenses'], { windowsHide: true });
   await cp('docs/DONSETCH-REDISTRIBUTION.md', path.join(destination, 'DONSETCH-REDISTRIBUTION.md'));
   await writeFile(path.join(destination, 'donsetch-manifest.json'), JSON.stringify({ ...release, files, sourceSha256: sha256(source) }, null, 2));
   console.log(`Verified DonSeTch ${release.version}, Windows DLLs, corresponding source and packaged reranking model.`);

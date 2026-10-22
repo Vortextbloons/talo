@@ -22,6 +22,7 @@ export class BrowserManager {
   private pages = new Map<string, Page>();
   private revisions = new Map<string, string>();
   private active?: string;
+  private creatingPage?: Promise<Page>;
   private owner: Owner = 'agent';
   private phase: BrowserState['state'] = 'stopped';
   private error?: string;
@@ -30,6 +31,7 @@ export class BrowserManager {
   private viewTab?: string;
   private viewLease?: string;
   private viewDeadline = 0;
+  private frameTimer?: ReturnType<typeof setTimeout>;
   private viewQueue: Promise<void> = Promise.resolve();
   private inputQueue: Promise<void> = Promise.resolve();
   private readonly leaseTimer = setInterval(() => {
@@ -156,6 +158,12 @@ export class BrowserManager {
   private async newPage() {
     const page = await this.context!.newPage(); this.track(page); return page;
   }
+  private async ensurePage() {
+    if (this.active) return this.page();
+    if (this.creatingPage) return this.creatingPage;
+    this.creatingPage = this.newPage();
+    try { return await this.creatingPage; } finally { this.creatingPage = undefined; }
+  }
   private page() { const page = this.active && this.pages.get(this.active); if (!page || page.isClosed()) throw new Error('Open or select a browser tab first.'); return page; }
   async cancel() {
     const operation = this.operation;
@@ -202,7 +210,7 @@ export class BrowserManager {
     }
     this.viewLease = leaseId; this.viewDeadline = Date.now() + 8000;
     await this.start();
-    if (!this.active) await this.newPage();
+    await this.ensurePage();
     await this.syncView();
   }
   private syncView() {
@@ -215,17 +223,28 @@ export class BrowserManager {
       if (!this.viewLease || tabId !== this.active) { await session.detach(); return; }
       this.view = session; this.viewTab = tabId;
       let sentAt = 0;
+      let latest: string | undefined;
+      const flush = () => {
+        this.frameTimer = undefined;
+        if (!this.viewLease || session !== this.view || !latest) return;
+        sentAt = Date.now();
+        this.publishFrame({ tabId, data: latest, width: 1280, height: 800 }); latest = undefined;
+      };
       session.on('Page.screencastFrame', frame => {
         void session.send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {});
-        if (!this.viewLease || session !== this.view || Date.now() - sentAt < 100 || frame.data.length > 600_000) return;
-        sentAt = Date.now();
-        this.publishFrame({ tabId, data: frame.data, width: 1280, height: 800 });
+        if (!this.viewLease || session !== this.view || frame.data.length > 600_000) return;
+        latest = frame.data;
+        if (!this.frameTimer) {
+          const remaining = 100 - (Date.now() - sentAt);
+          if (remaining <= 0) flush(); else this.frameTimer = setTimeout(flush, remaining);
+        }
       });
       await session.send('Page.startScreencast', { format: 'jpeg', quality: 75, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 });
     });
     return this.viewQueue;
   }
   private async endView() {
+    clearTimeout(this.frameTimer); this.frameTimer = undefined;
     const view = this.view; this.view = undefined; this.viewTab = undefined; this.publishFrame(null);
     if (view) { await view.send('Page.stopScreencast').catch(() => {}); await view.detach().catch(() => {}); }
   }
@@ -308,7 +327,7 @@ export class BrowserManager {
     switch (command.name) {
       case 'browser_open': {
         const url = await validateWebUrl(String(a.url), signal);
-        const page = this.active ? this.page() : await this.newPage();
+        const page = await this.ensurePage();
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25_000 }); return this.state();
       }
       case 'browser_tabs': {

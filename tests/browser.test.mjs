@@ -7,6 +7,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { startWorker } from './helpers/worker.mjs';
+import { runtimeArgs, runtimePath } from '../scripts/runtime.mjs';
 import { BrowserManager } from '../dist/services/browser/src/manager.js';
 import { publicTarget, startEgressProxy } from '../dist/services/browser/src/network.js';
 import { BROWSER_TOOLS, createBrowserTools } from '../dist/workers/pi/src/browser.js';
@@ -120,7 +121,8 @@ test('local Stagehand v4 extracts using a configured compatible provider, withou
 
 test('shipped headless service survives a Pi hibernation cycle', { timeout: 60000 }, async () => {
   const data = await mkdtemp(path.join(os.tmpdir(), 'talo-service-'));
-  const child = spawn(path.join(root, 'runtime/node/node.exe'), [path.join(root, 'bundle/services/browser/src/main.js')], {
+  const runtime = runtimePath(root);
+  const child = spawn(runtime, runtimeArgs(runtime, path.join(root, 'bundle/services/browser/src/main.js')), {
     env: { ...process.env, NODE_OPTIONS: '', NODE_PATH: '', TALO_DATA_DIR: data, TALO_VENDOR_DIR: root }, windowsHide: true,
   });
   child.stderr.resume();
