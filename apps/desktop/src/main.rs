@@ -478,6 +478,22 @@ fn main() {
         // The updater installs a signed NSIS package; process::relaunch restarts after it.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .register_asynchronous_uri_scheme_protocol("attachment", |context, request, responder| {
+            let app = context.app_handle().clone();
+            let allowed = context.webview_label() == "main";
+            tauri::async_runtime::spawn_blocking(move || {
+                let result = if allowed {
+                    let shared = app.state::<Shared>();
+                    let host = shared.lock().unwrap();
+                    attachments::preview(&host.db, request.uri().path().trim_start_matches('/'))
+                } else { None };
+                let response = match result {
+                    Some((mime, bytes)) => tauri::http::Response::builder().header("Content-Type", mime).body(bytes),
+                    None => tauri::http::Response::builder().status(404).body(Vec::new()),
+                };
+                responder.respond(response.unwrap());
+            });
+        })
         .invoke_handler(tauri::generate_handler![
             automation::automation_action,
             integrations::tools_action,
@@ -504,6 +520,7 @@ fn main() {
             library::memory_delete,
             chat::conversation_create,
             chat::conversation_open,
+            chat::conversation_history,
             chat::conversation_select_model,
             chat::conversation_thinking,
             chat::chat_send,

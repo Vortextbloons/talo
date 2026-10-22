@@ -11,6 +11,7 @@ import type {
   ConversationSnapshot,
   GenerationState,
   ModelSelection,
+  MessagePage,
   ResearchActivity,
 } from '../../../../packages/contracts/src/chat';
 import type { ProviderModelInfo, ThinkingLevelName } from '../../../../packages/contracts/src/index';
@@ -53,6 +54,8 @@ export interface ChatStore {
   selectingModel: boolean;
   thinkingLevel: ThinkingLevelName | null;
   thinkingBusy: boolean;
+  historyLoading: boolean;
+  historyRevision: number;
 }
 
 export const chat: ChatStore = $state({
@@ -78,6 +81,8 @@ export const chat: ChatStore = $state({
   selectingModel: false,
   thinkingLevel: null,
   thinkingBusy: false,
+  historyLoading: false,
+  historyRevision: 0,
 });
 
 const EVENT_NAME = 'talo://chat';
@@ -86,6 +91,8 @@ const PREVIEW_MESSAGE = 'Open the desktop app to chat.';
 let unlisten: UnlistenFn | undefined;
 let queuedEvents: ChatEvent[] | null = null;
 let openToken = 0;
+let pendingSnapshot: { conversationId: string; events: ChatEvent[] } | null = null;
+const MESSAGE_WINDOW = 120;
 let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
 let stopFallback: ReturnType<typeof setTimeout> | undefined;
 let sequenceByGeneration = new Map<string, number>();
@@ -167,7 +174,7 @@ function applySnapshot(snapshot: ConversationSnapshot): void {
   for (const message of localPending) {
     if (chat.active.messages.some(existing => existing.id === message.id)) continue;
     if (message.role === 'user' && !chat.active.messages.some(existing => existing.role === 'user' && existing.text === message.text)) {
-      const firstAssistant = chat.active.messages.findIndex(existing => existing.role === 'assistant');
+      const firstAssistant = chat.active.messages.findIndex(existing => existing.role === 'assistant' && existing.generationId === message.id.slice('local-user-'.length));
       if (firstAssistant >= 0) chat.active.messages.splice(firstAssistant, 0, message);
       else chat.active.messages.push(message);
     }
@@ -247,7 +254,7 @@ function finishGeneration(event: Extract<ChatEvent, { type: 'generation' }>): vo
   if (!terminal) return;
 
   let assistant = chooseAssistant(conversation, event.generationId);
-  if (!assistant && event.state === 'failed') {
+  if (!assistant && event.state === 'failed' && !conversation.after) {
     assistant = {
       id: event.message?.id ?? `assistant-${event.generationId}`,
       role: 'assistant',
@@ -301,7 +308,11 @@ function handleGenerationEvent(event: Extract<ChatEvent, { type: 'generation' }>
   // The host numbers events per generation, so ordering and gap detection stay in that scope.
   const lastGenerationSequence = sequenceByGeneration.get(event.generationId) ?? -1;
   if (event.sequence <= lastGenerationSequence) return;
-  const gap = lastGenerationSequence >= 0 && event.sequence > lastGenerationSequence + 1;
+  const gap = event.sequence > lastGenerationSequence + 1;
+  if (event.delta && gap && !conversation.after) {
+    void refreshSnapshot(event.conversationId, true, event);
+    return;
+  }
   sequenceByGeneration.set(event.generationId, event.sequence);
   conversation.sequence = event.sequence;
 
@@ -309,8 +320,16 @@ function handleGenerationEvent(event: Extract<ChatEvent, { type: 'generation' }>
     conversation.state = event.state;
     conversation.generationId = event.generationId;
   }
-  if (event.text !== undefined) upsertStreamText(event.generationId, event.text, event.state, event.reasoning);
-  if (event.message) upsertMessage(event.message, event.generationId);
+  if (!conversation.after) {
+    if (event.delta) {
+      const existing = chooseAssistant(conversation, event.generationId);
+      upsertStreamText(event.generationId, (event.delta.reset ? '' : existing?.text ?? '') + (event.delta.text ?? ''), event.state,
+        (event.delta.reset ? '' : existing?.reasoning ?? '') + (event.delta.reasoning ?? ''));
+    }
+    if (event.text !== undefined || event.reasoning !== undefined) upsertStreamText(event.generationId, event.text ?? chooseAssistant(conversation, event.generationId)?.text ?? '', event.state, event.reasoning);
+    if (event.message) upsertMessage(event.message, event.generationId);
+    trimLatestWindow();
+  }
   if (event.error) conversation.error = event.error;
 
   finishGeneration(event);
@@ -320,6 +339,10 @@ function handleGenerationEvent(event: Extract<ChatEvent, { type: 'generation' }>
 }
 
 function handleEvent(event: ChatEvent): void {
+  if (event.type === 'generation' && pendingSnapshot?.conversationId === event.conversationId) {
+    pendingSnapshot.events.push(event);
+    return;
+  }
   if (event.type === 'research') {
     const items = chat.research[event.generationId] ?? [];
     const previous = items.findIndex(item => item.id === event.activity.id);
@@ -443,16 +466,82 @@ export async function retryChat(): Promise<void> {
 }
 
 /** Reconnect snapshot. Sequence ordering makes the result safe to apply after stream events. */
-async function refreshSnapshot(conversationId: string | undefined, quiet: boolean): Promise<void> {
+async function refreshSnapshot(conversationId: string | undefined, quiet: boolean, initialEvent?: ChatEvent, preserveHistory = true): Promise<void> {
   if (!conversationId || !isTauri()) return;
+  if (pendingSnapshot?.conversationId === conversationId) {
+    if (initialEvent) pendingSnapshot.events.push(initialEvent);
+    return;
+  }
   const token = ++openToken;
+  const pending = { conversationId, events: initialEvent ? [initialEvent] : [] as ChatEvent[] };
+  pendingSnapshot = pending;
+  let succeeded = false;
   try {
     const snapshot = await invoke<ConversationSnapshot>('conversation_open', { conversationId });
     if (token !== openToken) return;
-    if (chat.active?.conversation.id === conversationId) applySnapshot(snapshot);
+    if (chat.active?.conversation.id === conversationId) {
+      if (chat.active.after && !initialEvent && preserveHistory) {
+        const messages = chat.active.messages;
+        const before = chat.active.before;
+        const after = chat.active.after;
+        applySnapshot({ ...snapshot, messages, before, after });
+      } else applySnapshot(snapshot);
+      succeeded = true;
+    }
   } catch (value) {
     if (!quiet && token === openToken) chat.error = errorMessage(value);
+  } finally {
+    if (pendingSnapshot === pending) pendingSnapshot = null;
+    if (succeeded) for (const event of pending.events) handleEvent(event);
+    else if (pending.events.length && token === openToken) scheduleReconcile(conversationId, 1000);
   }
+}
+
+function trimLatestWindow(): void {
+  const active = chat.active;
+  if (!active || active.messages.length <= MESSAGE_WINDOW) return;
+  active.messages = active.messages.slice(-MESSAGE_WINDOW);
+  active.before = active.messages[0].id;
+}
+
+export async function loadHistory(direction: 'before' | 'after'): Promise<boolean> {
+  const active = chat.active;
+  const cursor = active?.[direction];
+  if (!active || !cursor || chat.historyLoading || !isTauri()) return false;
+  chat.historyLoading = true;
+  const conversationId = active.conversation.id;
+  try {
+    const page = await invoke<MessagePage>('conversation_history', { conversationId, [direction]: cursor });
+    if (chat.active !== active || active[direction] !== cursor) return false;
+    const known = new Set(active.messages.map(message => message.id));
+    const additional = page.messages.filter(message => !known.has(message.id));
+    if (direction === 'before') {
+      const combined = [...additional, ...active.messages];
+      active.messages = combined.slice(0, MESSAGE_WINDOW);
+      active.before = page.before;
+      if (combined.length > MESSAGE_WINDOW) active.after = active.messages.at(-1)!.id;
+    } else {
+      const combined = [...active.messages, ...additional];
+      active.messages = combined.slice(-MESSAGE_WINDOW);
+      active.after = page.after;
+      if (combined.length > MESSAGE_WINDOW) active.before = active.messages[0].id;
+    }
+    return true;
+  } catch (value) {
+    chat.error = errorMessage(value);
+    return false;
+  } finally {
+    chat.historyLoading = false;
+  }
+}
+
+export async function jumpToLatest(): Promise<boolean> {
+  const conversationId = chat.active?.conversation.id;
+  if (!conversationId) return false;
+  await refreshSnapshot(conversationId, false, undefined, false);
+  if (chat.active?.conversation.id !== conversationId || chat.active.after) return false;
+  chat.historyRevision++;
+  return true;
 }
 
 export function isSelectionAvailable(selection: ModelSelection | null): boolean {
@@ -714,6 +803,7 @@ export async function sendMessage(rawText: string, attachments: ChatAttachmentIn
       const snapshot = await invoke<ConversationSnapshot>('conversation_create', { selection });
       applySnapshot(snapshot);
     }
+    if (chat.active?.after && !await jumpToLatest()) return false;
     const conversation = chat.active;
     if (!conversation) throw new Error('The conversation could not be opened.');
 
@@ -776,6 +866,7 @@ export async function stopGeneration(): Promise<void> {
 }
 
 export async function retryGeneration(): Promise<void> {
+  if (chat.active?.after && !await jumpToLatest()) return;
   const conversation = chat.active;
   if (!conversation || !isTauri() || isWorking() || chat.sending) return;
   const selection = conversation.conversation.selection ?? chat.draftSelection;

@@ -73,6 +73,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS chat_generations_one_active
   ON chat_generations(conversation_id)
   WHERE state IN ('generating','cancelling');
 
+CREATE TABLE IF NOT EXISTS chat_stream_chunks (
+  generation_id TEXT NOT NULL REFERENCES chat_generations(id) ON DELETE CASCADE,
+  sequence INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  reasoning TEXT NOT NULL,
+  reset INTEGER NOT NULL,
+  PRIMARY KEY(generation_id,sequence)
+);
+
 CREATE TABLE IF NOT EXISTS provider_connections (
   id TEXT PRIMARY KEY,
   provider_id TEXT NOT NULL,

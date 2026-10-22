@@ -364,7 +364,7 @@ pub fn context(
     if setting(db, "memory_enabled", "true") != "true" || scope == "off" {
         return Ok(brief);
     }
-    let memories = list_memory(db, &json!({"workspaceId":conversation.workspace_id}))?;
+    let memories = list_memory(db, &json!({"workspaceId":conversation.workspace_id,"scope":if scope == "workspace" { "workspace" } else { "all" }}))?;
     let terms = query
         .to_lowercase()
         .split_whitespace()
@@ -814,6 +814,11 @@ mod tests {
         let text = context(&db, &c, "backend").unwrap();
         assert_eq!(text.matches("Use Rust").count(), 1);
         assert!(text.len() < 4096);
+        save_memory(&mut db,&json!({"scope":"workspace","workspaceId":"general","content":"Workspace decision","personal":false}),false).unwrap();
+        crate::agent::apply_bundle(&db, "general", &crate::agent::bundle_patch(&json!({"memoryScope":"workspace"})).unwrap()).unwrap();
+        let text = context(&db, &c, "backend").unwrap();
+        assert!(text.contains("Workspace decision"));
+        assert!(!text.contains("Use Rust"));
         action(&mut db, "memory_enable", &json!({"enabled":false})).unwrap();
         assert_eq!(context(&db, &c, "backend").unwrap(), "");
     }

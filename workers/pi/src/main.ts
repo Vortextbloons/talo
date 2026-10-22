@@ -18,6 +18,7 @@ import type {
   ChatEvent,
   ChatMessage,
   GenerationState,
+  StreamDelta,
   WorkerEvent,
   WorkerMethod,
   WorkerRequest,
@@ -85,7 +86,7 @@ const agentDir = path.join(data, 'pi');
 const sessionDir = path.join(data, 'sessions');
 await Promise.all([cwd, agentDir, sessionDir].map(directory => mkdir(directory, { recursive: true })));
 
-const MAX_LINE_BYTES = 1024 * 1024;
+const MAX_LINE_BYTES = 24 * 1024 * 1024;
 const MAX_OPEN_SESSIONS = 6;
 const MAX_CACHED_RUNTIMES = 8;
 const DEFAULT_IDLE_MS = 120_000;
@@ -393,7 +394,7 @@ function emitGeneration(
   record: SessionRecord,
   generation: Generation,
   state: GenerationState,
-  detail: { text?: string; reasoning?: string; message?: ChatMessage; error?: string } = {},
+  detail: { text?: string; reasoning?: string; delta?: StreamDelta; message?: ChatMessage; error?: string } = {},
 ): void {
   if (record.closing) return;
   record.sequence += 1;
@@ -405,6 +406,7 @@ function emitGeneration(
     state,
     ...(detail.text !== undefined ? { text: detail.text } : {}),
     ...(detail.reasoning !== undefined ? { reasoning: detail.reasoning } : {}),
+    ...(detail.delta ? { delta: detail.delta } : {}),
     ...(detail.message ? { message: cloneMessage(detail.message) } : {}),
     ...(detail.error ? { error: detail.error } : {}),
   });
@@ -451,26 +453,24 @@ function handleSessionEvent(record: SessionRecord, event: AgentSessionEvent): vo
     generation.reasoning = '';
     generation.error = undefined;
     updateLiveAssistant(record, generation);
-    emitGeneration(record, generation, 'generating', { text: '' });
+    emitGeneration(record, generation, 'generating', { delta: { reset: true } });
     return;
   }
   if (event.type === 'message_update') {
     const update = event.assistantMessageEvent;
-    if (update.type === 'text_start' || update.type === 'text_delta' || update.type === 'text_end') {
-      const text = extractText(update.partial);
-      if (text !== generation.text) {
-        generation.text = text;
+    if (update.type === 'text_delta') {
+      if (update.delta) {
+        generation.text += update.delta;
         updateLiveAssistant(record, generation);
-        emitGeneration(record, generation, 'generating', { text, reasoning: generation.reasoning });
+        emitGeneration(record, generation, 'generating', { delta: { text: update.delta } });
       }
       return;
     }
-    if (update.type === 'thinking_start' || update.type === 'thinking_delta' || update.type === 'thinking_end') {
-      const reasoning = extractReasoning(update.partial);
-      if (reasoning !== generation.reasoning) {
-        generation.reasoning = reasoning;
+    if (update.type === 'thinking_delta') {
+      if (update.delta) {
+        generation.reasoning += update.delta;
         updateLiveAssistant(record, generation);
-        emitGeneration(record, generation, 'generating', { text: generation.text, reasoning });
+        emitGeneration(record, generation, 'generating', { delta: { reasoning: update.delta } });
       }
       return;
     }
@@ -510,7 +510,7 @@ function handleSessionEvent(record: SessionRecord, event: AgentSessionEvent): vo
     generation.reasoning = '';
     generation.error = undefined;
     updateLiveAssistant(record, generation);
-    emitGeneration(record, generation, 'generating', { text: '' });
+    emitGeneration(record, generation, 'generating', { delta: { reset: true } });
     return;
   }
 }
@@ -1289,7 +1289,7 @@ function acceptLine(line: string): void {
     if (value.type === 'agent_response') { agentTransport.receive(value.message); return; }
   } catch { /* normal parser reports invalid frames */ }
   if (line.length > MAX_LINE_BYTES) {
-    send({ type: 'error', message: 'Request exceeds 1 MiB' });
+    send({ type: 'error', message: 'Request exceeds 24 MiB' });
     return;
   }
   const request = parseRequest(line);
@@ -1318,8 +1318,8 @@ process.stdin.on('data', chunk => {
     }
     acceptLine(line);
   }
-  if (!discardingOversized && inputBuffer.length > 24 * MAX_LINE_BYTES) {
-    send({ type: 'error', message: 'Request exceeds 1 MiB' });
+  if (!discardingOversized && inputBuffer.length > MAX_LINE_BYTES) {
+    send({ type: 'error', message: 'Request exceeds 24 MiB' });
     inputBuffer = '';
     discardingOversized = true;
   }

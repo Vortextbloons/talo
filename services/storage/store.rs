@@ -136,7 +136,7 @@ pub struct ChatMessage {
     pub attachments: Option<Vec<AttachmentInfo>>,
 }
 
-/// One display-ready attachment. `url` is a data URL small enough for the composer to render.
+/// One display-ready attachment. `url` loads a preview from native storage on demand.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentInfo {
@@ -171,6 +171,8 @@ pub struct NewAttachment {
 pub struct ConversationSnapshot {
     pub conversation: ConversationInfo,
     pub messages: Vec<ChatMessage>,
+    pub before: Option<String>,
+    pub after: Option<String>,
     pub generation_id: Option<String>,
     pub state: String,
     pub sequence: i64,
@@ -178,6 +180,13 @@ pub struct ConversationSnapshot {
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MessagePage {
+    pub messages: Vec<ChatMessage>,
+    pub before: Option<String>,
+    pub after: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -360,16 +369,91 @@ pub fn list_messages(db: &Connection, conversation_id: &str) -> Result<Vec<ChatM
             attachments: None,
         })
     })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    let mut messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    for message in &mut messages {
+        hydrate_stream(db, message)?;
+    }
+    Ok(messages)
+}
+
+pub fn message_page(db: &Connection, conversation_id: &str, before: Option<&str>, after: Option<&str>) -> Result<MessagePage> {
+    let cursor: Option<i64> = match before.or(after) {
+        Some(id) => Some(db.query_row(
+            "SELECT rowid FROM chat_messages WHERE conversation_id=?1 AND id=?2",
+            params![conversation_id, id], |row| row.get(0),
+        ).optional()?.ok_or(Error::Missing)?),
+        None => None,
+    };
+    let (comparison, order) = if after.is_some() { (">", "ASC") } else { ("<", "DESC") };
+    let mut statement = db.prepare(&format!(
+        "SELECT rowid,id,role,text,reasoning,status,generation_id,error FROM chat_messages
+         WHERE conversation_id=?1 AND (?2 IS NULL OR rowid {comparison} ?2) ORDER BY rowid {order} LIMIT 40"
+    ))?;
+    let mut rows = statement.query_map(params![conversation_id, cursor], |row| Ok((row.get::<_, i64>(0)?, ChatMessage {
+        id: row.get(1)?, role: row.get(2)?, text: row.get(3)?, reasoning: row.get(4)?,
+        status: row.get(5)?, generation_id: row.get(6)?, error: row.get(7)?, attachments: None,
+    })))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    if after.is_none() { rows.reverse(); }
+    let before = match rows.first() {
+        Some((rowid, message)) if db.query_row("SELECT EXISTS(SELECT 1 FROM chat_messages WHERE conversation_id=?1 AND rowid<?2)", params![conversation_id,rowid], |row| row.get::<_, bool>(0))? => Some(message.id.clone()),
+        _ => None,
+    };
+    let after = match rows.last() {
+        Some((rowid, message)) if db.query_row("SELECT EXISTS(SELECT 1 FROM chat_messages WHERE conversation_id=?1 AND rowid>?2)", params![conversation_id,rowid], |row| row.get::<_, bool>(0))? => Some(message.id.clone()),
+        _ => None,
+    };
+    let mut messages = rows.into_iter().map(|(_, message)| message).collect::<Vec<_>>();
+    for message in &mut messages { hydrate_stream(db, message)?; }
+    Ok(MessagePage { messages, before, after })
+}
+
+fn hydrate_stream(db: &Connection, message: &mut ChatMessage) -> Result<()> {
+    if message.status != "generating" { return Ok(()); }
+    let mut statement = db.prepare("SELECT text,reasoning,reset FROM chat_stream_chunks WHERE generation_id=?1 ORDER BY sequence")?;
+    let mut rows = statement.query(params![message.generation_id])?;
+    while let Some(row) = rows.next()? {
+        if row.get::<_, bool>(2)? { message.text.clear(); message.reasoning = None; }
+        message.text.push_str(&row.get::<_, String>(0)?);
+        let reasoning: String = row.get(1)?;
+        if !reasoning.is_empty() { message.reasoning.get_or_insert_with(String::new).push_str(&reasoning); }
+    }
+    Ok(())
+}
+
+fn materialize_stream(db: &Connection, generation_id: &str) -> Result<()> {
+    let assistant_id: Option<String> = db.query_row(
+        "SELECT id FROM chat_messages WHERE generation_id=?1 AND role='assistant' AND status='generating' ORDER BY rowid DESC LIMIT 1",
+        params![generation_id], |row| row.get(0),
+    ).optional()?;
+    if let Some(assistant_id) = assistant_id {
+        let message = get_message(db, &assistant_id)?;
+        db.execute("UPDATE chat_messages SET text=?2,reasoning=?3 WHERE id=?1", params![assistant_id,message.text,message.reasoning])?;
+    }
+    db.execute("DELETE FROM chat_stream_chunks WHERE generation_id=?1", params![generation_id])?;
+    Ok(())
+}
+
+pub fn append_progress(db: &mut Connection, generation_id: &str, sequence: i64, state: &str, text: &str, reasoning: &str, reset: bool) -> Result<bool> {
+    let tx = db.transaction()?;
+    let changed = tx.execute(
+        &format!("UPDATE chat_generations SET sequence=?2,state=?3,updated_at={NOW} WHERE id=?1 AND sequence<?2 AND state IN ('generating','cancelling')"),
+        params![generation_id,sequence,state],
+    )?;
+    if changed == 0 { return Ok(false); }
+    tx.execute("INSERT INTO chat_stream_chunks(generation_id,sequence,text,reasoning,reset) VALUES(?1,?2,?3,?4,?5)", params![generation_id,sequence,text,reasoning,reset])?;
+    tx.commit()?;
+    Ok(true)
 }
 
 /// Attachments for one conversation, oldest first. The caller decides what to render.
-pub fn list_attachments(db: &Connection, conversation_id: &str) -> Result<Vec<StoredAttachment>> {
+pub fn list_attachments(db: &Connection, conversation_id: &str, generations: &[&str]) -> Result<Vec<StoredAttachment>> {
+    if generations.is_empty() { return Ok(Vec::new()); }
+    let generations = serde_json::to_string(generations).unwrap();
     let mut statement = db.prepare(
         "SELECT id,generation_id,name,mime_type,bytes,path FROM chat_attachments
-         WHERE conversation_id=?1 ORDER BY rowid ASC",
+         WHERE conversation_id=?1 AND generation_id IN (SELECT value FROM json_each(?2)) ORDER BY rowid ASC",
     )?;
-    let rows = statement.query_map(params![conversation_id], |row| {
+    let rows = statement.query_map(params![conversation_id, generations], |row| {
         Ok(StoredAttachment {
             generation_id: row.get(1)?,
             info: AttachmentInfo {
@@ -412,7 +496,7 @@ pub fn insert_attachments(db: &Connection, items: &[NewAttachment]) -> Result<()
 }
 
 pub fn get_message(db: &Connection, id: &str) -> Result<ChatMessage> {
-    db.query_row(
+    let mut message = db.query_row(
         "SELECT id,role,text,reasoning,status,generation_id,error FROM chat_messages WHERE id=?1",
         params![id],
         |row| {
@@ -429,7 +513,9 @@ pub fn get_message(db: &Connection, id: &str) -> Result<ChatMessage> {
         },
     )
     .optional()?
-    .ok_or(Error::Missing)
+    .ok_or(Error::Missing)?;
+    hydrate_stream(db, &mut message)?;
+    Ok(message)
 }
 
 fn generation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GenerationRow> {
@@ -615,7 +701,7 @@ pub fn begin_retry(
         Some(id) => {
             tx.execute(
                 &format!(
-                    "UPDATE chat_messages SET text='',status='generating',error=NULL,updated_at={NOW}
+                    "UPDATE chat_messages SET text='',reasoning=NULL,status='generating',error=NULL,updated_at={NOW}
                      WHERE id=?1"
                 ),
                 params![id],
@@ -637,6 +723,7 @@ pub fn begin_retry(
         &format!("UPDATE chat_conversations SET updated_at={NOW} WHERE id=?1"),
         params![conversation_id],
     )?;
+    tx.execute("DELETE FROM chat_stream_chunks WHERE generation_id=?1", params![generation_id])?;
     tx.commit()?;
     Ok(RetryPlan {
         generation,
@@ -684,6 +771,7 @@ pub fn update_progress(
         &format!("UPDATE chat_conversations SET updated_at={NOW} WHERE id=?1"),
         params![conversation_id],
     )?;
+    tx.execute("DELETE FROM chat_stream_chunks WHERE generation_id=?1", params![generation_id])?;
     tx.commit()?;
     Ok(())
 }
@@ -742,6 +830,7 @@ pub fn finalize_generation(
         &format!("UPDATE chat_conversations SET updated_at={NOW} WHERE id=?1"),
         params![conversation_id],
     )?;
+    tx.execute("DELETE FROM chat_stream_chunks WHERE generation_id=?1", params![generation_id])?;
     tx.commit()?;
     let message = match assistant_id {
         Some(id) => get_message(db, &id)?,
@@ -770,6 +859,7 @@ pub fn fail_generation(
         tx.commit()?;
         return Ok(None);
     };
+    materialize_stream(&tx, generation_id)?;
     tx.execute(
         &format!(
             "UPDATE chat_generations SET state='failed',error=?2,updated_at={NOW} WHERE id=?1"
@@ -805,6 +895,7 @@ pub fn recover_interrupted(db: &mut Connection) -> Result<usize> {
         return Ok(0);
     }
     for (id, conversation_id) in &ids {
+        materialize_stream(&tx, id)?;
         tx.execute(
             &format!(
                 "UPDATE chat_generations SET state='failed',error=?2,updated_at={NOW} WHERE id=?1"
@@ -1129,6 +1220,65 @@ mod tests {
     }
 
     #[test]
+    fn journal_recovers_deltas_resets_and_checkpoints_without_rewriting_each_chunk() {
+        let mut db = database();
+        create_conversation(&db, "c", "Stream", None).unwrap();
+        start_generation(&mut db, NewGeneration { id: "g", conversation_id: "c", assistant_id: "a", text: "Prompt", title: None }).unwrap();
+        assert!(append_progress(&mut db, "g", 1, "generating", "Hello", "Think", false).unwrap());
+        assert!(!append_progress(&mut db, "g", 1, "generating", "duplicate", "", false).unwrap());
+        append_progress(&mut db, "g", 2, "generating", " 世界", " more", false).unwrap();
+        let stored: String = db.query_row("SELECT text FROM chat_messages WHERE id='a'", [], |row| row.get(0)).unwrap();
+        assert_eq!(stored, "");
+        assert_eq!(get_message(&db, "a").unwrap().text, "Hello 世界");
+        assert_eq!(message_page(&db, "c", None, None).unwrap().messages[1].reasoning.as_deref(), Some("Think more"));
+        update_progress(&mut db, "g", 2, "generating", "Hello 世界", Some("Think more")).unwrap();
+        append_progress(&mut db, "g", 3, "generating", "", "", true).unwrap();
+        append_progress(&mut db, "g", 4, "cancelling", "Retried", "new", false).unwrap();
+        assert_eq!(get_message(&db, "a").unwrap().text, "Retried");
+        assert_eq!(recover_interrupted(&mut db).unwrap(), 1);
+        let recovered = get_message(&db, "a").unwrap();
+        assert_eq!(recovered.text, "Retried");
+        assert_eq!(recovered.reasoning.as_deref(), Some("new"));
+        assert_eq!(recovered.status, "failed");
+        assert_eq!(db.query_row("SELECT count(*) FROM chat_stream_chunks", [], |row| row.get::<_,i64>(0)).unwrap(), 0);
+        assert!(!append_progress(&mut db, "g", 5, "generating", "late", "", false).unwrap());
+        begin_retry(&mut db, "c", "g", "retry-a").unwrap();
+        assert_eq!(get_message(&db, "a").unwrap().reasoning, None);
+        append_progress(&mut db, "g", 5, "generating", "Final", "", false).unwrap();
+        finalize_generation(&mut db, "g", "completed", "Final", None, "completed", None, 6).unwrap();
+        assert_eq!(get_message(&db, "a").unwrap().text, "Final");
+        assert_eq!(db.query_row("SELECT count(*) FROM chat_stream_chunks", [], |row| row.get::<_,i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn history_pages_are_bounded_ordered_and_scoped_to_the_conversation() {
+        let mut db = database();
+        create_conversation(&db, "c", "Long chat", None).unwrap();
+        create_conversation(&db, "other", "Other", None).unwrap();
+        let messages = (0..10_000).map(|index| ChatMessage {
+            id: format!("m{index}"), role: if index % 2 == 0 { "user" } else { "assistant" }.into(),
+            text: format!("Message {index}"), reasoning: None, status: "completed".into(),
+            generation_id: None, error: None, attachments: None,
+        }).collect::<Vec<_>>();
+        import_messages_if_empty(&mut db, "c", &messages).unwrap();
+        let latest = message_page(&db, "c", None, None).unwrap();
+        assert_eq!(latest.messages.len(), 40);
+        assert_eq!(latest.messages[0].id, "m9960");
+        assert_eq!(latest.messages[39].id, "m9999");
+        assert_eq!(latest.before.as_deref(), Some("m9960"));
+        assert!(latest.after.is_none());
+        let older = message_page(&db, "c", latest.before.as_deref(), None).unwrap();
+        assert_eq!(older.messages[0].id, "m9920");
+        assert_eq!(older.after.as_deref(), Some("m9959"));
+        let newer = message_page(&db, "c", None, older.after.as_deref()).unwrap();
+        assert_eq!(newer.messages[0].id, "m9960");
+        let first = message_page(&db, "c", Some("m40"), None).unwrap();
+        assert_eq!(first.messages[0].id, "m0");
+        assert!(first.before.is_none());
+        assert!(matches!(message_page(&db, "other", Some("m40"), None), Err(Error::Missing)));
+    }
+
+    #[test]
     fn snapshot_json_uses_generation_id_and_round_trips() {
         let snapshot = ConversationSnapshot {
             conversation: ConversationInfo {
@@ -1145,6 +1295,8 @@ mod tests {
                 workspace_id: "general".into(),
                 archived: false,
             },
+            before: None,
+            after: None,
             messages: vec![ChatMessage {
                 id: "m1".into(),
                 role: "assistant".into(),

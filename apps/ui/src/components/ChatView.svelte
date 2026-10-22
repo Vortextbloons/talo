@@ -5,6 +5,7 @@
   import mascot from '../../../../packages/design/mascot.svg';
   import type { ChatMessage } from '../../../../packages/contracts/src/chat';
   import type { ThinkingLevelName } from '../../../../packages/contracts/src/index';
+  import VirtualMessage from './VirtualMessage.svelte';
   import MessageBody from './MessageBody.svelte';
   import Reasoning from './Reasoning.svelte';
   import WebResearch from './WebResearch.svelte';
@@ -14,6 +15,8 @@
   import { browser, openBrowser, closeBrowser, selectBrowserSession, setBrowserWorkspaceVisible } from '../lib/browser.svelte';
   import {
     chat,
+    loadHistory,
+    jumpToLatest,
     chooseModel,
     createConversation,
     dismissError,
@@ -67,7 +70,9 @@
   let logEl = $state<HTMLDivElement>();
   let composerEl = $state<HTMLTextAreaElement>();
   let pinned = true;
+  let changingHistory = false;
   let lastConversationId: string | null = null;
+  let lastHistoryRevision = 0;
 
   interface PickerOption { key: string; group: string; label: string; reasoning: boolean; disabled: boolean; selected: boolean }
   interface PickerGroup { id: string; name: string; options: PickerOption[] }
@@ -176,12 +181,17 @@
     const conversationId = chat.active?.conversation.id ?? null;
     const last = messages[messages.length - 1];
     // Track the pieces that should bring a reader back to the newest text.
-    const signal = `${conversationId ?? ''}:${messages.length}:${last?.text.length ?? 0}:${last?.reasoning?.length ?? 0}:${last?.status ?? ''}:${chat.active?.state ?? ''}`;
+    const revision = chat.historyRevision;
+    const signal = `${revision}:${conversationId ?? ''}:${messages.length}:${last?.text.length ?? 0}:${last?.reasoning?.length ?? 0}:${last?.status ?? ''}:${chat.active?.state ?? ''}`;
+    if (revision !== lastHistoryRevision) {
+      lastHistoryRevision = revision;
+      pinned = true;
+    }
     if (conversationId !== lastConversationId) {
       lastConversationId = conversationId;
       pinned = true;
     }
-    if (signal && pinned) {
+    if (signal && pinned && !chat.active?.after && !changingHistory) {
       tick().then(() => {
         if (logEl) logEl.scrollTop = logEl.scrollHeight;
       });
@@ -448,8 +458,36 @@
   }
 
   function onLogScroll(): void {
-    if (!logEl) return;
+    if (!logEl || changingHistory) return;
     pinned = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 90;
+    if (logEl.scrollTop < 500 && active?.before) void pageHistory('before');
+    else if (pinned && active?.after) void pageHistory('after');
+  }
+
+  async function pageHistory(direction: 'before' | 'after'): Promise<void> {
+    const viewport = logEl;
+    if (!viewport || changingHistory || chat.historyLoading) return;
+    changingHistory = true;
+    pinned = false;
+    const top = viewport.getBoundingClientRect().top;
+    const anchor = [...viewport.querySelectorAll<HTMLElement>('[data-message-id]')]
+      .find(element => element.getBoundingClientRect().bottom > top);
+    const id = anchor?.dataset.messageId;
+    const offset = anchor ? anchor.getBoundingClientRect().top - top : 0;
+    await loadHistory(direction);
+    await tick();
+    if (id) {
+      const replacement = [...viewport.querySelectorAll<HTMLElement>('[data-message-id]')].find(element => element.dataset.messageId === id);
+      if (replacement) viewport.scrollTop += replacement.getBoundingClientRect().top - top - offset;
+    }
+    changingHistory = false;
+  }
+
+  async function latest(): Promise<void> {
+    await jumpToLatest();
+    pinned = true;
+    await tick();
+    if (logEl) logEl.scrollTop = logEl.scrollHeight;
   }
 
   function relativeDate(value: string): string {
@@ -487,6 +525,7 @@
     | { kind: 'turns'; id: string; turns: ChatMessage[]; firstOfGeneration: boolean };
 
   let expandedTurns = $state<Record<string, boolean>>({});
+  let expandedReasoning = $state<Record<string, boolean>>({});
   function toggleTurns(id: string): void {
     expandedTurns[id] = !expandedTurns[id];
   }
@@ -683,6 +722,7 @@
     {:else}
       <div class="log" bind:this={logEl} onscroll={onLogScroll} aria-live="polite" aria-busy={working} role="log">
         {#each renderedTurns as item (item.kind === 'turns' ? item.id : item.message.id)}
+          <VirtualMessage id={item.kind === 'turns' ? item.id : item.message.id} root={logEl} onResize={() => { if (pinned && !active?.after && !changingHistory && logEl) logEl.scrollTop = logEl.scrollHeight; }}>
           {#if item.kind === 'turns'}
             <article class="message assistant turns-group">
               <img class="avatar" src={mascot} alt="" aria-hidden="true" />
@@ -699,7 +739,7 @@
                   {#if expandedTurns[item.id]}
                     <div class="turns-list">
                       {#each item.turns as turn (turn.id)}
-                        {#if turn.reasoning}<Reasoning text={turn.reasoning} thinking={false} hasReply={false} />{/if}
+                        {#if turn.reasoning}<Reasoning text={turn.reasoning} thinking={false} hasReply={false} savedOpen={expandedReasoning[turn.id]} onToggle={open => { expandedReasoning[turn.id] = open; }} />{/if}
                       {/each}
                     </div>
                   {/if}
@@ -743,6 +783,8 @@
               {#if showReasoning && message.reasoning}
                 <Reasoning
                   text={message.reasoning}
+                  savedOpen={expandedReasoning[message.id]}
+                  onToggle={open => { expandedReasoning[message.id] = open; }}
                   thinking={message.status === 'generating' && !message.text}
                   hasReply={Boolean(message.text)}
                 />
@@ -764,8 +806,10 @@
             </div>
           </article>
           {/if}
+          </VirtualMessage>
         {/each}
       </div>
+      {#if active?.after}<button class="secondary" onclick={() => void latest()}>Jump to latest</button>{/if}
     {/if}
 
     {#if chat.phase === 'ready'}
@@ -1057,7 +1101,7 @@
   .suggestions button:hover:not(:disabled) span{color:var(--yellow)}
   .suggestions span{display:block;font-size:13px;font-weight:600;transition:color .15s ease}
   .suggestions small{display:block;margin-top:6px;font-size:11.5px;color:var(--muted);line-height:1.5}
-  .log{flex:1;min-height:0;overflow-y:auto;padding:8px 10px 20px 2px;scrollbar-gutter:stable}
+  .log{flex:1;min-height:0;overflow-y:auto;overflow-anchor:none;padding:8px 10px 20px 2px;scrollbar-gutter:stable}
   .message{display:flex;gap:12px;padding:14px 0 20px;border-bottom:1px solid var(--line);animation:msg-in .32s cubic-bezier(.2,.7,.3,1)}
   .message:last-child{border-bottom:0}
   .message.user{justify-content:flex-end}

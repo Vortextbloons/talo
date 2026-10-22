@@ -47,6 +47,7 @@ export function startWorker(data, options = {}) {
   const waiters = new Set();
   let stderr = '';
   let output = '';
+  child.stdout.setEncoding('utf8');
   child.stderr.on('data', chunk => { stderr += chunk.toString(); });
   child.stdout.on('data', chunk => {
     output += chunk.toString();

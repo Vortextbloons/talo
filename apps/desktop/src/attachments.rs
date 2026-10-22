@@ -14,7 +14,7 @@ pub const MAX_IMAGES: usize = 4;
 pub const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 /// Everything attached to one turn, decoded.
 pub const MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
-/// Snapshots carry data URLs; past this the UI shows a file chip instead of a picture.
+/// Past this size the UI shows a file chip instead of a picture.
 pub const MAX_DISPLAY_BYTES: i64 = 6 * 1024 * 1024;
 
 /// Raster formats every bundled provider accepts. SVG is excluded on purpose: it is a
@@ -97,13 +97,25 @@ pub fn store(
     Ok(stored)
 }
 
-/// A data URL for an image already on disk, or `None` when it is too big to inline.
-pub fn display_url(path: &Path, mime_type: &str, bytes: i64) -> Option<String> {
+/// A native URL for an image already on disk, or `None` when it is too big to preview.
+pub fn display_url(id: &str, bytes: i64) -> Option<String> {
     if bytes > MAX_DISPLAY_BYTES {
         return None;
     }
-    let content = fs::read(path).ok()?;
-    Some(format!("data:{mime_type};base64,{}", encode_base64(&content)))
+    Some(if cfg!(windows) { format!("http://attachment.localhost/{id}") } else { format!("attachment://localhost/{id}") })
+}
+
+pub fn preview(db: &rusqlite::Connection, id: &str) -> Option<(String, Vec<u8>)> {
+    use std::io::Read;
+    let (path, mime, bytes): (String, String, i64) = db.query_row(
+        "SELECT path,mime_type,bytes FROM chat_attachments WHERE id=?1",
+        [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).ok()?;
+    if bytes > MAX_DISPLAY_BYTES || !MIME_EXTENSIONS.iter().any(|(known, _)| *known == mime) { return None; }
+    let mut content = Vec::new();
+    fs::File::open(path).ok()?.take(MAX_DISPLAY_BYTES as u64 + 1).read_to_end(&mut content).ok()?;
+    if content.len() > MAX_DISPLAY_BYTES as usize { return None; }
+    Some((mime, content))
 }
 
 fn clean_name(name: Option<&str>, extension: &str) -> String {
@@ -218,7 +230,29 @@ mod tests {
         assert!(stored[0].path.starts_with(root.join("attachments").join("conversation-1")));
         assert_eq!(fs::read(&stored[0].path).unwrap(), b"hi");
         assert_eq!(stored[0].data, "aGk=");
-        assert!(display_url(&stored[0].path, "image/png", 2).unwrap().starts_with("data:image/png;base64,"));
+        assert!(display_url("image-1", 2).unwrap().ends_with("/image-1"));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn previews_read_only_known_bounded_images_and_metadata_stays_scoped() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch(crate::storage::SCHEMA).unwrap();
+        db.execute("INSERT INTO chat_conversations(id,title,created_at,updated_at) VALUES('c','Chat','',''),('other','Other','','')", []).unwrap();
+        let path = std::env::temp_dir().join(format!("talo-preview-{}", uuid::Uuid::new_v4()));
+        fs::write(&path, b"image bytes").unwrap();
+        for (id, conversation, generation, mime) in [("image", "c", "g", "image/png"), ("other-turn", "c", "old", "image/png"), ("other-chat", "other", "g", "image/png"), ("invalid", "c", "g", "text/html")] {
+            db.execute("INSERT INTO chat_attachments(id,conversation_id,generation_id,name,mime_type,bytes,path,created_at) VALUES(?1,?2,?3,'image',?4,11,?5,'')", rusqlite::params![id,conversation,generation,mime,path.to_str().unwrap()]).unwrap();
+        }
+        assert_eq!(preview(&db, "image"), Some(("image/png".into(), b"image bytes".to_vec())));
+        assert!(preview(&db, "../image").is_none());
+        assert!(preview(&db, "invalid").is_none());
+        let images = crate::storage::list_attachments(&db, "c", &["g"]).unwrap();
+        assert_eq!(images.iter().map(|row| row.info.id.as_str()).collect::<Vec<_>>(), ["image", "invalid"]);
+        assert!(crate::storage::list_attachments(&db, "c", &[]).unwrap().is_empty());
+        fs::write(&path, vec![0; MAX_DISPLAY_BYTES as usize + 1]).unwrap();
+        assert!(preview(&db, "image").is_none());
+        fs::remove_file(&path).unwrap();
+        assert!(preview(&db, "image").is_none());
     }
 }

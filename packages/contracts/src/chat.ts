@@ -18,21 +18,26 @@ export interface ChatMessage {
 }
 /** An image sent with a chat_send call. `data` is standard base64 without the data: prefix. */
 export interface ChatAttachmentInput { name?: string; mimeType: string; data: string }
-/** A stored attachment. `url` is a data URL the composer can render, when it is small enough. */
+/** A stored attachment. `url` loads its preview from the native host on demand. */
 export interface ChatAttachment { id: string; name: string; mimeType: string; bytes: number; url?: string }
 export interface ConversationSnapshot {
   conversation: ConversationInfo; messages: ChatMessage[];
+  before: string | null; after: string | null;
   generationId: string | null; state: GenerationState; sequence: number; error?: string;
   /** Effective Pi thinking level for the open session, when known. */
   thinkingLevel?: string;
 }
+export interface MessagePage {
+  messages: ChatMessage[]; before: string | null; after: string | null;
+}
+export interface StreamDelta { text?: string; reasoning?: string; reset?: boolean }
 export interface ChatBootstrap {
   conversations: ConversationInfo[]; connections: ConnectionInfo[];
   active: ConversationSnapshot | null;
 }
 export type ChatEvent = {
   type: 'generation'; conversationId: string; generationId: string; sequence: number;
-  state: GenerationState; text?: string; reasoning?: string; message?: ChatMessage; error?: string;
+  state: GenerationState; text?: string; reasoning?: string; delta?: StreamDelta; message?: ChatMessage; error?: string;
 } | { type: 'worker'; state: 'starting' | 'ready' | 'stopped' | 'failed'; error?: string }
   | { type: 'research'; conversationId: string; generationId: string; activity: ResearchActivity };
 export interface ResearchActivity {
@@ -79,8 +84,8 @@ export type WorkerEvent =
  * result { level } is the effective level after Pi clamps it to the model's registry levels.
  * models.list/provider.validate params: provider, model?, apiKey?, baseUrl?. models.list returns
  * {provider,name,native,models}; provider.validate must perform an authenticated probe.
- * A generation event's text is the COMPLETE accumulated assistant text (not a delta).
- * reasoning, when present, is the COMPLETE accumulated thinking text (not a delta).
+ * A generation event's text/reasoning replace accumulated content; delta appends content.
+ * delta.reset clears both text and reasoning before appending its fields.
  * Event sequence numbers increase within a generation, including across its retries.
  */
 

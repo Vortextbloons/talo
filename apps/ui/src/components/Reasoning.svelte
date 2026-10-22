@@ -1,5 +1,5 @@
 <script lang="ts">
-  let { text, thinking, hasReply }: { text: string; thinking: boolean; hasReply: boolean } = $props();
+  let { text, thinking, hasReply, savedOpen, onToggle }: { text: string; thinking: boolean; hasReply: boolean; savedOpen?: boolean; onToggle?: (open: boolean) => void } = $props();
 
   // Thinking streams open; the reply pulls focus back unless the reader pinned the panel.
   // The initial props are deliberately captured once: this component mounts per message.
@@ -8,6 +8,7 @@
   let open = $state(thinking && !hasReply);
 
   $effect(() => {
+    if (savedOpen !== undefined) { open = savedOpen; return; }
     if (touched) return;
     // Follow the turn: open while thinking streams, close once the reply takes over.
     if (thinking && !hasReply) open = true;
@@ -17,6 +18,7 @@
   function toggle(): void {
     touched = true;
     open = !open;
+    onToggle?.(open);
   }
 </script>
 

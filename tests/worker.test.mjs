@@ -113,6 +113,35 @@ test('worker protocol, provider discovery without a session, legacy restore, and
   }
 });
 
+test('long replies stream with linear payload size and retain their complete final text', { timeout: 40000 }, async () => {
+  const data = await mkdtemp(path.join(os.tmpdir(), 'talo-delta-size-'));
+  const chunks = Array.from({ length: 128 }, (_, index) => `${index}:` + '界'.repeat(1024));
+  const mock = await startMockProvider({ chunks });
+  const worker = startWorker(data);
+  try {
+    await worker.waitReady();
+    await worker.request('open', 'session.open', {
+      conversationId: 'linear', provider: 'custom', model: 'mock-model',
+      baseUrl: mock.url, apiKey: mock.state.key, reasoning: false,
+    });
+    const mark = worker.mark();
+    await worker.request('send', 'session.prompt', { conversationId: 'linear', generationId: 'g', text: 'Long reply' });
+    const done = await worker.waitGeneration('linear', 'g', ['completed', 'failed'], mark, 30000);
+    assert.equal(done.event.state, 'completed', done.event.error);
+    const expected = chunks.join('');
+    assert.equal(done.event.text, expected);
+    const events = worker.generationEvents('linear', 'g');
+    assert.equal(events.map(event => event.delta?.text ?? '').join(''), expected);
+    assert.ok(events.reduce((bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)), 0) < Buffer.byteLength(expected) * 5);
+    const snapshot = await worker.request('snapshot', 'session.snapshot', { conversationId: 'linear' });
+    assert.equal(snapshot.messages.at(-1).text, expected);
+  } finally {
+    await worker.kill();
+    await mock.close();
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
 test('real Pi streaming, authenticated provider validation, cancellation, and retries', { timeout: 150_000 }, async () => {
   const data = await mkdtemp(path.join(os.tmpdir(), 'talo-chat-'));
   const mock = await startMockProvider();
@@ -181,7 +210,11 @@ test('real Pi streaming, authenticated provider validation, cancellation, and re
     assert.equal(chatRequest.body.stream, true);
     const streamed = worker.generationEvents('c1', 'g1').filter(event => event.state === 'generating');
     assert.ok(streamed.length >= 2, 'assistant text should stream in multiple events');
-    assert.ok(streamed.every(event => typeof event.text === 'string'));
+    const deltas = streamed.filter(event => event.delta?.text);
+    assert.ok(deltas.length >= 2);
+    assert.equal(deltas.map(event => event.delta.text).join(''), 'Hello from mock');
+    assert.ok(deltas.every(event => event.text === undefined && event.reasoning === undefined));
+    assert.ok(streamed.some(event => event.delta?.reset));
 
     let snapshot = await worker.request('snap1', 'session.snapshot', { conversationId: 'c1' });
     assert.deepEqual(snapshot.messages.map(message => message.role), ['user', 'assistant']);
@@ -228,7 +261,7 @@ test('real Pi streaming, authenticated provider validation, cancellation, and re
     });
     await worker.waitFrom(cancelMark, event =>
       event.type === 'chat' && event.event?.type === 'generation' &&
-      event.event.generationId === 'g2' && event.event.text === 'slow', 20_000);
+      event.event.generationId === 'g2' && event.event.delta?.text === 'slow', 20_000);
     const aborted = await worker.request('abort', 'session.abort', { generationId: 'g2' }, 20_000);
     assert.equal(aborted.aborted, true);
     const cancelled = await worker.waitGeneration('c2', 'g2', ['cancelled'], cancelMark, 20_000);
@@ -316,7 +349,7 @@ test('idle sleep waits for an in-flight generation', { timeout: 120_000 }, async
     await worker.waitFrom(mark, event =>
       event.type === 'chat' && event.event?.type === 'generation' &&
       event.event.generationId === 'idle-generation' &&
-      typeof event.event.text === 'string' && event.event.text.length > 0, 20_000);
+      typeof event.event.delta?.text === 'string' && event.event.delta.text.length > 0, 20_000);
     await new Promise(resolve => setTimeout(resolve, 900));
     assert.equal(worker.child.exitCode, null, 'worker must not sleep while generating');
     assert.ok(!worker.events.some(event => event.type === 'sleeping'));
@@ -361,7 +394,7 @@ test('explicit per-conversation sessions survive a worker crash and retry the in
     await first.waitFrom(mark, event =>
       event.type === 'chat' && event.event?.type === 'generation' &&
       event.event.generationId === 'g-crash' &&
-      typeof event.event.text === 'string' && event.event.text.length > 0, 20_000);
+      typeof event.event.delta?.text === 'string' && event.event.delta.text.length > 0, 20_000);
     // Simulate a host/worker crash, not an orderly abort.
     first.child.kill('SIGKILL');
     await first.exited;
@@ -503,6 +536,22 @@ test('bounded memory context reaches Pi without duplicate injections and is refr
     const system=body.messages.filter(m=>m.role==='system').map(m=>JSON.stringify(m.content)).join('\n');
     assert.match(system,/Updated project decision: use Rust/);
     assert.ok(!system.includes('Approved preference: use concise examples'),'superseded context must not remain in current system prompt');
+  } finally {await worker.close();await mock.close();await rm(data,{recursive:true,force:true});}
+});
+
+test('maximum host image payload reaches a completed generation', { timeout:40000 }, async()=>{
+  const data=await mkdtemp(path.join(os.tmpdir(),'talo-image-payload-'));
+  const mock=await startMockProvider();
+  const worker=startWorker(data);
+  try {
+    await worker.waitReady();
+    await worker.request('open','session.open',{conversationId:'images',provider:'custom',model:'mock-model',baseUrl:mock.url,apiKey:mock.state.key});
+    const image={name:'screenshot.png',mimeType:'image/png',data:Buffer.alloc(8*1024*1024).toString('base64'),path:path.join(data,'screenshot.png')};
+    const mark=worker.mark();
+    await worker.request('prompt','session.prompt',{conversationId:'images',generationId:'images-turn',text:'Describe the attachments',images:[image,image]});
+    const done=await worker.waitGeneration('images','images-turn',['completed','failed'],mark);
+    assert.equal(done.event.state,'completed',done.event.error);
+    assert.equal(done.event.text,'Hello from mock');
   } finally {await worker.close();await mock.close();await rm(data,{recursive:true,force:true});}
 });
 
