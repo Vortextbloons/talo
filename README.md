@@ -13,6 +13,14 @@ Give it a task, and Talo can draw on your saved workspace knowledge, research th
 
 Your data stays on your device, and saved provider keys are protected with Windows DPAPI. Connect a supported model provider to get started.
 
+## An agent that can shape its own space
+
+Talo can propose structure instead of only answering: draft a workspace with its own brief and pinned notes, hand you a task it cannot do itself, or ask a focused question with real options when a decision changes its next step. Those arrive in the **Inbox** (and the question card appears above the composer for the chat that asked it).
+
+Proactivity stays bounded. Talo acts inside a conversation, never on a timer. A drafted workspace stays a draft until you accept it, Talo can only edit workspaces you explicitly let it edit, it may create five things a day, and it never deletes. Each workspace can also narrow what Talo may do there — web research, browser, or files — and carries a brief that applies to every chat in that space.
+
+See [Slice 9 architecture and verification](docs/SLICE-9.md).
+
 ## Learn more
 
 [Providers](docs/PROVIDERS.md) · [Architecture](docs/ARCHITECTURE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Third-party notices](docs/THIRD-PARTY-NOTICES.md)

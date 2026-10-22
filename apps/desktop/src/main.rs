@@ -415,6 +415,24 @@ async fn service_control(
     .await
 }
 
+/// Stops every bundled runtime before an update replaces the files on disk. The Windows
+/// updater quits the app itself, but the worker, browser and research processes hold the
+/// packaged executables open, and the installer cannot replace a locked file.
+#[tauri::command]
+async fn prepare_update(app: tauri::AppHandle) -> Result<(), String> {
+    run_blocking(app, move |app| {
+        let shared = app.state::<Shared>();
+        let mut host = shared.lock().map_err(|e| e.to_string())?;
+        let Host {
+            chat, db, supervisor, ..
+        } = &mut *host;
+        chat.fail_active_on_shutdown(db);
+        supervisor.stop_all();
+        Ok(())
+    })
+    .await
+}
+
 #[tauri::command]
 async fn set_autostart(app: tauri::AppHandle, enabled: bool, grant: String) -> Result<(), String> {
     run_blocking(app, move |app| {
@@ -457,6 +475,9 @@ fn main() {
                 .build(),
         )
         .plugin(tauri_plugin_notification::init())
+        // The updater installs a signed NSIS package; process::relaunch restarts after it.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             automation::automation_action,
             integrations::tools_action,
@@ -473,6 +494,7 @@ fn main() {
             resolve_permission,
             service_control,
             set_autostart,
+            prepare_update,
             chat::chat_bootstrap,
             library::library_action,
             library::memory_save,
@@ -616,14 +638,20 @@ fn main() {
                 })
                 .build(app)?;
             let handle = app.handle().clone();
-            // Streaming and crash recovery need a faster clock than the runtime-status poll.
+            // The pump is event-driven: worker and browser reader threads wake it as output
+            // arrives, and a one-second fallback tick covers housekeeping that has no external
+            // event (suspend interrupts, approval expiry, idle sleep, process reaping). The
+            // host lock is only held while pumping, never while waiting.
             std::thread::spawn(move || loop {
-                std::thread::sleep(Duration::from_millis(30));
-                let shared = handle.state::<Shared>();
-                let Ok(mut h) = shared.lock() else {
-                    continue;
-                };
-                h.pump(&handle);
+                {
+                    // Clone the Arc out of the State guard: the lock guard must not borrow a
+                    // temporary that dies before the guard does.
+                    let shared = Arc::clone(handle.state::<Shared>().inner());
+                    if let Ok(mut h) = shared.lock() {
+                        h.pump(&handle);
+                    };
+                }
+                supervisor::pump_wait(Duration::from_secs(1));
             });
             let handle = app.handle().clone();
             std::thread::spawn(move || {

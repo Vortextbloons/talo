@@ -615,6 +615,7 @@ mod tests {
             db.execute_batch(include_str!("../../../services/memory/schema.sql"))
                 .unwrap();
             storage::init(&db).unwrap();
+            crate::agent::init(&db).unwrap();
             action(
                 &mut db,
                 "workspace_save",
@@ -632,6 +633,7 @@ mod tests {
             db.execute_batch(include_str!("../../../services/memory/schema.sql"))
                 .unwrap();
             storage::init(&db).unwrap();
+            crate::agent::init(&db).unwrap();
             assert_eq!(setting(&db, "active_workspace", ""), "durable");
             assert_eq!(
                 storage::get_conversation(&db, "c")
@@ -684,6 +686,7 @@ mod tests {
         db.execute_batch(include_str!("../../../services/memory/schema.sql"))
             .unwrap();
         storage::init(&db).unwrap();
+        crate::agent::init(&db).unwrap();
         db
     }
     #[test]

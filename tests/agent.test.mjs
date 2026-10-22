@@ -61,6 +61,8 @@ test('a tool call reaches the host and the turn continues after the host replies
       text: 'Plan my afternoon', capabilities: ['web'], context: '',
     });
     const call = await worker.wait(event => event.type === 'agent' && event.message?.method === 'agent.call');
+    const first = provider.state.requests.find(request => request.body.tools?.length);
+    assert.deepEqual(first.body.tools.map(tool => tool.function.name), ['tools'], 'a workspace without files hides read/write/edit');
     assert.equal(call.message.params.operation, 'task_assign');
     assert.equal(call.message.params.conversationId, 'agent-chat');
     worker.send({ type: 'agent_response', message: { jsonrpc: '2.0', id: call.message.id, result: { id: 'assignment-1', status: 'open' } } });

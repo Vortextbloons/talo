@@ -15,6 +15,7 @@
   import InboxPanel from './components/InboxPanel.svelte';
   import { agent, initAgent } from './lib/agent.svelte';
   import { chat, disposeChat, initChat, createConversation } from './lib/chat.svelte';
+  import { checkForUpdates } from './lib/updates.svelte';
   import { CUSTOM_BASE_URL_EXAMPLE, DEFAULT_PREFERENCE, PROVIDERS, parseProviderPreference, providerDescriptor } from '../../../packages/contracts/src/index';
   import type { Onboarding, RuntimeStatus, ServiceId } from '../../../packages/contracts/src/index';
   const pages = ['Chat', 'Inbox', 'Workspaces', 'Tasks', 'Browser', 'Memory', 'Settings'] as const;
@@ -62,6 +63,9 @@
     (async()=>{try { if(isTauri()){const saved=await invoke<Onboarding|null>('load_settings');if(saved && active)settings={...settings,...saved,...parseProviderPreference(saved)};await refresh();} }catch(e){error=String(e);}finally{if(active)loaded=true;}})();
     // The host pushes service transitions; polling would keep the hidden webview awake.
     if(isTauri())listen<RuntimeStatus>('runtime-status',event=>{if(active)status=event.payload;}).then(stop=>{if(active)unlisten=stop;else stop();});
+    // Ask the release feed once the window has settled. A failed check stays silent; the
+    // Settings row shows the detail when someone looks.
+    const updateCheck = setTimeout(() => { if (active) void checkForUpdates({ quiet: true }); }, 4000);
     const wake=()=>{if(active)refresh().catch(()=>{});};
     window.addEventListener('focus',wake);
     return ()=>{active=false;unlisten?.();stopAutomation?.();window.removeEventListener('focus',wake);disposeChat();stopAgent();stopBrowser();};

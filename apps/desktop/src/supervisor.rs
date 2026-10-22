@@ -14,7 +14,7 @@ use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, RecvTimeoutError, SyncSender},
-        Arc, Mutex,
+        Arc, Condvar, Mutex, OnceLock,
     },
     time::{Duration, Instant},
 };
@@ -50,6 +50,55 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// Event-driven pump wake. Reader threads notify after enqueueing output the pump consumes,
+/// and the pump waits with a fallback tick instead of spinning on a fixed timer. A queued
+/// flag makes the wake edge-triggered: a notify that lands while the pump is already
+/// draining is consumed on the next wait, so nothing can be lost.
+struct Wake {
+    flag: Mutex<bool>,
+    cond: Condvar,
+}
+
+impl Wake {
+    fn new() -> Self {
+        Self { flag: Mutex::new(false), cond: Condvar::new() }
+    }
+    fn notify(&self) {
+        if let Ok(mut flag) = self.flag.lock() {
+            *flag = true;
+        }
+        self.cond.notify_one();
+    }
+    fn wait(&self, fallback: Duration) {
+        let Ok(mut flag) = self.flag.lock() else {
+            std::thread::sleep(fallback);
+            return;
+        };
+        if *flag {
+            *flag = false;
+            return;
+        }
+        if let Ok((mut flag, _)) = self.cond.wait_timeout(flag, fallback) {
+            *flag = false;
+        }
+    }
+}
+
+/// Exactly one pump exists per process, so a process-wide wake is its honest shape.
+static PUMP_WAKE: OnceLock<Wake> = OnceLock::new();
+
+/// Reader threads call this after enqueueing anything the pump consumes.
+pub(crate) fn wake_pump() {
+    if let Some(wake) = PUMP_WAKE.get() {
+        wake.notify();
+    }
+}
+
+/// Block the pump until output arrives or the fallback tick expires, whichever is first.
+pub(crate) fn pump_wait(fallback: Duration) {
+    PUMP_WAKE.get_or_init(Wake::new).wait(fallback);
+}
 
 #[derive(Debug)]
 pub enum WorkerSignal {
@@ -582,6 +631,7 @@ fn read_worker(
         if let Ok(mut signals) = signals.lock() {
             signals.push_back(signal);
         }
+        wake_pump();
     };
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };

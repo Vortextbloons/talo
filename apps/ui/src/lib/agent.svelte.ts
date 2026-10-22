@@ -16,8 +16,13 @@ export const agent = $state({
   loaded: false,
 });
 
-export const openAssignments = $derived(agent.assignments.filter(item => item.status === 'open'));
-export const needsYou = $derived(agent.asks.length + openAssignments.length + agent.drafts.length);
+/** Derived read models. Call in components — `$derived` cannot be exported from a module. */
+export function openAssignments(): Assignment[] {
+  return agent.assignments.filter(item => item.status === 'open');
+}
+export function needsYou(): number {
+  return agent.asks.length + openAssignments().length + agent.drafts.length;
+}
 
 function apply(state: AgentState): void {
   agent.assignments = state.assignments ?? [];

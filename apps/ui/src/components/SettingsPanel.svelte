@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { isTauri } from '@tauri-apps/api/core';
   import ProviderSettings from './ProviderSettings.svelte';
   import ToolsSettings from './ToolsSettings.svelte';
   import { chat, selectionLabel } from '../lib/chat.svelte';
   import { library } from '../lib/library.svelte';
   import { tools, refreshTools, toolAction } from '../lib/tools.svelte';
+  import { updates, checkForUpdates, installUpdate } from '../lib/updates.svelte';
   import type { Onboarding, RuntimeStatus, ServiceId } from '../../../../packages/contracts/src/index';
 
   let {
@@ -105,7 +107,26 @@
   const pi = $derived(serviceState('pi'));
   const browser = $derived(serviceState('browser'));
 
-  onMount(() => { void refreshTools(); });
+  let appVersion = $state('');
+  onMount(() => {
+    void refreshTools();
+    if (isTauri()) void import('@tauri-apps/api/app').then(({ getVersion }) => getVersion()).then(version => { appVersion = version; }).catch(() => {});
+    // Opening the desktop app's settings is a good moment to ask the release feed.
+    void checkForUpdates({ quiet: true });
+  });
+
+  const megabytes = (bytes: number): string => (bytes / (1024 * 1024)).toFixed(1);
+  const downloaded = $derived(updates.total ? Math.min(100, Math.round((updates.received / updates.total) * 100)) : 0);
+  const updateState = $derived(
+    updates.phase === 'available' ? 'A new version is ready to download.'
+    : updates.phase === 'checking' ? 'Checking for updates…'
+    : updates.phase === 'current' ? 'Talo is up to date.'
+    : updates.phase === 'preparing' ? 'Closing background services…'
+    : updates.phase === 'downloading' ? `Downloading ${megabytes(updates.received)}${updates.total ? ` of ${megabytes(updates.total)} MB` : ''} MB…`
+    : updates.phase === 'installing' ? 'Installing. Talo will close and reopen itself.'
+    : updates.phase === 'error' ? updates.error
+    : 'Talo checks quietly when you open the desktop app.'
+  );
 
   async function toggleTool(id: string, enabled: boolean): Promise<void> {
     await toolAction('toggle', { id, enabled });
@@ -249,6 +270,37 @@
 
   {#if tab === 'Advanced'}
     <div class="tabpanel cols" role="tabpanel" aria-label="Advanced">
+      <section class="group full">
+        <h2>Updates</h2>
+        <div class="rows">
+          <div class="row">
+            <div class="what">
+              <strong>Talo {appVersion || 'version unknown'}</strong>
+              <small class:bad={updates.phase === 'error'}>{updateState}</small>
+              {#if updates.phase === 'available' && updates.notes}
+                <p class="notes">{updates.notes}</p>
+              {/if}
+            </div>
+            <div class="how">
+              {#if updates.phase === 'downloading'}
+                <div class="progress" role="progressbar" aria-valuenow={downloaded} aria-valuemin="0" aria-valuemax="100" aria-label="Update download"><span style="width:{downloaded}%"></span></div>
+              {:else if updates.phase === 'available'}
+                <button class="primary" onclick={() => void installUpdate()}>Update now</button>
+              {:else if updates.phase === 'preparing' || updates.phase === 'installing'}
+                <span class="state">Working…</span>
+              {:else if updates.phase === 'checking'}
+                <span class="state">Checking…</span>
+              {:else}
+                <button class="quiet" disabled={!status} onclick={() => void checkForUpdates()}>{updates.phase === 'error' ? 'Try again' : 'Check now'}</button>
+              {/if}
+            </div>
+          </div>
+        </div>
+        {#if updates.phase === 'available' || updates.phase === 'downloading'}
+          <p class="after">Talo closes to install and reopens on the new version. Your chats, settings and memory are untouched.</p>
+        {/if}
+      </section>
+
       <section class="group">
         <h2>App behaviour</h2>
         <div class="rows">
@@ -366,6 +418,12 @@
   .switch.small[aria-checked="true"]::after{transform:translateX(15px)}
 
   .state{font-size:12px;color:var(--faint)}
+  .what small.bad{color:var(--error-text)}
+  .notes{margin:8px 0 0;font-size:12px;line-height:1.6;color:var(--muted);white-space:pre-wrap;max-width:64ch}
+  .progress{width:min(260px,40vw);height:6px;border-radius:99px;background:var(--soft);overflow:hidden;border:1px solid var(--line)}
+  .progress span{display:block;height:100%;background:var(--yellow);transition:width .2s ease}
+  .primary{background:var(--yellow);border:1px solid var(--yellow);color:var(--black);font-weight:600;padding:8px 14px;border-radius:8px;font-size:12.5px}
+  .primary:hover:not(:disabled){background:#ffdd7f;border-color:#ffdd7f}
   .state.live{color:var(--yellow)}
 
   .disclosure{border-bottom:1px solid var(--line)}

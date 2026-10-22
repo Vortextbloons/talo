@@ -43,4 +43,7 @@ if(await exists(chrome)){
 }
 if(await exists(path.join(runtime,'node/node.exe')))console.log('Note: vendor/runtime/node is unused now; the app prefers Bun and the installer ships only runtime/bun.');
 await writeFile('vendor/runtime-manifest.json',JSON.stringify({platform:'win32-x64',bun:bunVersion,playwright:'1.64.1',chromium:browserInfo.browserVersion,chromiumRevision:browserInfo.revision,donsetch:'4.10.1'},null,2)+'\n');
+// Staged installers are redundant once the runtime tree is assembled; the next vendor run
+// re-downloads only what is missing.
+await rm('vendor/downloads',{recursive:true,force:true});
 console.log('Bundled Bun and Chromium are ready.');

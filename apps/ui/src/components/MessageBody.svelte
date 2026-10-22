@@ -12,7 +12,27 @@
   // inject markup into the desktop webview. Math is the one exception: KaTeX turns TeX into its
   // own DOM with trust disabled, which escapes anything that is not a rendering instruction.
 
-  const tree = $derived(parseMarkdown(text));
+  // Streaming deltas mutate `text` many times a second, and re-lexing the whole message on
+  // every delta is quadratic in the response length. Parse at most every 150ms while it
+  // changes; the trailing parse always catches up, so settled text is fully rendered.
+  const PARSE_INTERVAL = 150;
+  let tree = $state<Block[]>([]);
+  let lastParse = 0;
+
+  $effect(() => {
+    const source = text;
+    const since = Date.now() - lastParse;
+    if (since >= PARSE_INTERVAL) {
+      lastParse = Date.now();
+      tree = parseMarkdown(source);
+      return;
+    }
+    const timer = setTimeout(() => {
+      lastParse = Date.now();
+      tree = parseMarkdown(text);
+    }, PARSE_INTERVAL - since);
+    return () => clearTimeout(timer);
+  });
 
   function renderMath(tex: string, display: boolean): string {
     try {

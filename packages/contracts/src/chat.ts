@@ -70,9 +70,10 @@ export type WorkerEvent =
  * session.open private params: conversationId, sessionPath? (null creates), provider, model,
  * apiKey?, baseUrl?. Result: { sessionId, path, messages: ChatMessage[] }.
  * session.prompt params: conversationId, generationId, text, images? (each {name, mimeType,
- * data, path}). The worker sends images natively when the model accepts image input and
+ * data, path}), capabilities? (subset of 'web'|'browser'|'files'; absent or empty means all).
+ * The worker sends images natively when the model accepts image input and
  * otherwise appends the on-disk paths so Pi's own tools can read them.
- * session.retry params: conversationId, generationId, images?.
+ * session.retry params: conversationId, generationId, images?, capabilities?.
  * session.abort params: generationId. session.snapshot returns {messages,state,generationId,sequence}.
  * session.thinking params: conversationId, level ('minimal'|'low'|'medium'|'high'|'xhigh'|'max');
  * result { level } is the effective level after Pi clamps it to the model's registry levels.

@@ -107,6 +107,7 @@ impl Research {
                             if tx.send(value).is_err() {
                                 break;
                             }
+                            crate::supervisor::wake_pump();
                         }
                     }
                 }

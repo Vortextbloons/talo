@@ -24,7 +24,10 @@
     "verify:bundle": "node scripts/verify-pi-bundle.mjs",
     "package": "npm run vendor && npm run prepare:bundle && tauri build --config apps/desktop/tauri.conf.json",
     "package:offline": "npm run vendor && npm run prepare:bundle && tauri build --config apps/desktop/tauri.conf.json --config apps/desktop/tauri.offline.conf.json",
-    "host:check": "cargo check --manifest-path apps/desktop/Cargo.toml"
+    "host:check": "cargo check --manifest-path apps/desktop/Cargo.toml",
+    "tauri": "tauri",
+    "version:set": "node scripts/version.mjs",
+    "package:release": "npm run vendor && npm run prepare:bundle && tauri build --config apps/desktop/tauri.conf.json --config apps/desktop/tauri.release.conf.json"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.4",

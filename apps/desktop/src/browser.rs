@@ -52,12 +52,12 @@ impl Browser {
                     continue;
                 }
                 // Keep only the newest frame. Never log frames or forward them to Pi.
-                if value["type"] == "browser_frame" { if let Ok(mut frame) = latest_frame.lock() { *frame = Some(json!({"sessionId":value["sessionId"],"frame":value["frame"]})); } continue; }
+                if value["type"] == "browser_frame" { if let Ok(mut frame) = latest_frame.lock() { *frame = Some(json!({"sessionId":value["sessionId"],"frame":value["frame"]})); } crate::supervisor::wake_pump(); continue; }
                 let id = value["id"].as_str().unwrap_or("");
                 if let Some(sender) = replies.lock().ok().and_then(|mut p| p.remove(id)) {
                     let result = if value.get("error").is_some() { Err(value["error"]["message"].as_str().unwrap_or("Browser request failed").to_string()) } else { Ok(value["result"].clone()) };
                     let _ = sender.send(result);
-                } else if tx.send(value).is_err() { break; }
+                } else if tx.send(value).is_err() { break; } else { crate::supervisor::wake_pump(); }
             }
             if let Ok(mut state) = cached.lock() { *state = json!({"state":"crashed","owner":"paused","tabs":[],"busy":false,"error":"Browser service disconnected. Open Browser to recover."}); }
             if let Ok(mut states) = session_states.lock() { if let Some(states) = states.as_object_mut() { for state in states.values_mut() { state["state"] = json!("crashed"); state["owner"] = json!("paused"); state["busy"] = json!(false); } } }

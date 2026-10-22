@@ -1,0 +1,80 @@
+name: release
+
+# A version tag publishes a signed Windows installer and the update manifest that the app
+# polls. Everything the app ships (Bun, Chromium, the bundled npm graph) is prepared here,
+# because the release build needs those directories to exist.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './apps/desktop -> target'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Vendor the runtime (Bun + pinned Chromium)
+        run: npm run vendor
+
+      - name: Build the workers and the shipped npm graph
+        run: npm run prepare:bundle
+
+      - name: Verify the bundled worker boots
+        run: npm run verify:bundle
+
+      - name: Point the updater at this repository
+        run: node scripts/updater-endpoint.mjs
+
+      - name: Check the signing key is present
+        shell: bash
+        run: |
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is empty. Add the updater private key as a repository secret."
+            exit 1
+          fi
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: Build, sign and publish
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: .
+          tauriScript: npm run tauri
+          # Both configs: the desktop config carries the resources and the public key, the
+          # release config turns on updater artifacts so a .sig is written next to the setup.
+          args: --config apps/desktop/tauri.conf.json --config apps/desktop/tauri.release.conf.json
+          tagName: v__VERSION__
+          releaseName: 'Talo v__VERSION__'
+          releaseBody: |
+            Talo for Windows (64-bit).
+
+            Installed copies update themselves: Settings → Advanced → Updates.
+          releaseDraft: false
+          prerelease: false
+          # Only NSIS is built, so the manifest must point at the setup.exe.
+          updaterJsonPreferNsis: true
+          retryAttempts: 2
