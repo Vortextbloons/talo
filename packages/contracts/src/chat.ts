@@ -40,19 +40,20 @@ export type WorkerEvent =
  * conversation_open({ conversationId }) -> ConversationSnapshot
  * conversation_select_model({ conversationId, selection }) -> ConversationInfo
  * chat_send({ conversationId, generationId, text }) -> void (accepted; events carry result)
- * chat_retry({ conversationId, generationId }) -> void
+ * chat_retry({ conversationId, generationId }) -> void (reuse the failed/stopped generation ID)
  * chat_stop({ generationId }) -> void
  * provider_list() -> ConnectionInfo[]
- * provider_connect({ providerId, name, apiKey, modelId? }) -> ConnectionInfo
+ * provider_connect({ providerId, name, apiKey, modelId?, baseUrl? }) -> ConnectionInfo
  * provider_disconnect({ connectionId }) -> void
  * provider_models({ connectionId }) -> ProviderModelInfo[]
  * Event name: talo://chat, payload ChatEvent.
  * session.open private params: conversationId, sessionPath? (null creates), provider, model,
- * apiKey?. Result: { sessionId, path, messages: ChatMessage[] }.
+ * apiKey?, baseUrl?. Result: { sessionId, path, messages: ChatMessage[] }.
  * session.prompt params: conversationId, generationId, text.
  * session.retry params: conversationId, generationId.
  * session.abort params: generationId. session.snapshot returns {messages,state,generationId,sequence}.
- * models.list/provider.validate params: provider, model?, apiKey?. models.list returns
+ * models.list/provider.validate params: provider, model?, apiKey?, baseUrl?. models.list returns
  * {provider,name,native,models}; provider.validate must perform an authenticated probe.
  * A generation event's text is the COMPLETE accumulated assistant text (not a delta).
+ * Event sequence numbers increase within a generation, including across its retries.
  */

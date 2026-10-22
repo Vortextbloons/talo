@@ -1,5 +1,14 @@
 //! Native scheduler: mark due tasks for approval; never execute automatically.
 pub fn tick(db: &rusqlite::Connection) -> rusqlite::Result<usize> {
+    // Probe before writing: a periodic no-op UPDATE would keep the WAL busy forever.
+    let due: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM tasks WHERE state='pending' AND due_at <= unixepoch())",
+        [],
+        |row| row.get(0),
+    )?;
+    if !due {
+        return Ok(0);
+    }
     db.execute("UPDATE tasks SET state='awaiting_permission' WHERE state='pending' AND due_at <= unixepoch()", [])
 }
 

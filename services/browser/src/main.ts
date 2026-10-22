@@ -12,6 +12,11 @@ async function stop(){if(stopping)return;stopping=true;await context?.close();pr
 process.on('SIGTERM',()=>void stop());process.on('SIGINT',()=>void stop());
 const input=createInterface({input:process.stdin});input.on('close',()=>void stop());
 input.on('line',line=>{try{if(JSON.parse(line).method==='shutdown')void stop();}catch{/* Ignore malformed lifecycle messages. */}});
-context=await chromium.launchPersistentContext(profile,{executablePath:path.join(root,'runtime/chromium/chrome-win64/chrome.exe'),headless:false,viewport:null});
+context=await chromium.launchPersistentContext(profile,{executablePath:path.join(root,'runtime/chromium/chrome-win64/chrome.exe'),headless:false,viewport:null,args:[
+  // Keep an open browser from re-downloading components, phoning home or growing its cache forever.
+  '--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-component-update',
+  '--disable-client-side-phishing-detection','--disable-default-apps','--disable-sync','--disable-domain-reliability',
+  '--disable-breakpad','--metrics-recording-only','--disk-cache-size=134217728','--media-cache-size=67108864'
+]});
 context.on('close',()=>{if(!stopping)process.exit(0);});
 process.stdout.write(JSON.stringify({type:'ready',profile})+'\n');

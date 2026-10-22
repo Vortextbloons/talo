@@ -11,7 +11,7 @@ const lock=JSON.parse(await readFile('package-lock.json','utf8'));
 const bundledLock={name:'talo-runtime',version:'0.1.0',lockfileVersion:3,requires:true,packages:{'':{name:'talo-runtime',version:'0.1.0',dependencies}}};
 for(const [key,value] of Object.entries(lock.packages))if(key.startsWith('node_modules/')&&!value.link&&!value.dev)bundledLock.packages[key]=value;
 await writeFile(path.join(destination,'package-lock.json'),JSON.stringify(bundledLock,null,2));
-execFileSync('cmd.exe',['/d','/s','/c','npm ci --omit=dev --ignore-scripts'],{cwd:destination,stdio:'inherit',windowsHide:true});
+execFileSync('cmd.exe',['/d','/s','/c','npm ci --omit=dev --ignore-scripts --no-audit --no-fund'],{cwd:destination,stdio:'inherit',windowsHide:true});
 await cp('dist/workers',path.join(destination,'workers'),{recursive:true});
 await cp('dist/services',path.join(destination,'services'),{recursive:true});
 await cp('dist/packages',path.join(destination,'packages'),{recursive:true});

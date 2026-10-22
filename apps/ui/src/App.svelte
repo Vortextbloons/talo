@@ -1,8 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
+  import { listen } from '@tauri-apps/api/event';
   import mascot from '../../../packages/design/mascot.svg';
   import NavIcon from './NavIcon.svelte';
+  import ChatView from './components/ChatView.svelte';
+  import ProviderSettings from './components/ProviderSettings.svelte';
+  import { chat, disposeChat, initChat, selectionLabel } from './lib/chat.svelte';
   import { CUSTOM_BASE_URL_EXAMPLE, DEFAULT_PREFERENCE, PROVIDERS, parseProviderPreference, providerDescriptor } from '../../../packages/contracts/src/index';
   import type { Onboarding, RuntimeStatus, ServiceId } from '../../../packages/contracts/src/index';
   const pages = ['Chat', 'Workspaces', 'Tasks', 'Browser', 'Memory', 'Settings'] as const;
@@ -10,7 +14,8 @@
   let page = $state<Page>('Chat');
   let settings = $state<Onboarding>({name:'',personality:'Thoughtful and direct',...DEFAULT_PREFERENCE,memory:'workspace',complete:false});
   let provider = $derived(providerDescriptor(settings.provider));
-  let reasoningModels = $derived(provider.models.filter(model=>model.reasoning).length);
+  let connectedCount = $derived(chat.connections.filter(connection=>connection.connected).length);
+  let chatSelection = $derived(selectionLabel(chat.active?.conversation.selection ?? chat.draftSelection));
   let loaded = $state(false);
   let editing = $state(false);
   let step = $state(0);
@@ -24,9 +29,14 @@
   async function refresh() { if(isTauri()) status = await invoke<RuntimeStatus>('runtime_status'); }
   onMount(() => {
     let active=true;
+    let unlisten:(()=>void)|undefined;
+    void initChat();
     (async()=>{try { if(isTauri()){const saved=await invoke<Onboarding|null>('load_settings');if(saved && active)settings={...settings,...saved,...parseProviderPreference(saved)};await refresh();} }catch(e){error=String(e);}finally{if(active)loaded=true;}})();
-    const timer=setInterval(()=>{refresh().catch(e=>error=String(e));},3000);
-    return ()=>{active=false;clearInterval(timer);};
+    // The host pushes service transitions; polling would keep the hidden webview awake.
+    if(isTauri())listen<RuntimeStatus>('runtime-status',event=>{if(active)status=event.payload;}).then(stop=>{if(active)unlisten=stop;else stop();});
+    const wake=()=>{if(active)refresh().catch(()=>{});};
+    window.addEventListener('focus',wake);
+    return ()=>{active=false;unlisten?.();window.removeEventListener('focus',wake);disposeChat();};
   });
   async function save() { try {busy=true;if(isTauri())await invoke('save_settings',{settings:{...settings,complete:true}});settings.complete=true;editing=false;}catch(e){error=String(e);}finally{busy=false;} }
   async function permission(action:string,resource:string,run:(id:string)=>Promise<void>) {
@@ -49,32 +59,36 @@
     <div class="sidebar-bottom"><span class="presence"></span><div>Talo is here<small>{isTauri()?'Running quietly in your tray':'Interface preview'}</small></div></div>
   </aside>
   <main>
-    <header><span>Personal space <span class="slash">/</span> {page}</span></header>
+    <header><span class="crumbs">Personal space <span class="slash">/</span> {page}</span></header>
     {#if error}<div class="error" role="alert">{error}<button aria-label="Dismiss error" onclick={()=>error=''}>×</button></div>{/if}
-    <div class="content">
-      <div class="page-heading"><div><h1>{page==='Chat' ? `Hello${settings.name ? ', '+settings.name : ', you'}.` : page}</h1><p>{descriptions[page]}</p></div>{#if page==='Chat'}<span class="pill">A fresh start</span>{/if}</div>
+    <div class="content" class:chat-mode={page==='Chat'}>
+      {#if page!=='Chat'}<div class="page-heading"><h1>{page}</h1><p>{descriptions[page]}</p></div>{/if}
       {#if page==='Chat'}
-        <section class="welcome"><img src={mascot} alt="Talo, a rounded yellow companion with two black eyes"/><h2>Here when you need a hand.</h2><p>A thought, a question, a place to begin.<br/>Your assistant will meet you here.</p><span class="coming">Chat connection coming next</span></section>
-        <div class="suggestions"><div><span>Think together</span><p>Make room for your next idea.</p></div><div><span>Find your bearings</span><p>Bring a little clarity to your day.</p></div><div><span>Pick up the thread</span><p>Keep your projects close.</p></div></div>
-        <div class="composer"><textarea aria-label="Message to Talo" placeholder="What's on your mind?" disabled></textarea><div><span>Connect a provider in Settings to prepare Talo.</span><button disabled aria-label="Send message">↑</button></div></div>
+        <ChatView onOpenSettings={()=>{page='Settings';}} name={settings.name} tagline={descriptions.Chat} />
       {:else if page==='Settings'}
-        <section class="settings-card"><h2>Your preferences</h2><dl><dt>Name</dt><dd>{settings.name||'Not set'}</dd><dt>Personality</dt><dd>{settings.personality}</dd><dt>Provider preference</dt><dd>{provider.name} · Not connected</dd><dt>Model preference</dt><dd>{settings.model||'Choose during setup'}</dd>{#if settings.provider==='custom'}<dt>Endpoint</dt><dd>{settings.baseUrl||'Not set'}</dd>{/if}<dt>Reasoning</dt><dd>{settings.provider==='custom'?(settings.reasoning?'Enabled for this model':'Off'):`Thinking levels from Pi (${reasoningModels} suggested models)`}</dd><dt>Memory</dt><dd>{settings.memory}</dd></dl><button class="primary" onclick={()=>{editing=true;step=0;}}>Edit setup</button></section>
-        <section class="settings-card"><h2>Model providers</h2><p>Hosted providers use Pi's bundled catalog, including its reasoning and thinking-level metadata. Keys stay in Pi's credential store or the provider's environment variable.</p>{#each PROVIDERS as item (item.id)}<div class="service"><div><strong>{item.name}</strong><small>{item.tagline}</small><small class="link">{item.envVar}{#if item.keysUrl} · {item.keysUrl}{/if}</small></div><span class="tag">{item.native?'Pi catalog':'Custom endpoint'}</span></div>{/each}</section>
-        <section class="settings-card"><h2>Local services</h2><p>Start or stop the bundled runtimes. Pi sleeps after five idle minutes.</p>{#each ['pi','browser'] as service (service)}<div class="service"><div><strong>{service==='pi'?'Pi worker':'Chromium'}</strong><small>{status?.services[service as ServiceId]??'Desktop app required'}</small></div><button disabled={busy||!isTauri()} onclick={()=>status?.services[service as ServiceId]==='running'?control(service as ServiceId,false):service==='browser'?browserStart():control('pi',true)}>{status?.services[service as ServiceId]==='running'?'Stop':'Start'}</button></div>{/each}<p class="detail">SQLite: {status?.database??'Desktop app required'}</p>{#if status}<div class="dependencies">{#each Object.entries(status.dependencies) as [name,ready] (name)}<span>{ready?'✓':'○'} {name}</span>{/each}</div>{/if}</section>
-        <section class="settings-card"><h2>Windows</h2><p>Closing the window keeps Talo in the tray. Use Quit Talo to exit.</p><button disabled={busy||!isTauri()} onclick={()=>permission('autostart.change','enable',async grant=>{await invoke('set_autostart',{enabled:true,grant});})}>Enable launch at sign-in</button> <button disabled={busy||!isTauri()} onclick={()=>permission('autostart.change','disable',async grant=>{await invoke('set_autostart',{enabled:false,grant});})}>Disable launch at sign-in</button></section>
+        <div class="settings-grid">
+          <div class="settings-col main">
+            <ProviderSettings />
+          </div>
+          <div class="settings-col side">
+            <section class="card card--prefs"><h2>Your preferences</h2><dl><dt>Name</dt><dd>{settings.name||'Not set'}</dd><dt>Personality</dt><dd>{settings.personality}</dd><dt>Chat model</dt><dd>{connectedCount ? chatSelection : 'No provider connected yet'}</dd>{#if settings.provider==='custom'}<dt>Custom endpoint</dt><dd>{settings.baseUrl||'Not set'}</dd>{/if}<dt>Memory</dt><dd>{settings.memory}</dd></dl><button class="primary" onclick={()=>{editing=true;step=0;}}>Edit setup</button></section>
+            <section class="card card--services"><h2>Local services</h2><p>Start or stop the bundled runtimes. Pi starts when you send a message and rests after two idle minutes.</p>{#each ['pi','browser'] as service (service)}<div class="service"><div><strong>{service==='pi'?'Pi worker':'Chromium'}</strong><small>{status?.services[service as ServiceId]??'Desktop app required'}</small></div><button disabled={busy||!isTauri()} onclick={()=>status?.services[service as ServiceId]==='running'?control(service as ServiceId,false):service==='browser'?browserStart():control('pi',true)}>{status?.services[service as ServiceId]==='running'?'Stop':'Start'}</button></div>{/each}<p class="detail">SQLite: {status?.database??'Desktop app required'}</p>{#if status}<div class="dependencies">{#each Object.entries(status.dependencies) as [name,ready] (name)}<span>{ready?'✓':'○'} {name}</span>{/each}</div>{/if}</section>
+            <section class="card card--windows"><h2>Windows</h2><p>Closing the window keeps Talo in the tray. Use Quit Talo to exit.</p><button disabled={busy||!isTauri()} onclick={()=>permission('autostart.change','enable',async grant=>{await invoke('set_autostart',{enabled:true,grant});})}>Enable launch at sign-in</button> <button disabled={busy||!isTauri()} onclick={()=>permission('autostart.change','disable',async grant=>{await invoke('set_autostart',{enabled:false,grant});})}>Disable launch at sign-in</button></section>
+          </div>
+        </div>
       {:else if page==='Browser'}
-        <section class="empty"><span class="empty-icon">◎</span><h2>A separate space for the web.</h2><p>Talo uses its own Chromium profile. Your everyday browser stays yours.</p><button class="primary" disabled={busy||!isTauri()} onclick={browserStart}>Open Talo browser</button><small>Intelligent browser actions will be added in a later phase.</small></section>
+        <section class="empty"><span class="empty-badge"><span class="empty-icon">◎</span></span><h2>A separate space for the web.</h2><p>Talo uses its own Chromium profile. Your everyday browser stays yours.</p><button class="primary" disabled={busy||!isTauri()} onclick={browserStart}>Open Talo browser</button><small>Intelligent browser actions will be added in a later phase.</small></section>
       {:else}
-        <section class="empty"><span class="empty-icon">{page==='Workspaces'?'▦':page==='Tasks'?'☑':'◇'}</span><h2>{page==='Workspaces'?'Every project starts somewhere.':page==='Tasks'?'A clear slate.': 'A little continuity.'}</h2><p>{page==='Workspaces'?'Workspace organization is ready for its next chapter.':page==='Tasks'?'Your scheduled tasks will live here. Automatic execution is not enabled.':'Global and workspace memory have a local home. Memory capture and search controls are coming next.'}</p><span class="coming">Foundation in place · Feature coming next</span></section>
+        <section class="empty"><span class="empty-badge"><span class="empty-icon">{page==='Workspaces'?'▦':page==='Tasks'?'☑':'◇'}</span></span><h2>{page==='Workspaces'?'Every project starts somewhere.':page==='Tasks'?'A clear slate.': 'A little continuity.'}</h2><p>{page==='Workspaces'?'Workspace organization is ready for its next chapter.':page==='Tasks'?'Your scheduled tasks will live here. Automatic execution is not enabled.':'Global and workspace memory have a local home. Memory capture and search controls are coming next.'}</p><span class="coming">Foundation in place · Feature coming next</span></section>
       {/if}
-      <footer><span>Made for your everyday.</span><span>Talo / 0.1.0</span></footer>
+      {#if page!=='Chat'}<footer><span>Made for your everyday.</span><span>Talo / 0.1.0</span></footer>{/if}
     </div>
   </main>
 </div>
 {#if loaded && (!settings.complete || editing)}
   <div class="overlay"><dialog open class="onboarding" aria-modal="true" aria-labelledby="setup-title"><img src={mascot} alt="Talo"/><div class="steps">Getting acquainted · {step+1} of 3</div><h2 id="setup-title">{step===0?'A little introduction.':step===1?'Choose your intelligence.':'Remember what matters.'}</h2>
     {#if step===0}<label>Your name <span>(optional)</span><input bind:value={settings.name} maxlength="80" placeholder="What should Talo call you?"/></label><label>Assistant personality<select bind:value={settings.personality}><option>Thoughtful and direct</option><option>Warm and encouraging</option><option>Brief and practical</option></select></label>
-    {:else if step===1}<label>Provider<select bind:value={settings.provider}>{#each PROVIDERS as item (item.id)}<option value={item.id}>{item.name}</option>{/each}</select></label>{#if settings.provider==='custom'}<label>Base URL<input bind:value={settings.baseUrl} maxlength="2048" placeholder={CUSTOM_BASE_URL_EXAMPLE}/></label><label>Model ID<input bind:value={settings.model} maxlength="200" placeholder="llama3.3"/></label><label class="check"><input type="checkbox" bind:checked={settings.reasoning}/> <span>This endpoint supports reasoning</span></label><p class="setup-note">Talo writes this endpoint to Pi's models.json. Reasoning adds Pi's thinking levels to the model. Local servers need no key; hosted endpoints read {provider.envVar}.</p>{:else}<label>Model preference<input list="provider-models" bind:value={settings.model} maxlength="200" placeholder={provider.models[0]?.id ?? 'Provider model ID'}/><datalist id="provider-models">{#each provider.models as model (model.id)}<option value={model.id}>{model.name}{model.reasoning?' · reasoning':''}</option>{/each}</datalist></label><p class="setup-note">{provider.tagline} Endpoint <span class="link">{provider.apiBaseUrl}</span>. Reads {provider.envVar}; create a key at <span class="link">{provider.keysUrl}</span>.</p><p class="setup-note">Pi's bundled catalog supplies each model's endpoint and reasoning metadata, so these suggested models can reason. Save your preference now; secure key storage is a documented placeholder and no credentials are collected here.</p>{/if}
+    {:else if step===1}<label>Starting provider<select bind:value={settings.provider}>{#each PROVIDERS as item (item)}<option value={item.id}>{item.name}</option>{/each}</select></label>{#if settings.provider==='custom'}<label>Base URL<input bind:value={settings.baseUrl} maxlength="2048" placeholder={CUSTOM_BASE_URL_EXAMPLE}/></label><label>Model ID<input bind:value={settings.model} maxlength="200" placeholder="llama3.3"/></label><label class="check"><input type="checkbox" bind:checked={settings.reasoning}/> <span>This endpoint supports reasoning</span></label><p class="setup-note">Talo writes this endpoint to Pi's models.json. Reasoning adds Pi's thinking levels to the model. Local servers need no key. Secure key connection for hosted custom endpoints is coming next.</p>{:else}<p class="setup-note">{provider.tagline} Choose a starting provider now. You will connect its key and choose a chat model in Settings before your first message.</p>{/if}
     {:else}<label>Memory preference<select bind:value={settings.memory}><option value="workspace">Keep memory within each workspace</option><option value="global">Allow memory across workspaces</option><option value="off">Keep memory off</option></select></label><p class="setup-note">Memories stay on this device. Automatic capture is not enabled yet. You can change this preference in Settings.</p>{/if}
     <div class="setup-actions">{#if step>0}<button onclick={()=>step--}>Back</button>{:else}<span></span>{/if}{#if step<2}<button class="primary" onclick={()=>step++}>Continue</button>{:else}<button class="primary" disabled={busy} onclick={save}>Make yourself at home</button>{/if}</div>
   </dialog></div>
@@ -82,7 +96,112 @@
 {#if pending}<div class="overlay"><dialog open class="onboarding" aria-modal="true" aria-labelledby="permission-title"><h2 id="permission-title">Allow this action?</h2><p>{pending.action==='browser.start'?'Open Chromium with Talo’s dedicated persistent profile?':'Change whether Talo starts when you sign in to Windows?'}</p><p class="detail">{pending.resource} · This action only</p><div class="setup-actions"><button onclick={()=>resolve(false)}>Deny</button><button class="primary" onclick={()=>resolve(true)}>Allow once</button></div></dialog></div>{/if}
 
 <style>
-  .shell{display:flex;min-height:100vh}aside{width:222px;flex-shrink:0;background:var(--sidebar);color:var(--text);border-right:1px solid var(--line);padding:32px 18px 24px;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0}.brand{display:flex;align-items:center;gap:12px;padding:0 14px;color:var(--text);text-decoration:none}.brand img{width:40px}.brand>span{font-size:35px;font-weight:650;letter-spacing:-2px}.dot{color:var(--yellow)}.nav-caption{font-size:11px;color:var(--faint);margin:17px 14px 32px}nav{display:grid;gap:6px}nav button{background:transparent;color:var(--muted);border:0;padding:13px 15px;text-align:left;display:flex;align-items:center;gap:13px;border-radius:9px;font-size:14px}nav button:hover{background:#1d1d19;color:var(--text)}nav button.selected{background:#26261f;color:var(--yellow)}.nav-icon{--icon-opacity:.6;width:23px;height:23px;display:grid;place-items:center;flex-shrink:0}nav button:hover .nav-icon{--icon-opacity:.85}nav button.selected .nav-icon{--icon-opacity:1}.nav-dot{width:5px;height:5px;background:var(--yellow);border-radius:50%;margin-left:auto}.sidebar-bottom{margin-top:auto;display:flex;gap:10px;align-items:center;padding:20px 14px 0;font-size:12px}.sidebar-bottom small{display:block;color:var(--faint);font-size:10px;margin-top:5px}.presence{display:inline-block;width:6px;height:6px;background:var(--yellow-deep);border-radius:50%}main{margin-left:222px;flex:1;min-width:0}header{height:70px;border-bottom:1px solid var(--line);padding:0 38px;display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--muted)}.slash{margin:0 12px;color:var(--faint)}.content{max-width:1100px;margin:auto;padding:42px 48px 20px}.page-heading{display:flex;justify-content:space-between;align-items:center}h1{font-size:32px;letter-spacing:-1.1px;font-weight:550;margin:0 0 10px}p{color:var(--muted);font-size:14px;line-height:1.7;margin:0}.pill,.coming{font-size:11px;color:var(--muted);background:var(--soft);border:1px solid var(--line);padding:7px 12px;border-radius:20px}.welcome{text-align:center;padding:57px 0 37px}.welcome img{width:90px;margin-bottom:21px}h2{font-size:22px;letter-spacing:-.6px;font-weight:550;margin:0 0 12px}.welcome p{margin-bottom:20px}.coming{display:inline-block}.suggestions{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin:13px 0 30px}.suggestions>div{border-top:1px solid var(--line);padding-top:18px}.suggestions span{font-size:13px;font-weight:600}.suggestions p{font-size:12px;margin-top:7px}.composer{border:1px solid var(--line-strong);border-radius:16px;padding:17px 18px;background:var(--paper);box-shadow:0 12px 32px var(--shadow)}.composer textarea{border:0;resize:none;background:transparent;color:var(--text);width:100%;height:48px;font-size:14px}.composer>div{display:flex;align-items:center;justify-content:space-between;font-size:10px;color:var(--faint)}.composer button{background:var(--yellow);color:var(--black);border:0;border-radius:9px;width:34px;height:32px;font-size:22px}footer{display:flex;justify-content:space-between;margin-top:37px;font-size:10px;color:var(--faint)}.empty{padding:90px 20px;text-align:center;max-width:530px;margin:auto}.empty p{margin-bottom:22px}.empty small{display:block;margin-top:20px;color:var(--muted);font-size:12px}.empty-icon{display:block;font-size:55px;color:var(--yellow-deep);margin-bottom:30px}button{border:1px solid var(--line-strong);background:var(--soft);color:var(--text);padding:9px 14px;border-radius:8px;font-size:12px}button:hover:not(:disabled){background:#2c2c27;border-color:#4a4a41}button.primary{background:var(--yellow);border-color:var(--yellow);color:var(--black);font-weight:600;padding:11px 18px}button.primary:hover:not(:disabled){background:#ffdd7f;border-color:#ffdd7f}.settings-card{border-bottom:1px solid var(--line);padding:28px 0}.settings-card h2{font-size:19px}dl{display:grid;grid-template-columns:170px 1fr;gap:15px;font-size:13px;margin:24px 0}dt{color:var(--muted)}dd{margin:0}.service{display:flex;align-items:center;justify-content:space-between;padding:18px 0;border-bottom:1px solid var(--line)}.service strong{font-size:13px;font-weight:550}.service small{display:block;font-size:11px;color:var(--muted);margin-top:5px}.detail{font-size:11px;margin-top:14px}.dependencies{display:flex;gap:18px;font-size:11px;margin-top:12px;color:var(--muted)}.overlay{position:fixed;inset:0;background:var(--overlay);backdrop-filter:blur(5px);display:grid;place-items:center;padding:24px;z-index:5}.onboarding{position:relative;margin:auto;border:1px solid var(--line);color:var(--text);background:var(--paper);border-radius:24px;padding:36px;width:440px;max-width:100%;box-shadow:0 30px 90px rgba(0,0,0,.65)}.onboarding>img{width:55px;margin-bottom:20px}.steps{font-size:11px;color:var(--muted);margin-bottom:14px}.onboarding h2{font-size:27px;margin-bottom:24px}label{display:block;font-size:13px;font-weight:550;margin:18px 0}label span{font-weight:400;color:var(--muted)}input,select{display:block;width:100%;padding:12px;border:1px solid var(--line-strong);border-radius:8px;margin-top:9px;background:var(--soft);color:var(--text)}input:hover,select:hover{border-color:#4a4a41}textarea{color:var(--text)}.setup-note{font-size:12px;margin-top:20px}.setup-actions{display:flex;justify-content:space-between;margin-top:30px;gap:12px}.error{margin:20px 38px 0;padding:12px;background:var(--error-bg);border:1px solid var(--error-line);color:var(--error-text);border-radius:10px;font-size:12px;display:flex;justify-content:space-between;align-items:center}.error button{padding:2px 8px;background:transparent;border:0}@media(max-width:900px){aside{width:180px}main{margin-left:180px}.content{padding:30px 28px}.nav-caption{font-size:10px}.suggestions{gap:12px}.pill{display:none}}@media(max-width:600px){aside{position:relative;width:72px;padding:20px 8px}.brand{padding:0}.brand>span,.nav-caption,.sidebar-bottom{display:none}.brand img{width:48px}nav{margin-top:30px}nav button{font-size:0;padding:12px}.nav-icon{--icon-size:21px;--icon-opacity:.85;width:24px;height:24px}.nav-dot{display:none}main{margin-left:0}header{padding:0 20px}.content{padding:25px 20px}.suggestions{grid-template-columns:1fr}.welcome{padding:45px 0}.composer>div>span{max-width:180px}.page-heading h1{font-size:28px}dl{grid-template-columns:1fr;gap:7px}dd{margin-bottom:10px}.dependencies{flex-wrap:wrap}}
-  main{background:var(--bg)}::selection{background:#5a4720;color:var(--text)}::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:8px;border:2px solid var(--bg)}::-webkit-scrollbar-thumb:hover{background:#4f4f46}
-  .link{word-break:break-all;color:var(--text);opacity:.85}.tag{font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:5px 10px;white-space:nowrap}label.check{display:flex;align-items:center;gap:10px;font-weight:400}label.check input{width:auto;margin:0;accent-color:var(--yellow)}
+  /* The window is the page: a fixed app frame, each region scrolls itself. */
+  .shell{display:flex;height:100vh;height:100dvh;overflow:hidden;background:var(--bg)}
+  aside{width:226px;flex-shrink:0;background:var(--sidebar);color:var(--text);border-right:1px solid var(--line);padding:26px 16px 20px;display:flex;flex-direction:column;min-height:0}
+  .brand{display:flex;align-items:center;gap:11px;padding:0 12px;color:var(--text);text-decoration:none}
+  .brand img{width:34px;filter:drop-shadow(0 0 18px rgba(255,212,92,.18))}
+  .brand>span{font-size:28px;font-weight:650;letter-spacing:-1.4px}
+  .dot{color:var(--yellow)}
+  .nav-caption{font-size:10.5px;color:var(--faint);margin:16px 12px 24px;letter-spacing:.06em;text-transform:uppercase}
+  nav{display:grid;gap:4px}
+  nav button{background:transparent;color:var(--muted);border:0;padding:11px 13px;text-align:left;display:flex;align-items:center;gap:12px;border-radius:9px;font-size:13.5px}
+  nav button:hover{background:#1d1d19;color:var(--text)}
+  nav button.selected{background:#26261f;color:var(--yellow)}
+  .nav-icon{--icon-opacity:.6;width:22px;height:22px;display:grid;place-items:center;flex-shrink:0}
+  nav button:hover .nav-icon{--icon-opacity:.85}
+  nav button.selected .nav-icon{--icon-opacity:1}
+  .nav-dot{width:5px;height:5px;background:var(--yellow);border-radius:50%;margin-left:auto}
+  .sidebar-bottom{margin-top:auto;display:flex;gap:10px;align-items:center;padding:16px 12px 0;border-top:1px solid var(--line);font-size:12px}
+  .sidebar-bottom small{display:block;color:var(--faint);font-size:10px;margin-top:4px}
+  .presence{display:inline-block;width:6px;height:6px;background:var(--yellow-deep);border-radius:50%;flex-shrink:0}
+  main{flex:1;min-width:0;display:flex;flex-direction:column}
+  header{height:52px;flex-shrink:0;border-bottom:1px solid var(--line);padding:0 40px;display:flex;align-items:center;justify-content:space-between}
+  .crumbs{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .slash{margin:0 10px;color:var(--faint)}
+  .error{margin:12px 40px 0;padding:12px;background:var(--error-bg);border:1px solid var(--error-line);color:var(--error-text);border-radius:10px;font-size:12px;display:flex;justify-content:space-between;align-items:center}
+  .error button{padding:2px 8px;background:transparent;border:0}
+  /* Scrolling pages flow; chat keeps everything on one surface. */
+  .content{flex:1;min-height:0;display:flex;flex-direction:column;padding:26px 40px 22px;overflow-y:auto;scrollbar-gutter:stable}
+  .content.chat-mode{overflow:hidden;padding:14px 40px 20px}
+  .page-heading h1{font-size:30px;letter-spacing:-1.2px;font-weight:560;margin:0 0 8px}
+  .page-heading p,.empty p,.card>p{color:var(--muted);font-size:13.5px;line-height:1.7;margin:0}
+  .page-heading p{max-width:62ch}
+  .empty{margin:auto;padding:40px 20px;text-align:center;max-width:520px}
+  .empty p{margin:0 0 24px}
+  .empty small{display:block;margin-top:20px;color:var(--muted);font-size:12px}
+  .empty-badge{display:grid;place-items:center;width:76px;height:76px;margin:0 auto 28px;border:1px solid var(--line-strong);border-radius:50%;background:var(--paper);box-shadow:0 0 64px 6px rgba(255,212,92,.09),inset 0 0 22px rgba(255,212,92,.05)}
+  .empty-icon{font-size:28px;color:var(--yellow-deep)}
+  .empty h2{font-size:23px;letter-spacing:-.7px;font-weight:550;margin:0 0 12px}
+  .coming{display:inline-block;font-size:11px;color:var(--muted);background:var(--soft);border:1px solid var(--line);padding:7px 12px;border-radius:20px}
+  footer{margin-top:auto;padding-top:28px;display:flex;justify-content:space-between;font-size:10px;color:var(--faint)}
+  button{border:1px solid var(--line-strong);background:var(--soft);color:var(--text);padding:9px 14px;border-radius:8px;font-size:12px}
+  button:hover:not(:disabled){background:#2c2c27;border-color:#4a4a41}
+  button.primary{background:var(--yellow);border-color:var(--yellow);color:var(--black);font-weight:600;padding:11px 18px}
+  button.primary:hover:not(:disabled){background:#ffdd7f;border-color:#ffdd7f}
+  /* Settings fills the canvas: providers anchor the wide column, small cards stack beside it. */
+  .settings-grid{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:22px;align-items:start}
+  .settings-col{display:grid;gap:22px;min-width:0}
+  .card h2{font-size:17px;letter-spacing:-.4px;font-weight:550;margin:0 0 4px}
+  .card>p{margin:6px 0 0}
+  dl{display:grid;grid-template-columns:140px 1fr;gap:13px 18px;font-size:13px;margin:20px 0}
+  dt{color:var(--muted)}
+  dd{margin:0}
+  .service{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:15px 0;border-bottom:1px solid var(--line)}
+  .service:first-of-type{margin-top:16px}
+  .service strong{font-size:13px;font-weight:550}
+  .service small{display:block;font-size:11px;color:var(--muted);margin-top:4px}
+  .detail{font-size:11px;margin-top:14px}
+  .dependencies{display:flex;gap:18px;font-size:11px;margin-top:12px;color:var(--muted)}
+  .overlay{position:fixed;inset:0;background:var(--overlay);backdrop-filter:blur(5px);display:grid;place-items:center;padding:24px;z-index:5}
+  .onboarding{position:relative;margin:auto;border:1px solid var(--line);color:var(--text);background:var(--paper);border-radius:24px;padding:36px;width:440px;max-width:100%;box-shadow:0 30px 90px rgba(0,0,0,.65)}
+  .onboarding>img{width:55px;margin-bottom:20px;filter:drop-shadow(0 0 26px rgba(255,212,92,.2))}
+  .steps{font-size:11px;color:var(--muted);margin-bottom:14px}
+  .onboarding h2{font-size:26px;letter-spacing:-.7px;margin-bottom:24px}
+  label{display:block;font-size:13px;font-weight:550;margin:18px 0}
+  label span{font-weight:400;color:var(--muted)}
+  input,select{display:block;width:100%;padding:12px;border:1px solid var(--line-strong);border-radius:8px;margin-top:9px;background:var(--soft);color:var(--text)}
+  input:hover,select:hover{border-color:#4a4a41}
+  .setup-note{font-size:12px;margin-top:20px}
+  .setup-actions{display:flex;justify-content:space-between;margin-top:30px;gap:12px}
+  label.check{display:flex;align-items:center;gap:10px;font-weight:400}
+  label.check input{width:auto;margin:0;accent-color:var(--yellow)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:8px;border:2px solid var(--bg)}
+  ::-webkit-scrollbar-thumb:hover{background:#4f4f46}
+  @media(max-width:1180px){
+    /* One column, in the order a new user needs: preferences, providers, then the rest. */
+    .settings-grid{display:flex;flex-direction:column;gap:18px}
+    .settings-col{display:contents}
+    .settings-grid .card--prefs{order:1}
+    .settings-grid :global(.providers){order:2}
+    .settings-grid .card--services{order:3}
+    .settings-grid .card--windows{order:4}
+  }
+  @media(max-width:900px){
+    aside{width:188px;padding:22px 12px 18px}
+    header{padding:0 28px}
+    .error{margin:12px 28px 0}
+    .content{padding:22px 28px 18px}
+    .content.chat-mode{padding:12px 24px 16px}
+  }
+  @media(max-width:640px){
+    aside{width:70px;padding:18px 8px}
+    .brand{padding:0;justify-content:center}
+    .brand>span,.nav-caption,.sidebar-bottom{display:none}
+    .brand img{width:40px}
+    nav{margin-top:24px}
+    nav button{font-size:0;padding:12px;justify-content:center}
+    .nav-icon{--icon-size:21px;--icon-opacity:.85}
+    .nav-dot{display:none}
+    header{padding:0 20px}
+    .error{margin:10px 20px 0}
+    .content{padding:18px 20px 16px}
+    .content.chat-mode{padding:10px 16px 14px}
+    .page-heading h1{font-size:26px}
+    dl{grid-template-columns:1fr;gap:7px}
+    dd{margin-bottom:10px}
+    .dependencies{flex-wrap:wrap}
+  }
 </style>

@@ -1,0 +1,143 @@
+import type { AgentSession } from '@earendil-works/pi-coding-agent';
+import type { ChatMessage } from '../../../packages/contracts/src/index.js';
+
+type ContentBlock = { type?: string; text?: string };
+type AnyMessage = {
+  role?: string;
+  content?: string | ContentBlock[];
+  stopReason?: string;
+  errorMessage?: string;
+};
+
+function textFromContent(content: string | ContentBlock[] | undefined): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  let text = '';
+  for (const block of content) {
+    if (block.type === 'text' && typeof block.text === 'string') text += block.text;
+  }
+  return text;
+}
+
+export function extractText(message: unknown): string {
+  if (!message || typeof message !== 'object') return '';
+  return textFromContent((message as AnyMessage).content);
+}
+
+function assistantStatus(message: AnyMessage): ChatMessage['status'] {
+  if (message.stopReason === 'error') return 'failed';
+  if (message.stopReason === 'aborted') return 'cancelled';
+  if (message.stopReason === 'pending') return 'generating';
+  return 'completed';
+}
+
+function toChatMessage(message: AnyMessage, id: string): ChatMessage | undefined {
+  if (message.role === 'user') {
+    return { id, role: 'user', text: extractText(message), status: 'completed' };
+  }
+  if (message.role === 'assistant') {
+    return {
+      id,
+      role: 'assistant',
+      text: extractText(message),
+      status: assistantStatus(message),
+      ...(message.errorMessage ? { error: message.errorMessage } : {}),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Read the active branch after Pi applies compaction and retry context edits.
+ * Omitting context-edited failed attempts matches what the model will actually see next.
+ */
+export function readSessionMessages(session: AgentSession): ChatMessage[] {
+  const projection = session.sessionManager.buildSessionProjection();
+  const messages: ChatMessage[] = [];
+  for (const projected of projection.entries) {
+    const entryId = projected.sourceEntry.id;
+    projected.messages.forEach((message, index) => {
+      const id = projected.messages.length > 1 ? `${entryId}:${index}` : entryId;
+      const chat = toChatMessage(message as AnyMessage, id);
+      if (chat) messages.push(chat);
+    });
+  }
+  return messages;
+}
+
+export interface LastTurn {
+  generationId: string | null;
+  userText: string;
+  userEntryId: string | null;
+  userParentId: string | null;
+  state: 'failed' | 'cancelled';
+  assistantText: string;
+  error?: string;
+}
+
+export interface ProjectedTurn {
+  userText: string;
+  userEntryId: string;
+  userParentId: string | null;
+  lastAssistant?: ChatMessage;
+}
+
+/** Locate the latest user turn in the active projection, including its tree position. */
+export function inspectLastTurn(session: AgentSession): ProjectedTurn | undefined {
+  const projection = session.sessionManager.buildSessionProjection();
+  let user: ProjectedTurn | undefined;
+  for (const projected of projection.entries) {
+    projected.messages.forEach((message, index) => {
+      const chat = toChatMessage(
+        message as AnyMessage,
+        projected.messages.length > 1 ? `${projected.sourceEntry.id}:${index}` : projected.sourceEntry.id,
+      );
+      if (!chat) return;
+      if (chat.role === 'user') {
+        user = {
+          userText: chat.text,
+          userEntryId: projected.sourceEntry.id,
+          userParentId: projected.sourceEntry.parentId,
+        };
+      } else if (chat.role === 'assistant' && user) {
+        user.lastAssistant = chat;
+      }
+    });
+  }
+  return user;
+}
+
+/** Rebuild retry eligibility after a worker restart or an interrupted session. */
+export function lastRetryableTurn(session: AgentSession): LastTurn | undefined {
+  const turn = inspectLastTurn(session);
+  if (!turn) return undefined;
+  const assistant = turn.lastAssistant;
+  if (!assistant || assistant.status === 'failed' || assistant.status === 'cancelled') {
+    const state = assistant?.status === 'cancelled' ? 'cancelled' : 'failed';
+    return {
+      generationId: null,
+      userText: turn.userText,
+      userEntryId: turn.userEntryId,
+      userParentId: turn.userParentId,
+      state,
+      assistantText: assistant?.text ?? '',
+      ...(assistant?.error
+        ? { error: assistant.error }
+        : !assistant
+          ? { error: 'The previous generation did not complete' }
+          : {}),
+    };
+  }
+  return undefined;
+}
+
+export function assistantAfterLastUser(messages: ChatMessage[]): ChatMessage | undefined {
+  let lastUser = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index].role === 'user') lastUser = index;
+  }
+  for (let index = messages.length - 1; index > lastUser; index -= 1) {
+    if (messages[index].role === 'assistant') return messages[index];
+  }
+  return undefined;
+}

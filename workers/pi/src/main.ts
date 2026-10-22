@@ -1,79 +1,1095 @@
-import { createInterface } from 'node:readline';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from '@earendil-works/pi-coding-agent';
-import { isProviderId, parseProviderPreference, providerDescriptor, type AgentRequest, type AgentEvent } from '../../../packages/contracts/src/index.js';
-import { readPreference, registryModels, syncModelsJson } from './providers.js';
+import type {
+  AgentSession,
+  AgentSessionEvent,
+  ModelRuntime,
+  SessionManager as PiSessionManager,
+} from '@earendil-works/pi-coding-agent';
+import type {
+  ChatEvent,
+  ChatMessage,
+  GenerationState,
+  WorkerEvent,
+  WorkerMethod,
+  WorkerRequest,
+} from '../../../packages/contracts/src/index.js';
+import {
+  CUSTOM_PROVIDER,
+  canonicalProviderId,
+  createModelRuntime,
+  effectiveApiKey,
+  listProviderModels,
+  normalizeApiKey,
+  normalizeBaseUrl,
+  normalizeModelId,
+  normalizeProviderId,
+  normalizeReasoning,
+  readPreference,
+  registerProviderEndpoint,
+  rememberSecret,
+  resolveModel,
+  resolveSessionPath,
+  sanitizeError,
+  sessionFilePath,
+  setProviderKey,
+  syncModelsJson,
+  validateProvider,
+  type ProviderPreference,
+} from './providers.js';
+import {
+  extractText,
+  inspectLastTurn,
+  lastRetryableTurn as restoreRetryableTurn,
+  readSessionMessages,
+  type LastTurn,
+} from './messages.js';
 
-const data=process.env.TALO_DATA_DIR;
-if(!data)throw new Error('TALO_DATA_DIR is required');
-const dataDir: string=data;
-const cwd=path.join(data,'agent-workspace');
-const agentDir=path.join(data,'pi');
-const sessionDir=path.join(data,'sessions');
-await Promise.all([cwd,agentDir,sessionDir].map(p=>mkdir(p,{recursive:true})));
-let session:AgentSession|undefined;
-let activeProvider:string|undefined;
-let active=0;
-let lastActivity=Date.now();
-const send=(event:AgentEvent)=>process.stdout.write(JSON.stringify(event)+'\n');
-async function shutdown(){if(session){await session.abort();session.dispose();}process.exit(0);}
-const idleMs=Number(process.env.TALO_IDLE_MS??300000);
-const idle=setInterval(()=>{if(!active && Date.now()-lastActivity>=idleMs){send({type:'sleeping'});void shutdown();}},Math.min(1000,idleMs));
-idle.unref();
-const input=createInterface({input:process.stdin,crlfDelay:Infinity});
-input.on('close',()=>void shutdown());
-process.on('SIGTERM',()=>void shutdown());
-process.on('SIGINT',()=>void shutdown());
-async function handle(request:AgentRequest){
-  lastActivity=Date.now();
-  try{
-    switch(request.method){
-      case 'ping':send({type:'response',id:request.id,result:{sdk:'1.4.0',sessionId:session?.sessionId??null}});break;
-      case 'shutdown':await shutdown();break;
-      case 'session.open': {
-        if(session)throw new Error('A session is already open');
-        // Provider preferences come from the host's projection; params can override them for tests or a future bridge.
-        const preference=parseProviderPreference({...await readPreference(dataDir),...request.params});
-        // Pi reads models.json while composing its registry, so write it before creating the session.
-        await syncModelsJson(agentDir,preference);
-        // Explicit resource isolation: no ambient extensions, skills, MCP, or project instructions.
-        const loader=new DefaultResourceLoader({cwd,agentDir,noExtensions:true,disabledBuiltinExtensions:['mcp'],noSkills:true,noPromptTemplates:true,noThemes:true,noContextFiles:true});
-        await loader.reload();
-        const manager=SessionManager.continueRecent(cwd,sessionDir);
-        const result=await createAgentSession({cwd,agentDir,sessionManager:manager,resourceLoader:loader,noTools:'all',tools:[]});
-        session=result.session;
-        activeProvider=preference.provider;
-        session.subscribe(event=>send({type:'stream',sessionId:session!.sessionId,event}));
-        send({type:'response',id:request.id,result:{sessionId:session.sessionId,path:manager.getSessionFile(),provider:preference.provider}});break;
+const dataDir = process.env.TALO_DATA_DIR;
+if (!dataDir) throw new Error('TALO_DATA_DIR is required');
+const data: string = dataDir;
+const cwd = path.join(data, 'agent-workspace');
+const agentDir = path.join(data, 'pi');
+const sessionDir = path.join(data, 'sessions');
+await Promise.all([cwd, agentDir, sessionDir].map(directory => mkdir(directory, { recursive: true })));
+
+const MAX_LINE_BYTES = 1024 * 1024;
+const MAX_OPEN_SESSIONS = 6;
+const MAX_CACHED_RUNTIMES = 8;
+const DEFAULT_IDLE_MS = 120_000;
+const SHUTDOWN_GRACE_MS = 2_000;
+const TALO_SYSTEM_PROMPT = 'You are Talo, a friendly, capable personal assistant. '
+  + 'Help the user think clearly and get useful work done. Be warm, direct, and practical. '
+  + 'Explain uncertainty honestly, ask focused questions when needed, and keep answers concise unless detail helps. '
+  + 'You can discuss and draft work, but do not claim to access files, run commands, or perform actions you cannot perform.';
+
+const WORKER_METHODS = new Set<WorkerMethod>([
+  'ping',
+  'shutdown',
+  'models.list',
+  'provider.validate',
+  'session.open',
+  'session.prompt',
+  'session.retry',
+  'session.abort',
+  'session.snapshot',
+]);
+
+let stopping = false;
+let activeOperations = 0;
+let lastActivity = Date.now();
+
+function send(event: WorkerEvent): void {
+  try {
+    process.stdout.write(`${JSON.stringify(event)}\n`);
+  } catch {
+    // The host pipe is gone; the stdin close handler performs shutdown.
+  }
+}
+
+function sendChat(event: ChatEvent): void {
+  send({ type: 'chat', event });
+  lastActivity = Date.now();
+}
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+interface Generation {
+  id: string;
+  conversationId: string;
+  userText: string;
+  baseLeafId: string | null;
+  started: Deferred<void>;
+  cancelRequested: boolean;
+  finalized: boolean;
+  finalizing?: Promise<void>;
+  text: string;
+  error?: string;
+}
+
+interface SessionRecord {
+  conversationId: string;
+  session: AgentSession;
+  sessionId: string;
+  path: string | null;
+  provider: string;
+  model: string;
+  messages: ChatMessage[];
+  state: GenerationState;
+  generationId: string | null;
+  sequence: number;
+  error?: string;
+  generation: Generation | null;
+  lastTurn: LastTurn | undefined;
+  unsubscribe: (() => void) | undefined;
+  closing: boolean;
+}
+
+const sessions = new Map<string, SessionRecord>();
+const sessionLocks = new Map<string, Promise<unknown>>();
+/** Runtimes are isolated per credential so concurrent connections cannot share a key. */
+const sessionRuntimes = new Map<string, ModelRuntime>();
+
+let runtimePromise: Promise<ModelRuntime> | undefined;
+let registeredPreferenceSignature = '';
+
+function runtimeError(error: unknown): never {
+  runtimePromise = undefined;
+  throw error;
+}
+
+async function getRuntime(): Promise<ModelRuntime> {
+  if (!runtimePromise) {
+    runtimePromise = (async () => {
+      const preference = await readPreference(data);
+      // Pi composes models.json while creating the runtime, so write it first.
+      await syncModelsJson(agentDir, preference);
+      return createModelRuntime(agentDir);
+    })().catch(runtimeError);
+  }
+  return runtimePromise;
+}
+
+async function prepareRuntime(): Promise<{ runtime: ModelRuntime; preference: ProviderPreference }> {
+  const runtime = await getRuntime();
+  const preference = await readPreference(data);
+  const signature = JSON.stringify(preference);
+  if (preference.baseUrl && preference.model && signature !== registeredPreferenceSignature) {
+    registerProviderEndpoint(runtime, {
+      provider: preference.provider,
+      model: preference.model,
+      baseUrl: preference.baseUrl,
+      reasoning: preference.reasoning,
+    });
+    registeredPreferenceSignature = signature;
+  }
+  return { runtime, preference };
+}
+
+interface SessionRuntimeRequest {
+  provider: string;
+  model?: string;
+  baseUrl?: string;
+  reasoning?: boolean;
+  apiKey?: string;
+  name?: string;
+}
+
+/**
+ * A session gets a runtime that owns only its credential. Two connections to the same
+ * provider with different keys must never race through one shared runtime credential.
+ * Sessions without an explicit key (ambient environment auth) use the discovery runtime.
+ */
+async function getSessionRuntime(request: SessionRuntimeRequest): Promise<ModelRuntime> {
+  if (!request.apiKey) {
+    const { runtime } = await prepareRuntime();
+    registerProviderEndpoint(runtime, request);
+    return runtime;
+  }
+  // Hash the key so the cache map itself contains no credential text.
+  const digest = createHash('sha256').update(request.apiKey).digest('hex');
+  const cacheKey = [
+    canonicalProviderId(request.provider),
+    request.baseUrl ?? '',
+    request.model ?? '',
+    request.reasoning === true ? '1' : '0',
+    digest,
+  ].join('\0');
+  const cached = sessionRuntimes.get(cacheKey);
+  if (cached) return cached;
+  await syncModelsJson(agentDir, await readPreference(data));
+  const runtime = await createModelRuntime(agentDir);
+  registerProviderEndpoint(runtime, request);
+  await setProviderKey(runtime, request.provider, request.apiKey);
+  sessionRuntimes.set(cacheKey, runtime);
+  while (sessionRuntimes.size > MAX_CACHED_RUNTIMES) {
+    const oldest = sessionRuntimes.keys().next().value;
+    if (oldest === undefined) break;
+    sessionRuntimes.delete(oldest);
+  }
+  return runtime;
+}
+
+function withSessionLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = sessionLocks.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(operation);
+  const tracked = next.catch(() => undefined);
+  sessionLocks.set(key, tracked);
+  void tracked.finally(() => {
+    if (sessionLocks.get(key) === tracked) sessionLocks.delete(key);
+  });
+  return next;
+}
+
+function hasOwn(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function requireConversationId(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('conversationId is required');
+  const id = value.trim();
+  if (!id || id.length > 200) throw new Error('Invalid conversationId');
+  if (/[\u0000-\u001f\u007f]/u.test(id)) throw new Error('Invalid conversationId');
+  return id;
+}
+
+function requireGenerationId(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('generationId is required');
+  const id = value.trim();
+  if (!id || id.length > 200) throw new Error('Invalid generationId');
+  if (/[\u0000-\u001f\u007f]/u.test(id)) throw new Error('Invalid generationId');
+  return id;
+}
+
+function requirePromptText(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('Prompt text is required');
+  if (!value.trim()) throw new Error('Prompt text is required');
+  return value;
+}
+
+function cloneMessage(message: ChatMessage): ChatMessage {
+  return { ...message };
+}
+
+function cloneMessages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map(cloneMessage);
+}
+
+function conversationResult(record: SessionRecord): Record<string, unknown> {
+  return {
+    sessionId: record.sessionId,
+    path: record.path,
+    provider: record.provider,
+    model: record.model,
+    messages: cloneMessages(record.messages),
+    state: record.state,
+    generationId: record.generationId,
+    sequence: record.sequence,
+    ...(record.error ? { error: record.error } : {}),
+  };
+}
+
+function findGeneration(generationId: string): { record: SessionRecord; generation: Generation } | undefined {
+  for (const record of sessions.values()) {
+    if (record.generation?.id === generationId) return { record, generation: record.generation };
+  }
+  return undefined;
+}
+
+function activeGenerationCount(): number {
+  let count = 0;
+  for (const record of sessions.values()) {
+    if (record.state === 'generating' || record.state === 'cancelling') count += 1;
+  }
+  return count;
+}
+
+function emitGeneration(
+  record: SessionRecord,
+  generation: Generation,
+  state: GenerationState,
+  detail: { text?: string; message?: ChatMessage; error?: string } = {},
+): void {
+  if (record.closing) return;
+  record.sequence += 1;
+  sendChat({
+    type: 'generation',
+    conversationId: record.conversationId,
+    generationId: generation.id,
+    sequence: record.sequence,
+    state,
+    ...(detail.text !== undefined ? { text: detail.text } : {}),
+    ...(detail.message ? { message: cloneMessage(detail.message) } : {}),
+    ...(detail.error ? { error: detail.error } : {}),
+  });
+}
+
+function liveAssistant(record: SessionRecord, generation: Generation): ChatMessage {
+  for (let index = record.messages.length - 1; index >= 0; index -= 1) {
+    const message = record.messages[index];
+    if (message.role === 'assistant' && message.generationId === generation.id) {
+      message.status = 'generating';
+      message.text = generation.text;
+      delete message.error;
+      return message;
+    }
+  }
+  const message: ChatMessage = {
+    id: `${generation.id}:assistant`,
+    role: 'assistant',
+    text: generation.text,
+    status: 'generating',
+    generationId: generation.id,
+  };
+  record.messages.push(message);
+  return message;
+}
+
+function updateLiveAssistant(record: SessionRecord, generation: Generation): void {
+  liveAssistant(record, generation);
+}
+
+function handleSessionEvent(record: SessionRecord, event: AgentSessionEvent): void {
+  const generation = record.generation;
+  if (!generation || generation.finalized || record.closing) return;
+  lastActivity = Date.now();
+  if (event.type === 'message_start') {
+    if (event.message.role !== 'assistant') return;
+    generation.text = '';
+    generation.error = undefined;
+    updateLiveAssistant(record, generation);
+    emitGeneration(record, generation, 'generating', { text: '' });
+    return;
+  }
+  if (event.type === 'message_update') {
+    const update = event.assistantMessageEvent;
+    if (update.type === 'text_start' || update.type === 'text_delta' || update.type === 'text_end') {
+      const text = extractText(update.partial);
+      if (text !== generation.text) {
+        generation.text = text;
+        updateLiveAssistant(record, generation);
+        emitGeneration(record, generation, 'generating', { text });
+      }
+      return;
+    }
+    if (update.type === 'error') {
+      generation.error = sanitizeError(update.error.errorMessage || 'The model request failed');
+      return;
+    }
+    return;
+  }
+  if (event.type === 'message_end') {
+    if (event.message.role !== 'assistant') return;
+    const message = event.message as {
+      content?: string | Array<{ type?: string; text?: string }>;
+      stopReason?: string;
+      errorMessage?: string;
+    };
+    generation.text = extractText(message);
+    if (message.errorMessage) generation.error = sanitizeError(message.errorMessage);
+    updateLiveAssistant(record, generation);
+    return;
+  }
+  if (event.type === 'auto_retry_start') {
+    generation.text = '';
+    generation.error = undefined;
+    updateLiveAssistant(record, generation);
+    emitGeneration(record, generation, 'generating', { text: '' });
+    return;
+  }
+}
+
+function beginGeneration(record: SessionRecord, generationId: string, text: string, retry: boolean): Generation {
+  if (record.closing) throw new Error('Conversation is closing');
+  if (record.state === 'generating' || record.state === 'cancelling') {
+    throw new Error('A generation is already in progress');
+  }
+  if (!record.session.model) throw new Error('No model is selected for this conversation');
+  if (retry) {
+    const turn = record.lastTurn;
+    if (!turn || (turn.state !== 'failed' && turn.state !== 'cancelled')) {
+      throw new Error('Nothing to retry');
+    }
+  }
+
+  const manager = record.session.sessionManager;
+  if (retry && record.lastTurn?.userEntryId) {
+    const userEntry = manager.getEntry(record.lastTurn.userEntryId);
+    if (userEntry) {
+      try {
+        if (userEntry.parentId) manager.branch(userEntry.parentId);
+        else manager.resetLeaf();
+        record.session.refreshContext();
+      } catch {
+        // A vanished entry means the branch already moved; the new prompt is still valid.
+      }
+    }
+    // The failed/cancelled assistant belongs to the abandoned branch.
+    while (record.messages.length > 0) {
+      const last = record.messages[record.messages.length - 1];
+      if (last.role === 'assistant' && (last.status === 'failed' || last.status === 'cancelled')) {
+        record.messages.pop();
+      } else break;
+    }
+  }
+
+  if (!retry) {
+    record.messages.push({
+      id: `${generationId}:user`,
+      role: 'user',
+      text,
+      status: 'completed',
+    });
+  }
+
+  record.messages.push({
+    id: `${generationId}:assistant`,
+    role: 'assistant',
+    text: '',
+    status: 'generating',
+    generationId,
+  });
+
+  const generation: Generation = {
+    id: generationId,
+    conversationId: record.conversationId,
+    userText: text,
+    baseLeafId: manager.getLeafId(),
+    started: deferred<void>(),
+    cancelRequested: false,
+    finalized: false,
+    text: '',
+  };
+  record.generation = generation;
+  record.state = 'generating';
+  record.generationId = generationId;
+  record.error = undefined;
+  return generation;
+}
+
+async function runGeneration(record: SessionRecord, generation: Generation): Promise<void> {
+  if (record.closing) {
+    generation.started.resolve(undefined);
+    generation.finalized = true;
+    return;
+  }
+  emitGeneration(record, generation, 'generating', { text: '' });
+  try {
+    if (record.closing) {
+      generation.started.resolve(undefined);
+      generation.finalized = true;
+      return;
+    }
+    const run = record.session.prompt(generation.userText, { expandPromptTemplates: false });
+    generation.started.resolve(undefined);
+    await run;
+  } catch (error) {
+    generation.error = sanitizeError(error);
+  } finally {
+    generation.started.resolve(undefined);
+    await finalizeGeneration(record, generation);
+  }
+}
+
+function launchGeneration(record: SessionRecord, generation: Generation): void {
+  void runGeneration(record, generation).catch(error => {
+    if (generation.finalized || record.closing) return;
+    generation.error = sanitizeError(error);
+    generation.finalized = true;
+    record.state = 'failed';
+    record.generationId = generation.id;
+    record.error = generation.error;
+    emitGeneration(record, generation, 'failed', { text: generation.text, error: generation.error });
+  });
+}
+
+function finalizeGeneration(record: SessionRecord, generation: Generation): Promise<void> {
+  if (generation.finalized) return Promise.resolve();
+  if (generation.finalizing) return generation.finalizing;
+  const task = (async () => {
+    if (record.closing) {
+      generation.finalized = true;
+      return;
+    }
+    const persistedNew = record.session.sessionManager.getLeafId() !== generation.baseLeafId;
+    let messages: ChatMessage[];
+    try {
+      messages = persistedNew ? readSessionMessages(record.session) : cloneMessages(record.messages);
+    } catch {
+      // A damaged projection must still produce a terminal event instead of crashing the worker.
+      messages = cloneMessages(record.messages);
+    }
+
+    let lastUserIndex = -1;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === 'user') {
+        lastUserIndex = index;
+        break;
+      }
+    }
+    if (lastUserIndex === -1) {
+      messages.push({
+        id: `${generation.id}:user`,
+        role: 'user',
+        text: generation.userText,
+        status: 'completed',
+      });
+      lastUserIndex = messages.length - 1;
+    }
+
+    let assistant: ChatMessage | undefined;
+    for (let index = messages.length - 1; index > lastUserIndex; index -= 1) {
+      if (messages[index].role === 'assistant') {
+        assistant = messages[index];
+        break;
+      }
+    }
+
+    let state: 'completed' | 'cancelled' | 'failed';
+    let error: string | undefined;
+    if (generation.cancelRequested) {
+      state = 'cancelled';
+    } else if (assistant?.status === 'failed') {
+      state = 'failed';
+      error = sanitizeError(assistant.error || generation.error || 'The model request failed');
+    } else if (assistant?.status === 'cancelled') {
+      state = 'cancelled';
+    } else if (generation.error) {
+      state = 'failed';
+      error = sanitizeError(generation.error);
+    } else if (!assistant) {
+      state = 'failed';
+      error = 'The model request did not complete';
+    } else {
+      state = 'completed';
+    }
+
+    const text = state === 'completed'
+      ? assistant?.text || generation.text
+      : generation.text || assistant?.text || '';
+
+    if (assistant) {
+      assistant.text = text;
+      assistant.status = state;
+      assistant.generationId = generation.id;
+      if (error) assistant.error = error;
+      else delete assistant.error;
+    } else {
+      assistant = {
+        id: `${generation.id}:assistant`,
+        role: 'assistant',
+        text,
+        status: state,
+        generationId: generation.id,
+        ...(error ? { error } : {}),
+      };
+      messages.push(assistant);
+    }
+
+    let turn;
+    if (persistedNew) {
+      try {
+        turn = inspectLastTurn(record.session);
+      } catch {
+        turn = undefined;
+      }
+    }
+    record.messages = messages;
+    record.state = state;
+    record.generationId = generation.id;
+    record.error = state === 'failed' ? error : undefined;
+    record.lastTurn = state === 'completed' ? undefined : {
+      generationId: generation.id,
+      userText: generation.userText,
+      userEntryId: turn && turn.userText === generation.userText ? turn.userEntryId : null,
+      userParentId: turn && turn.userText === generation.userText ? turn.userParentId : null,
+      state,
+      assistantText: text,
+      ...(error ? { error } : {}),
+    };
+    generation.finalized = true;
+    emitGeneration(record, generation, state, {
+      text,
+      message: assistant,
+      ...(error ? { error } : {}),
+    });
+  })();
+  generation.finalizing = task;
+  void task.finally(() => {
+    if (generation.finalizing === task) generation.finalizing = undefined;
+  });
+  return task;
+}
+
+async function closeSession(record: SessionRecord): Promise<void> {
+  if (record.closing) return;
+  record.closing = true;
+  sessions.delete(record.conversationId);
+  if (record.generation) {
+    record.generation.cancelRequested = true;
+    record.generation.finalized = true;
+  }
+  try {
+    record.unsubscribe?.();
+  } catch {
+    // Ignore listener teardown failures.
+  }
+  try {
+    await Promise.race([
+      record.session.abort().catch(() => undefined),
+      new Promise(resolve => setTimeout(resolve, SHUTDOWN_GRACE_MS)),
+    ]);
+  } catch {
+    // Dispose still tears the session down.
+  }
+  try {
+    record.session.dispose();
+  } catch {
+    // The process is shutting down or the session is already disposed.
+  }
+}
+
+async function evictSessions(exceptConversationId: string): Promise<void> {
+  while (sessions.size > MAX_OPEN_SESSIONS) {
+    let candidate: SessionRecord | undefined;
+    for (const record of sessions.values()) {
+      if (record.conversationId === exceptConversationId) continue;
+      if (record.state === 'idle' || record.state === 'completed' ||
+          record.state === 'failed' || record.state === 'cancelled') {
+        candidate = record;
+        break;
+      }
+    }
+    if (!candidate) return;
+    await closeSession(candidate);
+  }
+}
+
+async function openSession(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const hasConversation = hasOwn(params, 'conversationId');
+  const conversationId = hasConversation ? requireConversationId(params.conversationId) : 'default';
+  const hasPath = hasOwn(params, 'sessionPath');
+  const rawPath = params.sessionPath;
+  if (hasPath && rawPath !== null && typeof rawPath !== 'string') {
+    throw new Error('Session path must be a string or null');
+  }
+  let forceNew = hasPath && rawPath === null;
+  let requestedPath = typeof rawPath === 'string' ? resolveSessionPath(rawPath, sessionDir) : undefined;
+
+  const explicitProvider = params.provider === undefined || params.provider === null
+    ? undefined
+    : normalizeProviderId(params.provider);
+  const explicitModel = params.model === undefined || params.model === null || params.model === ''
+    ? undefined
+    : normalizeModelId(params.model);
+  const apiKey = normalizeApiKey(params.apiKey);
+  if (apiKey) rememberSecret(apiKey);
+  const explicitBaseUrl = normalizeBaseUrl(params.baseUrl);
+  const explicitReasoning = params.reasoning === undefined || params.reasoning === null
+    ? undefined
+    : normalizeReasoning(params.reasoning);
+  const name = typeof params.name === 'string' ? params.name.trim().slice(0, 120) : undefined;
+
+  return withSessionLock(conversationId, async () => {
+    let existing = sessions.get(conversationId);
+    if (existing) {
+      const differentPath = requestedPath !== undefined && existing.path !== null &&
+        path.resolve(requestedPath) !== path.resolve(existing.path);
+      if (forceNew || differentPath) {
+        await closeSession(existing);
+        existing = undefined;
+      } else {
+        const selectionChanged = explicitProvider !== undefined || explicitModel !== undefined ||
+          apiKey !== undefined || explicitBaseUrl !== undefined;
+        if (!selectionChanged) return conversationResult(existing);
+        // A different credential needs a different runtime. Reopen the same durable file
+        // instead of mutating a session that is bound to the old runtime.
+        if ((existing.state === 'generating' || existing.state === 'cancelling') && existing.generation) {
+          await abortGeneration(existing.generation.id);
+        }
+        const previousPath = existing.path;
+        await closeSession(existing);
+        existing = undefined;
+        requestedPath = previousPath ?? undefined;
+        forceNew = previousPath === null;
+      }
+    }
+
+    const preference = await readPreference(data);
+    const provider = explicitProvider ?? preference.provider;
+    const usesPreference = canonicalProviderId(provider) === canonicalProviderId(preference.provider);
+    const baseUrl = explicitBaseUrl ?? (usesPreference ? preference.baseUrl : undefined);
+    const reasoning = explicitReasoning ?? (usesPreference ? preference.reasoning : false);
+    const { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager } =
+      await import('@earendil-works/pi-coding-agent');
+
+    let manager: PiSessionManager;
+    if (requestedPath) {
+      // Pi intentionally permits opening a nonexistent path as a new session. Talo's
+      // explicit mapping means this is a restore, so never silently replace lost history.
+      let info;
+      try { info = await stat(requestedPath); }
+      catch { throw new Error('The saved session is missing or unavailable. Your conversation metadata has been preserved.'); }
+      if (!info.isFile() || info.size === 0) {
+        throw new Error('The saved session is empty or damaged. It has not been replaced.');
+      }
+      manager = SessionManager.open(requestedPath, sessionDir, cwd);
+    }
+    else if (forceNew) manager = SessionManager.create(cwd, sessionDir);
+    else if (!hasConversation) manager = SessionManager.continueRecent(cwd, sessionDir);
+    else manager = SessionManager.create(cwd, sessionDir);
+
+    const hasHistory = manager.buildSessionContext().messages.length > 0;
+    const preferenceModel = usesPreference ? preference.model : '';
+    const desiredModelId = explicitModel ?? (!hasHistory ? preferenceModel : '');
+    const runtime = await getSessionRuntime({
+      provider,
+      model: desiredModelId || undefined,
+      baseUrl,
+      reasoning,
+      apiKey: effectiveApiKey(apiKey, provider, baseUrl),
+      ...(name ? { name } : {}),
+    });
+
+    let selectedModel: ReturnType<typeof resolveModel> | undefined;
+    if (explicitProvider !== undefined && explicitModel === undefined && !desiredModelId) {
+      selectedModel = resolveModel(runtime, provider, undefined);
+    } else if (desiredModelId) {
+      try {
+        selectedModel = resolveModel(runtime, provider, desiredModelId);
+      } catch (error) {
+        // A stale preference must not prevent an empty conversation from opening.
+        if (explicitModel !== undefined) throw error;
+      }
+    }
+
+    const settings = SettingsManager.inMemory();
+    const loader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      settingsManager: settings,
+      noExtensions: true,
+      disabledBuiltinExtensions: ['mcp'],
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+      systemPrompt: TALO_SYSTEM_PROMPT,
+    });
+    await loader.reload();
+
+    const { session } = await createAgentSession({
+      cwd,
+      agentDir,
+      modelRuntime: runtime,
+      sessionManager: manager,
+      resourceLoader: loader,
+      settingsManager: settings,
+      noTools: 'all',
+      tools: [],
+      customTools: [],
+      ...(selectedModel ? { model: selectedModel } : {}),
+    });
+    session.setActiveToolsByName([]);
+
+    const record: SessionRecord = {
+      conversationId,
+      session,
+      sessionId: session.sessionId,
+      path: sessionFilePath(session),
+      provider: session.model?.provider ?? provider,
+      model: session.model?.id ?? desiredModelId,
+      messages: readSessionMessages(session),
+      state: 'idle',
+      generationId: null,
+      sequence: 0,
+      generation: null,
+      lastTurn: restoreRetryableTurn(session),
+      unsubscribe: undefined,
+      closing: false,
+    };
+    record.unsubscribe = session.subscribe(event => handleSessionEvent(record, event));
+    sessions.set(conversationId, record);
+    await evictSessions(conversationId);
+    return conversationResult(record);
+  });
+}
+
+async function abortGeneration(generationId: string): Promise<boolean> {
+  const found = findGeneration(generationId);
+  if (!found || found.generation.finalized) return false;
+  const { record, generation } = found;
+  generation.cancelRequested = true;
+  if (record.state === 'generating') {
+    record.state = 'cancelling';
+    emitGeneration(record, generation, 'cancelling', { text: generation.text });
+  }
+  try {
+    await generation.started.promise;
+    await record.session.abort();
+  } catch {
+    // A missing model request or an already-idle session is still a valid cancellation.
+  }
+  await finalizeGeneration(record, generation);
+  return true;
+}
+
+function snapshot(params: Record<string, unknown>): Record<string, unknown> {
+  let record: SessionRecord | undefined;
+  if (params.conversationId !== undefined) {
+    record = sessions.get(requireConversationId(params.conversationId));
+    if (!record) throw new Error('Conversation is not open');
+  } else if (sessions.size === 1) {
+    record = sessions.values().next().value;
+  } else if (sessions.size > 1) {
+    record = [...sessions.values()].find(item =>
+      item.state === 'generating' || item.state === 'cancelling') ?? sessions.values().next().value;
+  }
+  if (!record) {
+    return { messages: [], state: 'idle', generationId: null, sequence: 0 };
+  }
+  return {
+    ...conversationResult(record),
+    messages: cloneMessages(record.messages),
+  };
+}
+
+async function startSessionPrompt(params: Record<string, unknown>): Promise<{ record: SessionRecord; generation: Generation }> {
+  const conversationId = requireConversationId(params.conversationId);
+  const generationId = requireGenerationId(params.generationId);
+  const text = requirePromptText(params.text);
+  const record = sessions.get(conversationId);
+  if (!record) throw new Error('Conversation is not open');
+  // A host that lost the terminal event may send a new prompt while Pi is still generating.
+  // Abort the stale run first so the new prompt is accepted instead of failing the generation.
+  if ((record.state === 'generating' || record.state === 'cancelling') && record.generation) {
+    await abortGeneration(record.generation.id);
+  }
+  const generation = beginGeneration(record, generationId, text, false);
+  return { record, generation };
+}
+
+async function requestSessionOpen(request: WorkerRequest, params: Record<string, unknown>): Promise<void> {
+  const result = await openSession(params);
+  send({ type: 'response', id: request.id, result });
+}
+
+async function handle(request: WorkerRequest): Promise<void> {
+  activeOperations += 1;
+  lastActivity = Date.now();
+  const params = request.params ?? {};
+  try {
+    switch (request.method) {
+      case 'ping': {
+        const first = sessions.values().next().value as SessionRecord | undefined;
+        send({
+          type: 'response',
+          id: request.id,
+          result: {
+            sdk: '1.4.0',
+            sessionId: first?.sessionId ?? null,
+            sessions: sessions.size,
+          },
+        });
+        return;
+      }
+      case 'shutdown': {
+        send({ type: 'response', id: request.id, result: true });
+        setTimeout(() => void shutdown(0), 0);
+        return;
       }
       case 'models.list': {
-        if(!session)throw new Error('Open a session before listing models');
-        const requested=request.params?.provider;
-        const preference=await readPreference(dataDir);
-        const providerId=typeof requested==='string'?requested:(activeProvider??preference.provider);
-        if(!isProviderId(providerId))throw new Error(`Unknown provider: ${providerId}`);
-        const descriptor=providerDescriptor(providerId);
-        // The bundled Pi catalog supplies endpoints, limits and reasoning metadata for native providers.
-        send({type:'response',id:request.id,result:{provider:descriptor.id,name:descriptor.name,native:descriptor.native,models:registryModels(session,descriptor.id)}});break;
+        const { runtime, preference } = await prepareRuntime();
+        const provider = normalizeProviderId(params.provider, preference.provider);
+        const model = normalizeModelId(params.model) || undefined;
+        const apiKey = normalizeApiKey(params.apiKey);
+        if (apiKey) rememberSecret(apiKey);
+        const baseUrl = normalizeBaseUrl(params.baseUrl);
+        const reasoning = normalizeReasoning(params.reasoning, provider === preference.provider ? preference.reasoning : false);
+        if (baseUrl) registerProviderEndpoint(runtime, { provider, model, baseUrl, reasoning });
+        if (!runtime.getProvider(canonicalProviderId(provider)) && canonicalProviderId(provider) !== CUSTOM_PROVIDER) {
+          throw new Error(`Unknown provider: ${provider}`);
+        }
+        send({ type: 'response', id: request.id, result: await listProviderModels(runtime, provider) });
+        return;
       }
-      case 'session.prompt':
-        // Host permission bridge and secure credentials are a future interface.
-        throw new Error('NOT_IMPLEMENTED: provider permission and credential bridge required');
-      case 'session.abort':await session?.abort();send({type:'response',id:request.id,result:true});break;
-      default:throw new Error('Unknown method');
+      case 'provider.validate': {
+        const { runtime, preference } = await prepareRuntime();
+        const provider = normalizeProviderId(params.provider, preference.provider);
+        const model = normalizeModelId(params.model) || undefined;
+        const apiKey = normalizeApiKey(params.apiKey);
+        if (apiKey) rememberSecret(apiKey);
+        const baseUrl = normalizeBaseUrl(params.baseUrl);
+        const reasoning = normalizeReasoning(params.reasoning, provider === preference.provider ? preference.reasoning : false);
+        if (!baseUrl && provider === CUSTOM_PROVIDER && preference.provider === CUSTOM_PROVIDER && preference.baseUrl) {
+          registerProviderEndpoint(runtime, {
+            provider,
+            model: model ?? preference.model,
+            baseUrl: preference.baseUrl,
+            reasoning,
+          });
+        }
+        send({
+          type: 'response',
+          id: request.id,
+          result: await validateProvider(runtime, provider, model, apiKey, baseUrl, reasoning),
+        });
+        return;
+      }
+      case 'session.open': {
+        await requestSessionOpen(request, params);
+        return;
+      }
+      case 'session.prompt': {
+        const { record, generation } = await startSessionPrompt(params);
+        send({ type: 'response', id: request.id, result: { accepted: true, generationId: generation.id } });
+        launchGeneration(record, generation);
+        return;
+      }
+      case 'session.retry': {
+        const conversationId = requireConversationId(params.conversationId);
+        const generationId = requireGenerationId(params.generationId);
+        const record = sessions.get(conversationId);
+        if (!record) throw new Error('Conversation is not open');
+        // A stop that the host finalized locally may still be settling here. Let the abort
+        // finish and expose its retryable turn instead of rejecting a valid retry.
+        if ((record.state === 'generating' || record.state === 'cancelling') && record.generation) {
+          await abortGeneration(record.generation.id);
+        }
+        const turn = record.lastTurn;
+        if (!turn || (turn.state !== 'failed' && turn.state !== 'cancelled')) {
+          throw new Error('Nothing to retry');
+        }
+        const generation = beginGeneration(record, generationId, turn.userText, true);
+        send({ type: 'response', id: request.id, result: { accepted: true, generationId, retry: true } });
+        launchGeneration(record, generation);
+        return;
+      }
+      case 'session.abort': {
+        const generationId = requireGenerationId(params.generationId);
+        const aborted = await abortGeneration(generationId);
+        send({ type: 'response', id: request.id, result: { aborted } });
+        return;
+      }
+      case 'session.snapshot': {
+        send({ type: 'response', id: request.id, result: snapshot(params) });
+        return;
+      }
+      default:
+        throw new Error('Unknown method');
     }
-  }catch(e){send({type:'response',id:request.id,error:e instanceof Error?e.message:String(e)});}
-  finally{lastActivity=Date.now();}
+  } catch (error) {
+    send({ type: 'response', id: request.id, error: sanitizeError(error) });
+  } finally {
+    activeOperations -= 1;
+    lastActivity = Date.now();
+  }
 }
-let queue=Promise.resolve();
-input.on('line',line=>{
-  if(line.length>1024*1024){send({type:'error',message:'Request exceeds 1 MiB'});return;}
-  let request:AgentRequest;
-  try{request=JSON.parse(line);if(typeof request.id!=='string'||typeof request.method!=='string')throw new Error('Invalid request');}
-  catch{send({type:'error',message:'Invalid protocol request'});return;}
-  // Shutdown/abort must not wait behind a future streaming prompt.
-  if(request.method==='shutdown'||request.method==='session.abort'){void handle(request);return;}
-  active++;queue=queue.then(()=>handle(request)).finally(()=>{active--;});
+
+function parseRequest(line: string): WorkerRequest | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.id !== 'string' || !record.id || record.id.length > 200) return undefined;
+  if (typeof record.method !== 'string' || !WORKER_METHODS.has(record.method as WorkerMethod)) return undefined;
+  if (record.params !== undefined && (record.params === null || typeof record.params !== 'object' || Array.isArray(record.params))) {
+    return undefined;
+  }
+  return record as unknown as WorkerRequest;
+}
+
+async function shutdown(code: number): Promise<void> {
+  if (stopping) return;
+  stopping = true;
+  clearInterval(idleTimer);
+  await Promise.all([...sessions.values()].map(record => closeSession(record)));
+  exitAfterFlush(code);
+}
+
+const idleMs = (() => {
+  const configured = Number(process.env.TALO_IDLE_MS ?? DEFAULT_IDLE_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_IDLE_MS;
+})();
+const idleInterval = Math.max(25, Math.min(1000, Math.floor(idleMs / 4)));
+const idleTimer = setInterval(() => {
+  if (stopping) return;
+  if (activeOperations > 0 || activeGenerationCount() > 0) {
+    // Do not sleep mid-generation; start the idle window after work settles.
+    lastActivity = Date.now();
+    return;
+  }
+  if (Date.now() - lastActivity < idleMs) return;
+  send({ type: 'sleeping' });
+  void shutdown(0);
+}, idleInterval);
+idleTimer.unref();
+
+function exitAfterFlush(code: number): void {
+  const fallback = setTimeout(() => process.exit(code), 250);
+  fallback.unref();
+  process.exitCode = code;
+  process.stdout.write('', () => process.exit(code));
+}
+
+function acceptLine(line: string): void {
+  if (stopping) return;
+  lastActivity = Date.now();
+  if (line.length > MAX_LINE_BYTES) {
+    send({ type: 'error', message: 'Request exceeds 1 MiB' });
+    return;
+  }
+  const request = parseRequest(line);
+  if (!request) {
+    send({ type: 'error', message: 'Invalid protocol request' });
+    return;
+  }
+  void handle(request);
+}
+
+// Strict LF framing: JSON strings may legitimately contain U+2028/U+2029, which Node's
+// readline treats as record separators. The host writes one JSON object per LF.
+let inputBuffer = '';
+let discardingOversized = false;
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => {
+  if (stopping) return;
+  inputBuffer += chunk;
+  let newline;
+  while ((newline = inputBuffer.indexOf('\n')) >= 0) {
+    const line = inputBuffer.slice(0, newline).replace(/\r$/u, '');
+    inputBuffer = inputBuffer.slice(newline + 1);
+    if (discardingOversized) {
+      discardingOversized = false;
+      continue;
+    }
+    acceptLine(line);
+  }
+  if (!discardingOversized && inputBuffer.length > MAX_LINE_BYTES) {
+    send({ type: 'error', message: 'Request exceeds 1 MiB' });
+    inputBuffer = '';
+    discardingOversized = true;
+  }
 });
-send({type:'ready',message:'Pi worker ready; providers resolve through the bundled registry and tools stay disabled until the permission bridge is connected'});
+process.stdin.on('end', () => {
+  if (inputBuffer && !discardingOversized) acceptLine(inputBuffer);
+  inputBuffer = '';
+  void shutdown(0);
+});
+process.stdin.on('close', () => void shutdown(0));
+process.stdout.on('error', () => { /* The host closed the pipe; stdin close handles shutdown. */ });
+process.stdin.on('error', () => void shutdown(0));
+process.on('SIGTERM', () => void shutdown(0));
+process.on('SIGINT', () => void shutdown(0));
+process.on('uncaughtException', error => {
+  send({ type: 'error', message: sanitizeError(error) });
+  void shutdown(1);
+});
+process.on('unhandledRejection', error => {
+  send({ type: 'error', message: sanitizeError(error) });
+  void shutdown(1);
+});
+
+send({
+  type: 'ready',
+  message: 'Pi worker ready; provider discovery and native sessions are available with tools disabled',
+});

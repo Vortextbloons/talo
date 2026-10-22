@@ -1,96 +1,76 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createInterface } from 'node:readline';
-import {
-  CUSTOM_PROVIDER,
-  PROVIDERS,
-  isLocalEndpoint,
-  modelsJson,
-  parseProviderPreference,
-  providerDescriptor,
-} from '../vendor/bundle/packages/contracts/src/providers.js';
+import { startWorker } from './helpers/worker.mjs';
+import { startMockProvider } from './helpers/mock-provider.mjs';
 
-test('provider catalog points at Pi provider IDs and documented endpoints', () => {
-  assert.deepEqual(PROVIDERS.map(provider => provider.id), ['opencode', 'opencode-go', 'openrouter', 'nvidia', 'custom']);
-  const byId = Object.fromEntries(PROVIDERS.map(provider => [provider.id, provider]));
-  assert.equal(byId.opencode.apiBaseUrl, 'https://opencode.ai/inference');
-  assert.equal(byId['opencode-go'].apiBaseUrl, 'https://opencode.ai/inference/go');
-  assert.equal(byId.openrouter.apiBaseUrl, 'https://openrouter.ai/api/v1');
-  assert.equal(byId.nvidia.apiBaseUrl, 'https://integrate.api.nvidia.com/v1');
-  assert.equal(byId.opencode.keysUrl, 'https://opencode.ai/auth');
-  assert.equal(byId.openrouter.keysUrl, 'https://openrouter.ai/keys');
-  assert.equal(byId.nvidia.keysUrl, 'https://build.nvidia.com/settings/api-keys');
-  for (const provider of PROVIDERS.filter(item => item.native)) {
-    assert.equal(provider.reasoning, true, provider.id);
-    assert.ok(provider.models.length > 0, provider.id);
-    assert.ok(provider.models.every(model => model.reasoning), `${provider.id} presets support reasoning`);
-    assert.match(provider.apiBaseUrl, /^https:\/\//);
-    assert.match(provider.keysUrl, /^https:\/\//);
+async function filesUnder(directory) {
+  const result = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) result.push(...await filesUnder(full));
+    else if (entry.isFile()) result.push(full);
   }
-  assert.equal(new Set(PROVIDERS.flatMap(provider => provider.models.map(model => `${provider.id}/${model.id}`))).size,
-    PROVIDERS.reduce((count, provider) => count + provider.models.length, 0));
-});
-
-test('provider preference normalizes legacy settings and clamps values', () => {
-  assert.deepEqual(parseProviderPreference(null), { provider: 'opencode', model: '', baseUrl: '', reasoning: false });
-  assert.deepEqual(parseProviderPreference({ provider: 'Anthropic', model: '  claude  ', baseUrl: ' https://example.com/v1 ', reasoning: 'yes' }),
-    { provider: 'opencode', model: 'claude', baseUrl: 'https://example.com/v1', reasoning: false });
-  assert.equal(parseProviderPreference({ provider: 'openrouter', model: 'x'.repeat(500) }).model.length, 200);
-  assert.equal(providerDescriptor('removed-provider').id, 'opencode');
-});
-
-test('models.json keeps native Pi providers intact and declares custom reasoning', () => {
-  for (const provider of PROVIDERS.filter(item => item.native)) {
-    const document = modelsJson({ provider: provider.id, model: 'any-model', baseUrl: '', reasoning: true });
-    assert.deepEqual(document.providers, {}, `${provider.id} must not replace Pi's catalog`);
-  }
-  const local = modelsJson({ provider: CUSTOM_PROVIDER, model: 'llama3.3', baseUrl: 'http://127.0.0.1:11434/v1', reasoning: true });
-  assert.equal(local.$schema, 'https://pi.dev/schemas/models.schema.json');
-  assert.equal(local.providers.custom.api, 'openai-completions');
-  assert.equal(local.providers.custom.apiKey, 'talo-local');
-  assert.equal(local.providers.custom.models[0].id, 'llama3.3');
-  assert.equal(local.providers.custom.models[0].reasoning, true);
-  const hosted = modelsJson({ provider: CUSTOM_PROVIDER, model: 'reasoner', baseUrl: 'https://models.example.com/v1', reasoning: false });
-  assert.equal(hosted.providers.custom.apiKey, '$TALO_CUSTOM_API_KEY');
-  assert.equal(hosted.providers.custom.models[0].reasoning, false);
-  assert.deepEqual(modelsJson({ provider: CUSTOM_PROVIDER, model: 'x', baseUrl: 'not a url', reasoning: true }).providers, {});
-  assert.deepEqual(modelsJson({ provider: CUSTOM_PROVIDER, model: '', baseUrl: 'http://localhost:1234/v1', reasoning: true }).providers, {});
-  assert.equal(isLocalEndpoint('http://[::1]:8080/v1'), true);
-  assert.equal(isLocalEndpoint('https://openrouter.ai/api/v1'), false);
-});
-
-function worker(data) {
-  const child = spawn(path.resolve('vendor/runtime/node/node.exe'), [path.resolve('vendor/bundle/workers/pi/src/main.js')], {
-    env: { ...process.env, TALO_DATA_DIR: data },
-    stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
-  const events = [];
-  let stderr = '';
-  child.stderr.on('data', data => stderr += data);
-  createInterface({ input: child.stdout }).on('line', line => {
-    try { events.push(JSON.parse(line)); } catch { /* Ignore malformed output. */ }
-  });
-  async function wait(predicate, timeout = 30000) {
-    const end = Date.now() + timeout;
-    while (Date.now() < end) {
-      const event = events.find(predicate);
-      if (event) return event;
-      if (child.exitCode !== null) throw new Error(`Worker exited ${child.exitCode}: ${stderr}`);
-      await new Promise(resolve => setTimeout(resolve, 25));
-    }
-    throw new Error(`Worker timeout: ${stderr}`);
-  }
-  return { child, wait, send: request => child.stdin.write(`${JSON.stringify(request)}\n`) };
+  return result;
 }
 
-test('Pi registry reports reasoning levels for hosted and custom providers', { timeout: 90000 }, async () => {
+test('provider discovery uses the bundled Pi catalog without a session', { timeout: 120_000 }, async () => {
   const data = await mkdtemp(path.join(os.tmpdir(), 'talo-providers-'));
-  const w = worker(data);
+  const worker = startWorker(data);
+  try {
+    await worker.waitReady();
+    for (const provider of ['openai', 'anthropic', 'google', 'openrouter']) {
+      const result = await worker.request(`models-${provider}`, 'models.list', { provider });
+      assert.equal(result.provider, provider);
+      assert.equal(result.native, true);
+      assert.ok(result.name && result.name !== provider, `${provider} should have a bundled display name`);
+      assert.ok(result.models.length > 0, `${provider} should expose catalog models`);
+      assert.ok(result.models.some(model => model.reasoning), `${provider} should expose reasoning metadata`);
+      assert.ok(result.models.every(model =>
+        typeof model.contextWindow === 'number' &&
+        typeof model.maxTokens === 'number' &&
+        Array.isArray(model.thinkingLevels)));
+    }
+
+    const gemini = await worker.request('models-gemini', 'models.list', { provider: 'gemini' });
+    assert.equal(gemini.provider, 'gemini');
+    assert.equal(gemini.native, true);
+    assert.ok(gemini.models.length > 0);
+
+    const emptyCustom = await worker.request('custom-empty', 'models.list', { provider: 'custom' });
+    assert.equal(emptyCustom.native, false);
+    assert.ok(Array.isArray(emptyCustom.models));
+
+    const custom = await worker.request('custom-params', 'models.list', {
+      provider: 'custom',
+      model: 'mock-model',
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      reasoning: true,
+    });
+    assert.equal(custom.native, false);
+    assert.equal(custom.models.length, 1);
+    assert.equal(custom.models[0].id, 'mock-model');
+    assert.equal(custom.models[0].reasoning, true);
+    assert.ok(custom.models[0].thinkingLevels.includes('medium'));
+
+    await assert.rejects(
+      worker.request('unknown', 'models.list', { provider: 'not-a-real-provider' }),
+      /Unknown provider/,
+    );
+
+    assert.equal(await worker.request('stop', 'shutdown'), true);
+    assert.equal(await worker.exited, 0);
+  } finally {
+    await worker.kill();
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
+test('provider preference projects custom models without persisting secrets', { timeout: 120_000 }, async () => {
+  const data = await mkdtemp(path.join(os.tmpdir(), 'talo-preference-'));
+  const worker = startWorker(data);
   try {
     await writeFile(path.join(data, 'provider.json'), JSON.stringify({
       provider: 'custom',
@@ -98,41 +78,85 @@ test('Pi registry reports reasoning levels for hosted and custom providers', { t
       baseUrl: 'http://127.0.0.1:8080/v1',
       reasoning: true,
     }));
-    await w.wait(event => event.type === 'ready');
-    w.send({ id: 'open', method: 'session.open' });
-    const opened = await w.wait(event => event.id === 'open');
-    assert.equal(opened.error, undefined, opened.error);
-    assert.equal(opened.result.provider, 'custom');
+    await worker.waitReady();
 
-    // Talo writes models.json before the session exists, because Pi composes its registry at creation.
+    // Discovery is registry-only: no session is opened before this call.
+    const models = await worker.request('custom', 'models.list', { provider: 'custom' });
+    assert.equal(models.native, false);
+    assert.equal(models.models.length, 1);
+    assert.equal(models.models[0].id, 'local-reasoner');
+    assert.equal(models.models[0].reasoning, true);
+    assert.ok(models.models[0].thinkingLevels.includes('medium'));
+
+    const opened = await worker.request('legacy-open', 'session.open');
+    assert.equal(opened.error, undefined, opened.error);
+    assert.equal(opened.provider, 'custom');
+    assert.equal(opened.model, 'local-reasoner');
+
     const modelsFile = JSON.parse(await readFile(path.join(data, 'pi', 'models.json'), 'utf8'));
+    assert.equal(modelsFile.$schema, 'https://pi.dev/schemas/models.schema.json');
     assert.equal(modelsFile.providers.custom.baseUrl, 'http://127.0.0.1:8080/v1');
+    assert.equal(modelsFile.providers.custom.api, 'openai-completions');
+    assert.equal(modelsFile.providers.custom.apiKey, 'talo-local');
+    assert.equal(modelsFile.providers.custom.models[0].id, 'local-reasoner');
     assert.equal(modelsFile.providers.custom.models[0].reasoning, true);
 
-    w.send({ id: 'custom', method: 'models.list', params: { provider: 'custom' } });
-    const custom = await w.wait(event => event.id === 'custom');
-    assert.equal(custom.result.models.length, 1);
-    assert.equal(custom.result.models[0].id, 'local-reasoner');
-    assert.equal(custom.result.models[0].reasoning, true);
-    assert.ok(custom.result.models[0].thinkingLevels.includes('medium'));
-
-    // Native providers come from Pi's catalog with provider-specific reasoning metadata.
-    w.send({ id: 'zen', method: 'models.list', params: { provider: 'opencode' } });
-    const zen = await w.wait(event => event.id === 'zen');
-    assert.equal(zen.result.native, true);
-    assert.ok(zen.result.models.length > 0);
-    assert.ok(zen.result.models.some(model => model.reasoning && model.thinkingLevels.includes('high')));
-
-    w.send({ id: 'nim', method: 'models.list', params: { provider: 'nvidia' } });
-    const nim = await w.wait(event => event.id === 'nim');
-    assert.ok(nim.result.models.some(model => model.reasoning));
-
-    w.send({ id: 'unknown', method: 'models.list', params: { provider: 'anthropic' } });
-    assert.match((await w.wait(event => event.id === 'unknown')).error, /Unknown provider/);
-
-    w.send({ id: 'stop', method: 'shutdown' });
+    assert.equal(await worker.request('stop', 'shutdown'), true);
+    assert.equal(await worker.exited, 0);
   } finally {
-    w.child.kill();
+    await worker.kill();
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
+test('provider validation authenticates and errors never contain credentials', { timeout: 120_000 }, async () => {
+  const data = await mkdtemp(path.join(os.tmpdir(), 'talo-validate-'));
+  const mock = await startMockProvider();
+  const secret = mock.state.key;
+  const worker = startWorker(data);
+  try {
+    await worker.waitReady();
+    const result = await worker.request('ok', 'provider.validate', {
+      provider: 'custom',
+      model: 'mock-model',
+      baseUrl: mock.url,
+      apiKey: secret,
+      reasoning: false,
+    }, 40_000);
+    assert.equal(result.authenticated, true);
+    assert.equal(result.model, 'mock-model');
+    assert.equal(result.provider, 'custom');
+    assert.equal(result.native, false);
+
+    mock.configure({ mode: 'unauthorized', errorMessage: `bad key ${secret}` });
+    let failure;
+    try {
+      await worker.request('bad', 'provider.validate', {
+        provider: 'custom',
+        model: 'mock-model',
+        baseUrl: mock.url,
+        apiKey: secret,
+        reasoning: false,
+      }, 40_000);
+    } catch (error) {
+      failure = error;
+    }
+    assert.ok(failure, 'a rejected credential must fail validation');
+    assert.ok(!failure.message.includes(secret), 'credential leaked into worker error');
+    assert.match(failure.message, /\[redacted\]/);
+
+    for (const file of await filesUnder(data)) {
+      const content = await readFile(file, 'utf8').catch(() => '');
+      assert.ok(!content.includes(secret), `credential leaked into ${path.relative(data, file)}`);
+    }
+    assert.ok(!JSON.stringify(worker.events).includes(secret));
+    assert.ok(!worker.stderr().includes(secret));
+
+    assert.equal(await worker.request('stop', 'shutdown'), true);
+    assert.equal(await worker.exited, 0);
+  } finally {
+    await worker.kill();
+    await mock.close();
     await rm(data, { recursive: true, force: true });
   }
 });

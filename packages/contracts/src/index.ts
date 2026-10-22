@@ -7,8 +7,9 @@ export interface PermissionRequest { id: string; action: SensitiveAction; resour
 export interface PermissionGate { request(request: PermissionRequest): Promise<boolean>; }
 export interface Onboarding { name: string; personality: string; provider: string; model: string; /** Custom OpenAI-compatible endpoint. Never a credential. */ baseUrl?: string; /** Declare reasoning support for the custom model so Pi exposes thinking levels. */ reasoning?: boolean; memory: 'off' | 'workspace' | 'global'; complete: boolean; }
 export interface RuntimeStatus { database: string; services: Record<ServiceId, ServiceState>; dependencies: Record<string, boolean>; }
-export interface AgentRequest { id: string; method: 'ping' | 'session.open' | 'session.prompt' | 'session.abort' | 'models.list' | 'shutdown'; params?: Record<string, unknown>; }
-export type AgentEvent = { type: 'ready' | 'sleeping' | 'error'; message?: string } | { type: 'response'; id: string; result?: unknown; error?: string } | { type: 'stream'; sessionId: string; event: unknown };
+/** Compatibility aliases for the normalized, SDK-independent worker protocol. */
+export type AgentRequest = import('./chat.js').WorkerRequest;
+export type AgentEvent = import('./chat.js').WorkerEvent;
 export interface WebResearch { search(query: string): Promise<unknown>; fetch(url: string): Promise<unknown>; crawl(url: string): Promise<unknown>; screenshot(url: string): Promise<unknown>; }
 export interface BrowserService { start(): Promise<void>; stop(): Promise<void>; isolatedContext(): Promise<never>; }
 export interface MemoryRecord { id: string; scope: 'global' | 'workspace'; workspaceId: string | null; content: string; createdAt: string; }
