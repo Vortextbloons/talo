@@ -1,0 +1,31 @@
+# Dependencies and build output
+node_modules/
+dist/
+target/
+.svelte-kit/
+.vite/
+coverage/
+*.tsbuildinfo
+
+# Bundled runtime assets
+vendor/runtime/
+vendor/bundle/
+vendor/downloads/
+
+# Logs and local data
+*.log
+.env
+.env.*
+!.env.example
+*.db*
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor temporary files
+*.swp
+*.swo
+AGENTS.md
+Docs/

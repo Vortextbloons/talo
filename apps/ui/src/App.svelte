@@ -1,0 +1,81 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { invoke, isTauri } from '@tauri-apps/api/core';
+  import mascot from '../../../packages/design/mascot.svg';
+  import type { Onboarding, RuntimeStatus, ServiceId } from '../../../packages/contracts/src/index';
+  const pages = ['Chat', 'Workspaces', 'Tasks', 'Browser', 'Memory', 'Settings'] as const;
+  type Page = typeof pages[number];
+  let page = $state<Page>('Chat');
+  let settings = $state<Onboarding>({name:'',personality:'Thoughtful and direct',provider:'Anthropic',model:'',memory:'workspace',complete:false});
+  let loaded = $state(false);
+  let editing = $state(false);
+  let step = $state(0);
+  let status = $state<RuntimeStatus | null>(null);
+  let error = $state('');
+  let busy = $state(false);
+  let pending = $state<{id:string; action:string; resource:string; run:(id:string)=>Promise<void>} | null>(null);
+  const descriptions:Record<Page,string> = {
+    Chat:'A little space to think things through.',Workspaces:'Keep each project in its own place.',Tasks:'A home for the things you want to come back to.',Browser:'Your browser, with a space of its own.',Memory:'The useful things, remembered on your terms.',Settings:'Make yourself at home.'
+  };
+  async function refresh() { if(isTauri()) status = await invoke<RuntimeStatus>('runtime_status'); }
+  onMount(() => {
+    let active=true;
+    (async()=>{try { if(isTauri()){const saved=await invoke<Onboarding|null>('load_settings');if(saved && active)settings=saved;await refresh();} }catch(e){error=String(e);}finally{if(active)loaded=true;}})();
+    const timer=setInterval(()=>{refresh().catch(e=>error=String(e));},3000);
+    return ()=>{active=false;clearInterval(timer);};
+  });
+  async function save() { try {busy=true;if(isTauri())await invoke('save_settings',{settings:{...settings,complete:true}});settings.complete=true;editing=false;}catch(e){error=String(e);}finally{busy=false;} }
+  async function permission(action:string,resource:string,run:(id:string)=>Promise<void>) {
+    if(!isTauri()){error='Open the desktop app to manage local services.';return;}
+    try{const id=await invoke<string>('request_permission',{action,resource});pending={id,action,resource,run};}catch(e){error=String(e);}
+  }
+  async function resolve(allowed:boolean){const p=pending;if(!p)return;pending=null;try{busy=true;await invoke('resolve_permission',{id:p.id,allowed});if(allowed)await p.run(p.id);}catch(e){error=String(e);}finally{busy=false;}}
+  async function control(service:ServiceId,start:boolean,grant?:string){
+    if(!isTauri()){error='Open the desktop app to manage local services.';return;}
+    try{busy=true;status=await invoke<RuntimeStatus>('service_control',{service,start,grant:grant??null});}catch(e){error=String(e);}finally{busy=false;}
+  }
+  function browserStart(){return permission('browser.start','persistent-profile',id=>control('browser',true,id));}
+</script>
+
+<div class="shell">
+  <aside>
+    <a class="brand" href="#chat" onclick={()=>page='Chat'}><img src={mascot} alt=""/><span>talo<span class="dot">.</span></span></a>
+    <div class="nav-caption">Your everyday companion</div>
+    <nav aria-label="Main navigation">{#each pages as item (item)}<button class={{selected:page===item}} onclick={()=>page=item}><span class="nav-icon" aria-hidden="true">{({Chat:'◌',Workspaces:'▦',Tasks:'☑',Browser:'◎',Memory:'◇',Settings:'⚙'})[item]}</span>{item}{#if page===item}<span class="nav-dot"></span>{/if}</button>{/each}</nav>
+    <div class="sidebar-bottom"><span class="presence"></span><div>Talo is here<small>{isTauri()?'Running quietly in your tray':'Interface preview'}</small></div></div>
+  </aside>
+  <main>
+    <header><span>Personal space <span class="slash">/</span> {page}</span><span class="local"><span class="presence"></span> Local first</span></header>
+    {#if error}<div class="error" role="alert">{error}<button aria-label="Dismiss error" onclick={()=>error=''}>×</button></div>{/if}
+    <div class="content">
+      <div class="page-heading"><div><h1>{page==='Chat' ? `Hello${settings.name ? ', '+settings.name : ', you'}.` : page}</h1><p>{descriptions[page]}</p></div>{#if page==='Chat'}<span class="pill">A fresh start</span>{/if}</div>
+      {#if page==='Chat'}
+        <section class="welcome"><img src={mascot} alt="Talo, a rounded yellow companion with two black eyes"/><h2>Here when you need a hand.</h2><p>A thought, a question, a place to begin.<br/>Your assistant will meet you here.</p><span class="coming">Chat connection coming next</span></section>
+        <div class="suggestions"><div><span>Think together</span><p>Make room for your next idea.</p></div><div><span>Find your bearings</span><p>Bring a little clarity to your day.</p></div><div><span>Pick up the thread</span><p>Keep your projects close.</p></div></div>
+        <div class="composer"><textarea aria-label="Message to Talo" placeholder="What's on your mind?" disabled></textarea><div><span>Connect a provider in Settings to prepare Talo.</span><button disabled aria-label="Send message">↑</button></div></div>
+      {:else if page==='Settings'}
+        <section class="settings-card"><h2>Your preferences</h2><dl><dt>Name</dt><dd>{settings.name||'Not set'}</dd><dt>Personality</dt><dd>{settings.personality}</dd><dt>Provider preference</dt><dd>{settings.provider} · Not connected</dd><dt>Model preference</dt><dd>{settings.model||'Choose during setup'}</dd><dt>Memory</dt><dd>{settings.memory}</dd></dl><button class="primary" onclick={()=>{editing=true;step=0;}}>Edit setup</button></section>
+        <section class="settings-card"><h2>Local services</h2><p>Start or stop the bundled runtimes. Pi sleeps after five idle minutes.</p>{#each ['pi','browser'] as service (service)}<div class="service"><div><strong>{service==='pi'?'Pi worker':'Chromium'}</strong><small>{status?.services[service as ServiceId]??'Desktop app required'}</small></div><button disabled={busy||!isTauri()} onclick={()=>status?.services[service as ServiceId]==='running'?control(service as ServiceId,false):service==='browser'?browserStart():control('pi',true)}>{status?.services[service as ServiceId]==='running'?'Stop':'Start'}</button></div>{/each}<p class="detail">SQLite: {status?.database??'Desktop app required'}</p>{#if status}<div class="dependencies">{#each Object.entries(status.dependencies) as [name,ready] (name)}<span>{ready?'✓':'○'} {name}</span>{/each}</div>{/if}</section>
+        <section class="settings-card"><h2>Windows</h2><p>Closing the window keeps Talo in the tray. Use Quit Talo to exit.</p><button disabled={busy||!isTauri()} onclick={()=>permission('autostart.change','enable',async grant=>{await invoke('set_autostart',{enabled:true,grant});})}>Enable launch at sign-in</button> <button disabled={busy||!isTauri()} onclick={()=>permission('autostart.change','disable',async grant=>{await invoke('set_autostart',{enabled:false,grant});})}>Disable launch at sign-in</button></section>
+      {:else if page==='Browser'}
+        <section class="empty"><span class="empty-icon">◎</span><h2>A separate space for the web.</h2><p>Talo uses its own Chromium profile. Your everyday browser stays yours.</p><button class="primary" disabled={busy||!isTauri()} onclick={browserStart}>Open Talo browser</button><small>Intelligent browser actions will be added in a later phase.</small></section>
+      {:else}
+        <section class="empty"><span class="empty-icon">{page==='Workspaces'?'▦':page==='Tasks'?'☑':'◇'}</span><h2>{page==='Workspaces'?'Every project starts somewhere.':page==='Tasks'?'A clear slate.': 'A little continuity.'}</h2><p>{page==='Workspaces'?'Workspace organization is ready for its next chapter.':page==='Tasks'?'Your scheduled tasks will live here. Automatic execution is not enabled.':'Global and workspace memory have a local home. Memory capture and search controls are coming next.'}</p><span class="coming">Foundation in place · Feature coming next</span></section>
+      {/if}
+      <footer><span>Made for your everyday.</span><span>Talo / 0.1.0</span></footer>
+    </div>
+  </main>
+</div>
+{#if loaded && (!settings.complete || editing)}
+  <div class="overlay"><dialog open class="onboarding" aria-modal="true" aria-labelledby="setup-title"><img src={mascot} alt="Talo"/><div class="steps">Getting acquainted · {step+1} of 3</div><h2 id="setup-title">{step===0?'A little introduction.':step===1?'Choose your intelligence.':'Remember what matters.'}</h2>
+    {#if step===0}<label>Your name <span>(optional)</span><input bind:value={settings.name} maxlength="80" placeholder="What should Talo call you?"/></label><label>Assistant personality<select bind:value={settings.personality}><option>Thoughtful and direct</option><option>Warm and encouraging</option><option>Brief and practical</option></select></label>
+    {:else if step===1}<label>Provider<select bind:value={settings.provider}><option>Anthropic</option><option>OpenAI</option><option>Google</option><option>Local / OpenAI compatible</option></select></label><label>Model preference<input bind:value={settings.model} maxlength="120" placeholder="Provider model ID"/></label><p class="setup-note">Save your preference now. Secure provider connection is a documented placeholder; no credentials are collected in this scaffold.</p>
+    {:else}<label>Memory preference<select bind:value={settings.memory}><option value="workspace">Keep memory within each workspace</option><option value="global">Allow memory across workspaces</option><option value="off">Keep memory off</option></select></label><p class="setup-note">Memories stay on this device. Automatic capture is not enabled yet. You can change this preference in Settings.</p>{/if}
+    <div class="setup-actions">{#if step>0}<button onclick={()=>step--}>Back</button>{:else}<span></span>{/if}{#if step<2}<button class="primary" onclick={()=>step++}>Continue</button>{:else}<button class="primary" disabled={busy} onclick={save}>Make yourself at home</button>{/if}</div>
+  </dialog></div>
+{/if}
+{#if pending}<div class="overlay"><dialog open class="onboarding" aria-modal="true" aria-labelledby="permission-title"><h2 id="permission-title">Allow this action?</h2><p>{pending.action==='browser.start'?'Open Chromium with Talo’s dedicated persistent profile?':'Change whether Talo starts when you sign in to Windows?'}</p><p class="detail">{pending.resource} · This action only</p><div class="setup-actions"><button onclick={()=>resolve(false)}>Deny</button><button class="primary" onclick={()=>resolve(true)}>Allow once</button></div></dialog></div>{/if}
+
+<style>
+  .shell{display:flex;min-height:100vh}aside{width:222px;flex-shrink:0;background:var(--black);color:#fff;padding:32px 18px 24px;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0}.brand{display:flex;align-items:center;gap:12px;padding:0 14px;color:white;text-decoration:none}.brand img{width:40px}.brand>span{font-size:35px;font-weight:650;letter-spacing:-2px}.dot{color:var(--yellow)}.nav-caption{font-size:11px;color:#aaa;margin:17px 14px 32px}nav{display:grid;gap:6px}nav button{background:transparent;color:#bcbcbc;border:0;padding:13px 15px;text-align:left;display:flex;align-items:center;gap:13px;border-radius:9px;font-size:14px}nav button:hover{background:#252525;color:#fff}nav button.selected{background:#30302b;color:var(--yellow)}.nav-icon{font-size:21px;line-height:1;width:23px;text-align:center}.nav-dot{width:5px;height:5px;background:var(--yellow);border-radius:50%;margin-left:auto}.sidebar-bottom{margin-top:auto;display:flex;gap:10px;align-items:center;padding:20px 14px 0;font-size:12px}.sidebar-bottom small{display:block;color:#999;font-size:10px;margin-top:5px}.presence{display:inline-block;width:6px;height:6px;background:#c9a849;border-radius:50%}main{margin-left:222px;flex:1;min-width:0}header{height:70px;border-bottom:1px solid var(--line);padding:0 38px;display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--muted)}.slash{margin:0 12px;color:#ccc}.local{display:flex;gap:8px;align-items:center}.content{max-width:1100px;margin:auto;padding:42px 48px 20px}.page-heading{display:flex;justify-content:space-between;align-items:center}h1{font-size:32px;letter-spacing:-1.1px;font-weight:550;margin:0 0 10px}p{color:var(--muted);font-size:14px;line-height:1.7;margin:0}.pill,.coming{font-size:11px;color:#777;background:var(--soft);padding:7px 12px;border-radius:20px}.welcome{text-align:center;padding:57px 0 37px}.welcome img{width:90px;margin-bottom:21px}h2{font-size:22px;letter-spacing:-.6px;font-weight:550;margin:0 0 12px}.welcome p{margin-bottom:20px}.coming{display:inline-block}.suggestions{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin:13px 0 30px}.suggestions>div{border-top:1px solid var(--line);padding-top:18px}.suggestions span{font-size:13px;font-weight:600}.suggestions p{font-size:12px;margin-top:7px}.composer{border:1px solid #deded9;border-radius:16px;padding:17px 18px;background:white;box-shadow:0 4px 16px #00000004}.composer textarea{border:0;resize:none;background:transparent;width:100%;height:48px;font-size:14px}.composer>div{display:flex;align-items:center;justify-content:space-between;font-size:10px;color:#999}.composer button{background:var(--yellow);color:black;border:0;border-radius:9px;width:34px;height:32px;font-size:22px}footer{display:flex;justify-content:space-between;margin-top:37px;font-size:10px;color:#999}.empty{padding:90px 20px;text-align:center;max-width:530px;margin:auto}.empty p{margin-bottom:22px}.empty small{display:block;margin-top:20px;color:var(--muted);font-size:12px}.empty-icon{display:block;font-size:55px;color:#b7a36c;margin-bottom:30px}button{border:1px solid #ddd;background:white;padding:9px 14px;border-radius:8px;font-size:12px}button.primary{background:var(--yellow);border-color:var(--yellow);color:var(--black);font-weight:600;padding:11px 18px}.settings-card{border-bottom:1px solid var(--line);padding:28px 0}.settings-card h2{font-size:19px}dl{display:grid;grid-template-columns:170px 1fr;gap:15px;font-size:13px;margin:24px 0}dt{color:var(--muted)}dd{margin:0}.service{display:flex;align-items:center;justify-content:space-between;padding:18px 0;border-bottom:1px solid var(--line)}.service strong{font-size:13px;font-weight:550}.service small{display:block;font-size:11px;color:var(--muted);margin-top:5px}.detail{font-size:11px;margin-top:14px}.dependencies{display:flex;gap:18px;font-size:11px;margin-top:12px;color:var(--muted)}.overlay{position:fixed;inset:0;background:#15151566;backdrop-filter:blur(5px);display:grid;place-items:center;padding:24px;z-index:5}.onboarding{position:relative;margin:auto;border:0;color:var(--black);background:white;border-radius:24px;padding:36px;width:440px;max-width:100%;box-shadow:0 20px 80px #0002}.onboarding>img{width:55px;margin-bottom:20px}.steps{font-size:11px;color:var(--muted);margin-bottom:14px}.onboarding h2{font-size:27px;margin-bottom:24px}label{display:block;font-size:13px;font-weight:550;margin:18px 0}label span{font-weight:400;color:var(--muted)}input,select{display:block;width:100%;padding:12px;border:1px solid #deded9;border-radius:8px;margin-top:9px;background:var(--soft);color:var(--black)}.setup-note{font-size:12px;margin-top:20px}.setup-actions{display:flex;justify-content:space-between;margin-top:30px;gap:12px}.error{margin:20px 38px 0;padding:12px;background:#fff0dd;border:1px solid #e8cc9b;font-size:12px;display:flex;justify-content:space-between;align-items:center}.error button{padding:2px 8px;background:transparent;border:0}@media(max-width:900px){aside{width:180px}main{margin-left:180px}.content{padding:30px 28px}.nav-caption{font-size:10px}.suggestions{gap:12px}.pill{display:none}}@media(max-width:600px){aside{position:relative;width:72px;padding:20px 8px}.brand{padding:0}.brand>span,.nav-caption,.sidebar-bottom{display:none}.brand img{width:48px}nav{margin-top:30px}nav button{font-size:0;padding:12px}.nav-icon{font-size:24px}.nav-dot{display:none}main{margin-left:0}header{padding:0 20px}.local{display:none}.content{padding:25px 20px}.suggestions{grid-template-columns:1fr}.welcome{padding:45px 0}.composer>div>span{max-width:180px}.page-heading h1{font-size:28px}dl{grid-template-columns:1fr;gap:7px}dd{margin-bottom:10px}.dependencies{flex-wrap:wrap}}
+</style>
