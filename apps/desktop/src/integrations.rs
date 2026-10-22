@@ -124,7 +124,8 @@ pub fn message(h: &mut crate::Host, app: &tauri::AppHandle, message: Value) {
         .get_webview_window("main")
         .is_some_and(|w| w.is_visible().unwrap_or(false));
     let background = crate::automation::current(h);
-    match crate::permissions::policy(action, scope, &config["grants"], attended || background.is_some()) {
+    let remote = crate::telegram::owns(h, p["conversationId"].as_str().unwrap_or(""), p["generationId"].as_str().unwrap_or(""));
+    match crate::permissions::policy(action, scope, &config["grants"], attended || background.is_some() || remote) {
         crate::permissions::Decision::Allow => {
             let allowed=crate::automation::reserve(h,action,scope);
             reply(h, message["id"].clone(), allowed);
@@ -155,7 +156,7 @@ pub fn expire(h: &mut crate::Host) -> bool {
         .integrations
         .pending
         .iter()
-        .filter(|(_, (_, at, e))| *e != epoch || at.elapsed() > Duration::from_secs(85))
+        .filter(|(_, (m, at, e))| *e != epoch || at.elapsed() > Duration::from_secs(85) || !live(h, m))
         .map(|(id, _)| id.clone())
         .collect();
     let changed = !ids.is_empty();
@@ -167,6 +168,28 @@ pub fn expire(h: &mut crate::Host) -> bool {
         }
     }
     changed
+}
+
+fn live(h: &crate::Host, message: &Value) -> bool {
+    let p = &message["params"];
+    let Some(generation) = p["generationId"].as_str() else { return true; };
+    h.db.query_row("SELECT EXISTS(SELECT 1 FROM chat_generations WHERE id=?1 AND conversation_id=?2 AND state='generating')", rusqlite::params![generation,p["conversationId"].as_str().unwrap_or("")], |r| r.get(0)).unwrap_or(false)
+}
+
+pub fn resolve_pending(h: &mut crate::Host, app: &tauri::AppHandle, id: &str, decision: &str) -> Result<(), String> {
+    let mut config = load(&h.supervisor.data)?;
+    let valid = h.integrations.pending.get(id).is_some_and(|(m,at,epoch)| at.elapsed()<Duration::from_secs(85) && *epoch==h.supervisor.worker_epoch() && live(h,m));
+    let (message,_,_) = h.integrations.pending.remove(id).ok_or("Approval expired or cancelled")?;
+    let allowed = valid && ["once","scope"].contains(&decision) && crate::automation::reserve(h,message["params"]["action"].as_str().unwrap_or(""),message["params"]["scope"].as_str().unwrap_or(""));
+    if allowed && decision=="scope" {
+        config["grants"].as_array_mut().ok_or("Invalid grants")?.push(json!({"id":uuid::Uuid::new_v4().to_string(),"action":message["params"]["action"],"scope":message["params"]["scope"],"summary":message["params"]["summary"]}));
+        if let Err(error)=save(&h.supervisor.data,&config) { reply(h,message["id"].clone(),false); return Err(error); }
+    }
+    let audit = h.db.execute("INSERT INTO permission_audit(id,action,resource,allowed) VALUES(?1,?2,?3,?4)",rusqlite::params![id,message["params"]["action"].as_str().unwrap_or(""),"protected tool operation",allowed]);
+    reply(h,message["id"].clone(),allowed && audit.is_ok());
+    let _ = app.emit("tool-approvals-changed",());
+    audit.map_err(|_|"Cannot record approval".to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -211,15 +234,8 @@ pub async fn tools_action(
             }
             "resolve"=>{
                 let id=p["id"].as_str().ok_or("Approval ID required")?;
-                let (message,at,epoch)=h.integrations.pending.remove(id).ok_or("Approval expired or cancelled")?;
-                let decision=p["decision"].as_str().unwrap_or("deny");
-                let allowed=["once","scope"].contains(&decision)&&at.elapsed()<Duration::from_secs(85)&&epoch==h.supervisor.worker_epoch();
-                let allowed=allowed&&crate::automation::reserve(&h,message["params"]["action"].as_str().unwrap_or(""),message["params"]["scope"].as_str().unwrap_or(""));
-                if allowed&&decision=="scope"{
-                    config["grants"].as_array_mut().ok_or("Invalid grants")?.push(json!({"id":uuid::Uuid::new_v4().to_string(),"action":message["params"]["action"],"scope":message["params"]["scope"],"summary":message["params"]["summary"]}));save(&h.supervisor.data,&config)?;
-                }
-                h.db.execute("INSERT INTO permission_audit(id,action,resource,allowed) VALUES(?1,?2,?3,?4)",rusqlite::params![id,message["params"]["action"].as_str().unwrap_or(""),"protected tool operation",allowed]).map_err(|e|e.to_string())?;
-                reply(&mut h,message["id"].clone(),allowed);return Ok(json!(true));
+                resolve_pending(&mut h,app,id,p["decision"].as_str().unwrap_or("deny"))?;
+                return Ok(json!(true));
             }
             "test"|"cancel"=>{
                 h.supervisor.ensure_worker()?;

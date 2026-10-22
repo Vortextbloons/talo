@@ -230,12 +230,18 @@ fn action(db: &mut Connection, operation: &str, p: &Value) -> Result<Value> {
         }
         "conversation_update" => {
             let id = field(p, "id")?;
+            if id == crate::primary::ID {
+                return Err("Your primary chat always stays available. Rename Talo in Settings.".into());
+            }
             let workspace = field(p, "workspaceId")?;
             workspace_exists(db, workspace)?;
             sql(db.execute("UPDATE chat_conversations SET title=?2,workspace_id=?3,archived=?4,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?1",params![id,name(p)?,workspace,p.get("archived").and_then(Value::as_bool).unwrap_or(false)]))?;
         }
         "conversation_delete" => {
             let id = field(p, "id")?;
+            if id == crate::primary::ID {
+                return Err("Your primary chat cannot be deleted.".into());
+            }
             let _ = db.execute("DELETE FROM agent_delegations WHERE parent_conversation_id=?1", [id]);
             let _ = db.execute("DELETE FROM chat_conversations WHERE delegation_parent_id=?1", [id]);
             sql(db.execute(

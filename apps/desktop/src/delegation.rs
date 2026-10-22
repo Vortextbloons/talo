@@ -30,6 +30,7 @@ pub struct DelegationTask {
     pub error: Option<String>,
     pub delivered: bool,
     pub thinking_level: Option<String>,
+    pub current_activity: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -54,14 +55,29 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
            delivered INTEGER NOT NULL DEFAULT 0,
            created_at TEXT NOT NULL,
            updated_at TEXT NOT NULL,
-           thinking_level TEXT
+           thinking_level TEXT,
+           current_activity TEXT
          );
          CREATE INDEX IF NOT EXISTS agent_delegations_parent
            ON agent_delegations(parent_conversation_id, state);
          CREATE INDEX IF NOT EXISTS agent_delegations_child
            ON agent_delegations(child_conversation_id);
          CREATE INDEX IF NOT EXISTS agent_delegations_generation
-           ON agent_delegations(generation_id);",
+           ON agent_delegations(generation_id);
+         CREATE TABLE IF NOT EXISTS agent_delegation_activity(
+           task_id TEXT NOT NULL REFERENCES agent_delegations(id) ON DELETE CASCADE,
+           id TEXT NOT NULL,
+           sequence INTEGER NOT NULL,
+           tool TEXT NOT NULL,
+           label TEXT NOT NULL,
+           detail TEXT,
+           state TEXT NOT NULL,
+           created_at TEXT NOT NULL,
+           updated_at TEXT NOT NULL,
+           PRIMARY KEY(task_id,id)
+         );
+         CREATE INDEX IF NOT EXISTS agent_delegation_activity_task
+           ON agent_delegation_activity(task_id,sequence);",
     )?;
     // Databases created before worker routing lack the column; add it in place.
     let has_level: i64 = db
@@ -72,6 +88,15 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
         )?;
     if has_level == 0 {
         db.execute_batch("ALTER TABLE agent_delegations ADD COLUMN thinking_level TEXT")?;
+    }
+    let has_activity: i64 = db
+        .query_row(
+            "SELECT count(*) FROM pragma_table_info('agent_delegations') WHERE name='current_activity'",
+            [],
+            |row| row.get(0),
+        )?;
+    if has_activity == 0 {
+        db.execute_batch("ALTER TABLE agent_delegations ADD COLUMN current_activity TEXT")?;
     }
     Ok(())
 }
@@ -90,10 +115,11 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DelegationTask> {
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
         thinking_level: row.get(11)?,
+        current_activity: row.get(12)?,
     })
 }
 
-const TASK_COLUMNS: &str = "id,parent_conversation_id,child_conversation_id,title,brief,state,result,error,delivered,created_at,updated_at,thinking_level";
+const TASK_COLUMNS: &str = "id,parent_conversation_id,child_conversation_id,title,brief,state,result,error,delivered,created_at,updated_at,thinking_level,current_activity";
 
 pub fn list(db: &Connection, parent: &str) -> Result<Vec<Value>, String> {
     let mut statement = db
@@ -174,6 +200,127 @@ pub fn set_generation(db: &Connection, id: &str, generation_id: &str, state: &st
     )
     .map_err(|_| "The delegated task could not be updated".to_string())?;
     Ok(())
+}
+
+/// Persist one user-readable child step. Only the plain label and a bounded detail are
+/// stored; raw tool arguments and results never leave the worker.
+pub fn record_activity(
+    db: &Connection,
+    conversation_id: &str,
+    generation_id: &str,
+    activity: &Value,
+) -> Result<Option<(String, String, Value)>, String> {
+    let task = match child_conversation_for_generation(db, generation_id)? {
+        Some(task) => Some(task),
+        None => task_for_child_conversation(db, conversation_id)?,
+    };
+    let Some(task) = task else {
+        return Ok(None);
+    };
+    let id = activity["id"].as_str().filter(|value| !value.is_empty() && value.len() <= 200)
+        .ok_or("Activity id is required")?;
+    let tool = activity["tool"].as_str().filter(|value| !value.is_empty() && value.len() <= 100)
+        .ok_or("Activity tool is required")?;
+    let label = activity["label"].as_str().filter(|value| !value.is_empty() && value.chars().count() <= 120)
+        .ok_or("Activity label is required")?;
+    let detail = activity["detail"].as_str()
+        .map(|value| value.chars().take(400).collect::<String>())
+        .filter(|value| !value.is_empty());
+    let state = match activity["state"].as_str().unwrap_or("running") {
+        "completed" => "completed",
+        "failed" => "failed",
+        "cancelled" => "cancelled",
+        _ => "running",
+    };
+    let stamp = now();
+    let exists: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_delegation_activity WHERE task_id=?1 AND id=?2)",
+            params![task.id, id],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    let created_at: String = if exists {
+        db.execute(
+            "UPDATE agent_delegation_activity SET tool=?3,label=?4,detail=?5,state=?6,updated_at=?7 WHERE task_id=?1 AND id=?2",
+            params![task.id, id, tool, label, detail, state, stamp],
+        )
+        .map_err(|error| error.to_string())?;
+        db.query_row(
+            "SELECT created_at FROM agent_delegation_activity WHERE task_id=?1 AND id=?2",
+            params![task.id, id],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| stamp.clone())
+    } else {
+        let sequence: i64 = db
+            .query_row(
+                "SELECT COALESCE(MAX(sequence),0)+1 FROM agent_delegation_activity WHERE task_id=?1",
+                [&task.id],
+                |row| row.get(0),
+            )
+            .unwrap_or(1);
+        db.execute(
+            "INSERT INTO agent_delegation_activity(task_id,id,sequence,tool,label,detail,state,created_at,updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8)",
+            params![task.id, id, sequence, tool, label, detail, state, stamp],
+        )
+        .map_err(|error| error.to_string())?;
+        db.execute(
+            "DELETE FROM agent_delegation_activity WHERE task_id=?1 AND id NOT IN (
+               SELECT id FROM agent_delegation_activity WHERE task_id=?1 ORDER BY sequence DESC LIMIT 100
+             )",
+            [&task.id],
+        )
+        .map_err(|error| error.to_string())?;
+        stamp.clone()
+    };
+    db.execute(
+        "UPDATE agent_delegations SET current_activity=?2,updated_at=?3 WHERE id=?1",
+        params![task.id, label, stamp],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(Some((
+        task.id,
+        task.parent_conversation_id,
+        json!({
+            "id": id,
+            "tool": tool,
+            "label": label,
+            "detail": detail,
+            "state": state,
+            "createdAt": created_at,
+        }),
+    )))
+}
+
+pub fn activity_for_task(db: &Connection, task_id: &str) -> Vec<Value> {
+    let Ok(mut statement) = db.prepare(
+        "SELECT id,tool,label,detail,state,created_at FROM agent_delegation_activity
+         WHERE task_id=?1 ORDER BY sequence ASC LIMIT 100",
+    ) else {
+        return Vec::new();
+    };
+    let rows = statement.query_map([task_id], |row| {
+        Ok(json!({
+            "id": row.get::<_, String>(0)?,
+            "tool": row.get::<_, String>(1)?,
+            "label": row.get::<_, String>(2)?,
+            "detail": row.get::<_, Option<String>>(3)?,
+            "state": row.get::<_, String>(4)?,
+            "createdAt": row.get::<_, String>(5)?,
+        }))
+    });
+    rows.ok()
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
+}
+
+pub fn activity_for_conversation(db: &Connection, conversation_id: &str) -> Vec<Value> {
+    match task_for_child_conversation(db, conversation_id) {
+        Ok(Some(task)) => activity_for_task(db, &task.id),
+        _ => Vec::new(),
+    }
 }
 
 pub fn finish(
@@ -355,6 +502,7 @@ pub fn start(
         params![id, parent_id, child_id, title, brief, stamp, routed_level],
     )
     .map_err(|_| "The delegated task could not be saved".to_string())?;
+    crate::telegram::track_task(db, &id, parent_id).map_err(|_| "The task's reply channel could not be saved".to_string())?;
     Ok(DelegationTask {
         id,
         parent_conversation_id: parent_id.to_string(),
@@ -366,6 +514,7 @@ pub fn start(
         error: None,
         delivered: false,
         thinking_level: routed_level,
+        current_activity: None,
         created_at: stamp.clone(),
         updated_at: stamp,
     })
@@ -410,6 +559,10 @@ pub fn on_generation_finished(
     } else {
         None
     };
+    let _ = db.execute(
+        "UPDATE agent_delegation_activity SET state=?2,updated_at=?3 WHERE task_id=?1 AND state='running'",
+        params![task.id, next, now()],
+    );
     if finish(db, &task.id, next, result, error.as_deref()).is_err() {
         return;
     }
@@ -480,6 +633,8 @@ fn enqueue_deliveries(db: &mut Connection) -> Result<Vec<String>, String> {
         let text = delivery_text(&tasks);
         let stamp = now();
         let tx = db.transaction().map_err(|error| error.to_string())?;
+        let task_ids = json!(tasks.iter().map(|task| &task.id).collect::<Vec<_>>()).to_string();
+        tx.execute("INSERT OR IGNORE INTO telegram_origins(id,connection_id,kind) SELECT ?1,min(connection_id),'generation' FROM telegram_origins WHERE kind='task' AND id IN (SELECT value FROM json_each(?2)) HAVING count(*)=?3 AND count(DISTINCT connection_id)=1",params![generation_id,task_ids,tasks.len() as i64]).map_err(|error|error.to_string())?;
         for task in &tasks {
             tx.execute(
                 "UPDATE agent_delegations SET delivered=1,updated_at=?2 WHERE id=?1",
@@ -568,10 +723,18 @@ pub fn has_pending(db: &Connection) -> bool {
 
 /// Reconcile anything left mutating by a crash. Transcripts stay; nothing is replayed.
 pub fn recover(db: &Connection) -> Result<usize, String> {
+    let stamp = now();
+    let _ = db.execute(
+        "UPDATE agent_delegation_activity SET state='failed',updated_at=?1
+         WHERE state='running' AND task_id IN (
+           SELECT id FROM agent_delegations WHERE state IN ('queued','running','waiting')
+         )",
+        [&stamp],
+    );
     let changed = db
         .execute(
             "UPDATE agent_delegations SET state='interrupted',error='Interrupted before the delegated task completed',updated_at=?1 WHERE state IN ('queued','running','waiting')",
-            [now()],
+            [&stamp],
         )
         .map_err(|error| error.to_string())?;
     Ok(changed)
@@ -770,6 +933,34 @@ mod tests {
         assert!(queue[0].text.contains("B failed"));
         assert!(get(&db, &first.id).unwrap().unwrap().delivered);
         assert!(get(&db, &second.id).unwrap().unwrap().delivered);
+    }
+
+    #[test]
+    fn child_actions_are_persisted_as_bounded_plain_steps() {
+        let db = database();
+        let selection = storage::ModelSelection { connection_id: "conn".into(), model_id: "model".into() };
+        storage::create_conversation(&db, "parent", "Parent", Some(&selection)).unwrap();
+        let task = start(&db, "parent", "One", "Read source A", None).unwrap();
+        set_generation(&db, &task.id, "gen-child", "running").unwrap();
+        record_activity(
+            &db,
+            &task.child_conversation_id,
+            "gen-child",
+            &json!({"id":"call-1","tool":"web_search","label":"Searching the web","detail":"Rust docs","state":"running"}),
+        )
+        .unwrap();
+        record_activity(
+            &db,
+            &task.child_conversation_id,
+            "gen-child",
+            &json!({"id":"call-1","tool":"web_search","label":"Searching the web","detail":"Rust docs","state":"completed"}),
+        )
+        .unwrap();
+        let stored = activity_for_task(&db, &task.id);
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0]["state"], "completed");
+        assert_eq!(get(&db, &task.id).unwrap().unwrap().current_activity.as_deref(), Some("Searching the web"));
+        assert_eq!(activity_for_conversation(&db, &task.child_conversation_id).len(), 1);
     }
 
     #[test]

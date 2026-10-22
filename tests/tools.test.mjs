@@ -82,6 +82,8 @@ test('Pi model executes real MCP through the single guarded proxy', {timeout:400
     await worker.request('prompt','session.prompt',{conversationId:'tools',generationId:'mcp-generation',text:'Use the fixture MCP echo tool'});
     const approval=await worker.wait(e=>e.type==='tools'&&e.message?.method==='permission');
     assert.equal(approval.message.params.action,'mcp.call');
+    assert.equal(approval.message.params.conversationId,'tools');
+    assert.equal(approval.message.params.generationId,'mcp-generation');
     assert.deepEqual(JSON.parse(approval.message.params.scope),{server:'fixture',tool:'echo',arguments:{text:'Pi executed real MCP'}});
     worker.send({type:'tools_response',message:{id:approval.message.id,result:{allowed:true}}});
     const terminal=await worker.waitGeneration('tools','mcp-generation');assert.equal(terminal.event.state,'completed');
@@ -92,6 +94,22 @@ test('Pi model executes real MCP through the single guarded proxy', {timeout:400
     assert.match(await readFile(opened.path,'utf8'),/Pi executed real MCP/);
     await worker.request('shutdown','shutdown');assert.equal(await worker.exited,0);
   }finally{await worker.kill();await provider.close();await rm(data,{recursive:true,force:true});}
+});
+
+test('concurrent MCP calls keep their own chat approval handler',async()=>{
+  const approvals=[];
+  const m=new McpManager(async()=>{throw new Error('Missing chat owner');});
+  try{
+    await m.configure([definition]);
+    await m.discover('fixture');
+    const tool=owner=>m.tool(async(action,scope)=>{await delay(owner==='telegram'?15:1);approvals.push({owner,...JSON.parse(scope)});return true;});
+    await Promise.all([
+      tool('telegram').execute('remote',{operation:'call',server:'fixture',tool:'echo',arguments:{text:'Remote request'}},undefined),
+      tool('desktop').execute('local',{operation:'call',server:'fixture',tool:'echo',arguments:{text:'Desktop request'}},undefined),
+    ]);
+    assert.equal(approvals.find(a=>a.arguments.text==='Remote request').owner,'telegram');
+    assert.equal(approvals.find(a=>a.arguments.text==='Desktop request').owner,'desktop');
+  }finally{await m.close();}
 });
 
 test('remote HTTP MCP uses private Authorization header and never follows redirects',{timeout:20000},async()=>{

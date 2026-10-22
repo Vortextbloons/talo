@@ -21,6 +21,19 @@ Proactivity stays bounded. Talo acts inside a conversation, never on a timer. A 
 
 See [Slice 9 architecture and verification](docs/SLICE-9.md).
 
+## Telegram
+
+Your permanent primary chat stays above project chats. To reach it from Telegram,
+choose a model in that chat, then open **Settings → Integrations → Telegram**.
+Create a dedicated bot with BotFather, paste its token into Talo, open the pairing
+link, and confirm your account in Talo. One private Telegram account can pair at a time.
+
+Keep this PC awake and online with Talo running in the tray. Telegram supports text
+requests, task progress, questions, and one-time approvals. `/status` shows progress;
+`/stop` stops the current primary-chat reply. Other chats and child tasks keep running.
+Messages and approval details pass through Telegram; the bot token stays protected
+on your PC. Desktop-originated requests are not automatically forwarded.
+
 ## Learn more
 
 [Providers](docs/PROVIDERS.md) · [Architecture](docs/ARCHITECTURE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Third-party notices](docs/THIRD-PARTY-NOTICES.md)

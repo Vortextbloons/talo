@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { DelegationTask } from '../../../../packages/contracts/src/chat';
+  import mascot from '../../../../packages/design/mascot.svg';
 
   let { tasks, onOpen, onCancel, onCancelAll }: {
     tasks: DelegationTask[];
@@ -9,74 +10,92 @@
   } = $props();
 
   const active = $derived(tasks.filter(task => task.state === 'queued' || task.state === 'running' || task.state === 'waiting'));
+  /* Finished work leaves the panel; the chat keeps the record of the call. */
+  const shown = $derived(tasks.filter(task => task.state !== 'completed' && task.state !== 'cancelled'));
 
   function label(state: DelegationTask['state']): string {
-    return state === 'waiting' ? 'Needs an answer'
+    return state === 'waiting' ? 'Needs you'
       : state === 'running' ? 'Working'
         : state === 'queued' ? 'Queued'
-          : state === 'completed' ? 'Done'
-            : state === 'cancelled' ? 'Cancelled'
-              : state === 'interrupted' ? 'Interrupted'
-                : 'Failed';
+          : state === 'interrupted' ? 'Interrupted'
+            : 'Failed';
+  }
+
+  function current(task: DelegationTask): string {
+    if (task.state === 'waiting') return 'Waiting for your answer';
+    if (task.state === 'queued') return 'Waiting to start';
+    return task.currentActivity || 'Starting work';
   }
 </script>
 
-{#if tasks.length}
-  <section class="delegations" aria-label="Delegated tasks">
+{#if shown.length}
+  <section class="delegations" aria-label="Active subagents">
     <header>
-      <span>Delegated work</span>
+      <span>Subagents</span>
       {#if active.length > 1}
         <button type="button" class="cancel-all" onclick={onCancelAll}>Cancel all</button>
       {/if}
     </header>
-    <div class="task-list">
-      {#each tasks as task (task.id)}
-        {@const busy = task.state === 'queued' || task.state === 'running' || task.state === 'waiting'}
-        <article class="task" class:busy class:failed={task.state === 'failed' || task.state === 'interrupted'}>
-          <div class="task-main">
-            <div class="task-head">
-              <strong>{task.title}</strong>
-              <span class="state">{label(task.state)}</span>
-            </div>
-            {#if task.error}
-              <p class="outcome failed-text">{task.error}</p>
-            {:else if task.result}
-              <p class="outcome">{task.result.length > 220 ? `${task.result.slice(0, 220)}…` : task.result}</p>
-            {:else if busy}
-              <p class="outcome muted">Running independently. You can keep chatting or switch chats.</p>
-            {/if}
+    {#each shown as task (task.id)}
+      {@const busy = task.state === 'queued' || task.state === 'running' || task.state === 'waiting'}
+      <article class="task" class:busy class:failed={task.state === 'failed' || task.state === 'interrupted'}>
+        <button type="button" class="card-open" aria-label={`Open ${task.title}`} onclick={() => onOpen(task)}></button>
+        <img class="agent-avatar" class:busy src={mascot} alt="" aria-hidden="true" />
+        <div class="task-main">
+          <div class="line">
+            <strong class="title">{task.title}</strong>
+            <span class="state">{label(task.state)}</span>
           </div>
-          <div class="task-actions">
-            <button type="button" onclick={() => onOpen(task)}>Open</button>
-            {#if busy}<button type="button" class="stop" onclick={() => onCancel(task)}>Cancel</button>{/if}
-          </div>
-        </article>
-      {/each}
-    </div>
+          {#if task.error}
+            <p class="detail failed-text">{task.error}</p>
+          {:else if busy}
+            <p class="detail"><span class="pulse" aria-hidden="true"></span>{current(task)}</p>
+          {/if}
+        </div>
+        {#if busy}
+          <button
+            type="button"
+            class="stop"
+            aria-label={`Cancel ${task.title}`}
+            title="Cancel"
+            onclick={(event) => { event.stopPropagation(); onCancel(task); }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M7 7l10 10M17 7 7 17" /></svg>
+          </button>
+        {/if}
+      </article>
+    {/each}
   </section>
 {/if}
 
 <style>
-  .delegations{border:1px solid var(--line);border-radius:12px;background:var(--paper);padding:10px 12px;margin:0 0 12px}
-  header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
-  header>span{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--faint)}
-  .cancel-all{background:transparent;border:1px solid var(--line);border-radius:7px;color:var(--muted);font-size:10px;padding:3px 8px}
-  .cancel-all:hover{border-color:var(--error-line);color:var(--error-text)}
-  .task-list{display:grid;gap:6px}
-  .task{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:8px 9px;border:1px solid var(--line);border-radius:9px;background:var(--soft)}
+  .delegations{display:grid;gap:4px}
+  header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px}
+  header>span{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+  .cancel-all{background:transparent;border:0;padding:0;color:var(--faint);font-size:9.5px;text-decoration:underline}
+  .cancel-all:hover{color:var(--error-text)}
+  .task{position:relative;display:flex;align-items:center;gap:7px;padding:5px 6px;border:1px solid var(--line);border-radius:8px;background:var(--soft);transition:border-color .15s ease}
+  .task:hover,.task:has(.card-open:focus-visible){border-color:var(--line-strong)}
   .task.busy{border-color:#4e4324}
   .task.failed{border-color:var(--error-line)}
-  .task-main{min-width:0}
-  .task-head{display:flex;align-items:center;gap:8px;min-width:0}
-  .task-head strong{font-size:12px;font-weight:550;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .state{font-size:9.5px;border:1px solid var(--line-strong);border-radius:20px;padding:2px 7px;color:var(--muted);white-space:nowrap}
-  .task.busy .state{border-color:#4e4324;color:var(--yellow-deep)}
-  .task.failed .state{border-color:var(--error-line);color:var(--error-text)}
-  .outcome{margin:5px 0 0;font-size:11px;line-height:1.5;color:var(--muted);display:-webkit-box;line-clamp:3;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-  .outcome.muted{color:var(--faint)}
-  .failed-text{color:var(--error-text)}
-  .task-actions{display:flex;gap:6px;flex-shrink:0}
-  .task-actions button{background:transparent;border:1px solid var(--line);border-radius:7px;color:var(--muted);font-size:10px;padding:4px 8px}
-  .task-actions button:hover{border-color:var(--line-strong);color:var(--text)}
-  .task-actions .stop:hover{border-color:var(--error-line);color:var(--error-text)}
+  .card-open{position:absolute;inset:0;padding:0;border:0;border-radius:8px;background:transparent;cursor:pointer;z-index:0}
+  .card-open:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
+  .agent-avatar,.task-main,.stop{position:relative;z-index:1}
+  .agent-avatar{width:18px;height:18px;flex-shrink:0;pointer-events:none}
+  .agent-avatar.busy{animation:agent-think 1.4s ease-in-out infinite}
+  .task-main{min-width:0;flex:1;pointer-events:none}
+  .line{display:flex;align-items:center;gap:6px;min-width:0}
+  .title{flex:1;min-width:0;font-size:11px;font-weight:550;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .state{flex-shrink:0;font-size:9px;color:var(--faint);white-space:nowrap}
+  .task.busy .state{color:var(--yellow-deep)}
+  .task.failed .state{color:var(--error-text)}
+  .detail{display:flex;align-items:center;gap:5px;margin:1px 0 0;font-size:9.5px;line-height:1.4;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .failed-text{color:var(--error-text);white-space:normal}
+  .pulse{width:4px;height:4px;border-radius:50%;background:var(--yellow);flex-shrink:0;animation:pulse 1.2s ease-in-out infinite}
+  .stop{display:grid;place-items:center;width:16px;height:16px;flex-shrink:0;padding:0;border:0;border-radius:5px;background:transparent;color:var(--faint)}
+  .stop svg{width:10px;height:10px}
+  .stop:hover{color:var(--error-text);background:var(--error-bg)}
+  @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+  @keyframes agent-think{0%,100%{transform:rotate(-4deg) translateY(.5px)}50%{transform:rotate(4deg) translateY(-1.5px)}}
+  @media(prefers-reduced-motion:reduce){.agent-avatar.busy,.pulse{animation:none}}
 </style>

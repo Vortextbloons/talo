@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod chat;
+mod primary;
+mod telegram;
 mod chatgpt;
 mod agent;
 mod automation;
@@ -37,6 +39,7 @@ use tauri::{
 };
 
 struct Host {
+    telegram: telegram::Telegram,
     integrations: integrations::Integrations,
     db: Connection,
     supervisor: Supervisor,
@@ -108,6 +111,24 @@ impl Host {
         if !exists {
             self.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Browser requires a valid chat thread."}})); return;
         }
+        let generation = message["params"]["generationId"].as_str().unwrap_or("").to_string();
+        let remote = telegram::owns(self,session,&generation);
+        if remote && ["browser_interact", "browser_ai", "browser_download"].contains(&name.as_str()) {
+            if name != "browser_download" {
+                let state = self.supervisor.ensure_browser().ok().and_then(|browser| browser.sessions.lock().ok().map(|states| states[session].clone())).unwrap_or(Value::Null);
+                let tab = state["tabs"].as_array().and_then(|tabs| tabs.iter().find(|tab| tab["id"]==state["activeTab"]));
+                let Some(tab) = tab.filter(|tab|tab["id"].is_string() && tab["revision"].is_string()) else {
+                    self.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Open and read the browser page before requesting an action."}}));
+                    return;
+                };
+                message["params"]["target"] = json!({"tabId":tab["id"],"revision":tab["revision"]});
+                message["params"]["page"] = tab["url"].clone();
+            }
+            let resource = json!({"tool":message["params"]["name"],"arguments":message["params"]["arguments"],"target":message["params"]["target"]}).to_string();
+            let id = self.permissions.request("browser.action".into(),resource);
+            self.browser_approvals.insert(id,(message,Instant::now(),self.supervisor.worker_epoch()));
+            return;
+        }
         if let Some(run) = automation::current(self) {
             if ["browser_interact", "browser_ai", "browser_download"].contains(&name.as_str()) {
                 let resource = json!({"tool":message["params"]["name"],"arguments":message["params"]["arguments"],"target":message["params"]["target"]}).to_string();
@@ -158,6 +179,7 @@ impl Host {
             self.chat.on_lifecycle(&mut self.db, app, lifecycle);
         }
         delegation::tick(self, app);
+        telegram::tick(self, app);
         let busy = self.chat.is_generating() || self.chat.any_active() || delegation::has_pending(&self.db);
         if self.supervisor.idle_stop(busy) {
             automation::event(self,None,"worker_hibernated");
@@ -351,6 +373,30 @@ async fn request_permission(
     .await
 }
 
+pub(crate) fn resolve_permission_inner(h: &mut Host, id: &str, allowed: bool) -> Result<(), String> {
+        let epoch_now = h.supervisor.worker_epoch();
+        let fresh = |at: Instant, epoch: u64| at.elapsed() < Duration::from_secs(90) && epoch == epoch_now;
+        let current = h.browser_approvals.get(id).is_none_or(|(m, at, epoch)| fresh(*at, *epoch) && h.db.query_row("SELECT EXISTS(SELECT 1 FROM chat_generations WHERE id=?1 AND conversation_id=?2 AND state='generating')",rusqlite::params![m["params"]["generationId"].as_str().unwrap_or(""),m["params"]["sessionId"].as_str().unwrap_or("")],|r|r.get::<_,bool>(0)).unwrap_or(false));
+        let Host {
+            db, permissions, ..
+        } = h;
+        permissions.resolve(db, &id, allowed && current)?;
+        if let Some((mut message, at, epoch)) = h.browser_approvals.remove(id) {
+            let valid = allowed && current && fresh(at, epoch);
+            if valid {
+                let resource = json!({"tool":message["params"]["name"],"arguments":message["params"]["arguments"],"target":message["params"]["target"]}).to_string();
+                h.permissions.consume(&id, "browser.action", &resource)?;
+                if !automation::reserve(h,"browser.action",&resource) {
+                    h.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Duplicate scheduled browser action suppressed. Review the conversation."}}));
+                    return Ok(());
+                }
+                message["params"]["approved"] = json!(true);
+                h.supervisor.browser_request(message);
+            } else { h.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Browser action denied, expired or cancelled."}})); }
+        }
+    Ok(())
+}
+
 #[tauri::command]
 async fn resolve_permission(
     app: tauri::AppHandle,
@@ -360,26 +406,7 @@ async fn resolve_permission(
     run_blocking(app, move |app| {
         let shared = app.state::<Shared>();
         let mut h = shared.lock().map_err(|e| e.to_string())?;
-        let epoch_now = h.supervisor.worker_epoch();
-        let fresh = |at: Instant, epoch: u64| at.elapsed() < Duration::from_secs(90) && epoch == epoch_now;
-        let current = h.browser_approvals.get(&id).is_none_or(|(_, at, epoch)| fresh(*at, *epoch));
-        let Host {
-            db, permissions, ..
-        } = &mut *h;
-        permissions.resolve(db, &id, allowed && current)?;
-        if let Some((mut message, at, epoch)) = h.browser_approvals.remove(&id) {
-            let valid = allowed && fresh(at, epoch);
-            if valid {
-                let resource = json!({"tool":message["params"]["name"],"arguments":message["params"]["arguments"],"target":message["params"]["target"]}).to_string();
-                h.permissions.consume(&id, "browser.action", &resource)?;
-                if !automation::reserve(&h,"browser.action",&resource) {
-                    h.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Duplicate scheduled browser action suppressed. Review the conversation."}}));
-                    return Ok(());
-                }
-                message["params"]["approved"] = json!(true);
-                h.supervisor.browser_request(message);
-            } else { h.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Browser action denied, expired or cancelled."}})); }
-        }
+        resolve_permission_inner(&mut h, &id, allowed)?;
         Ok(())
     })
     .await
@@ -506,6 +533,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             automation::automation_action,
             integrations::tools_action,
+            telegram::telegram_action,
             agent::agent_action,
             delegation::delegation_action,
             runtime_status,
@@ -555,6 +583,8 @@ fn main() {
             // Chat/provider metadata is added alongside the memory schema. The DDL is
             // idempotent so existing v1 databases upgrade in place.
             storage::init(&db)?;
+            primary::ensure(&db)?;
+            telegram::recover(&db)?;
             scheduler::init(&db)?;
             agent::init(&db)?;
             skills::init(&db)?;
@@ -581,6 +611,7 @@ fn main() {
             }));
             app.manage(status_cache.clone());
             app.manage(Arc::new(Mutex::new(Host {
+                telegram: telegram::Telegram::default(),
                 integrations: integrations::Integrations::default(),
                 db,
                 supervisor: Supervisor::new(root, data),
@@ -591,6 +622,7 @@ fn main() {
             agent_asks: Default::default(),
             })));
             diagnostics::start(app.handle().clone());
+            telegram::start(app.handle().clone());
             #[cfg(windows)]
             app.manage(power::Registration::new()?);
             // Boot takes a few hundred milliseconds. Warm the worker the first time the window
@@ -770,6 +802,7 @@ mod dispatch_regression {
             .unwrap();
         storage::init(&db).unwrap();
         Host {
+            telegram: telegram::Telegram::default(),
             integrations: integrations::Integrations::default(),
             db,
             supervisor: Supervisor::new(

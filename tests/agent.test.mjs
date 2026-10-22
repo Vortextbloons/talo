@@ -92,6 +92,12 @@ test('a tool call reaches the host and the turn continues after the host replies
     const done = await worker.waitGeneration('agent-chat', 'gen-1');
     assert.equal(done.event.state, 'completed');
     assert.ok(provider.state.requests.at(-1).body.messages.some(message => message.role === 'tool' && message.content.includes('assignment-1')));
+    const activity = worker.events
+      .filter(event => event.type === 'chat' && event.event?.type === 'activity')
+      .map(event => event.event.activity);
+    assert.ok(activity.some(item => item.tool === 'tools' && item.label && item.state === 'running'));
+    assert.ok(activity.some(item => item.tool === 'tools' && item.state === 'completed'));
+    assert.ok(activity.every(item => !('arguments' in item) && !('result' in item)));
   } finally {
     await worker.kill();
     await provider.close();

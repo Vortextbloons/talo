@@ -24,7 +24,7 @@ export class ManagedToolsExtension {
         }
         const owner = groups.some(group=>group.id===input.server) ? this.managed : external;
         if (owner===external && !await authorize('tool.use','mcp','MCP integrations',signal)) throw new Error('External integrations are disabled.');
-        return owner.tool().execute(id,input,signal,update,context);
+        return owner.tool(authorize).execute(id,input,signal,update,context);
       },
     };
     this.factory = pi => { pi.registerTool(this.tool); };

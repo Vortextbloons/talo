@@ -13,9 +13,17 @@ export interface DelegationTask {
   id: string; parentConversationId: string; childConversationId: string;
   title: string; brief: string; state: DelegationState;
   result?: string; error?: string; delivered: boolean;
+  /** Latest user-readable action, shown on the agent card while it works. */
+  currentActivity?: string;
   createdAt: string; updatedAt: string;
 }
 export interface QueuedTurn { id: string; text: string; createdAt: string }
+/** One user-readable step a delegated child took. Raw arguments and results are never exposed. */
+export interface DelegationActivity {
+  id: string; tool: string; label: string; detail?: string;
+  state: 'running' | 'completed' | 'failed' | 'cancelled';
+  createdAt?: string;
+}
 export interface ChatMessage {
   id: string; role: 'user' | 'assistant'; text: string;
   /** Complete accumulated thinking text when the model exposes it; absent otherwise. */
@@ -41,6 +49,8 @@ export interface ConversationSnapshot {
   queued?: QueuedTurn[];
   /** Set when this snapshot is a child task transcript. */
   parentConversation?: ConversationInfo;
+  /** Chronological actions for a child task transcript. */
+  delegationActivity?: DelegationActivity[];
 }
 export interface MessagePage {
   messages: ChatMessage[]; before: string | null; after: string | null;
@@ -57,7 +67,8 @@ export type ChatEvent = {
   | { type: 'research'; conversationId: string; generationId: string; activity: ResearchActivity }
   | { type: 'delegation'; task: DelegationTask }
   | { type: 'queue'; conversationId: string; queued: QueuedTurn[] }
-  | { type: 'session'; conversationId: string; state: 'closed' };
+  | { type: 'session'; conversationId: string; state: 'closed' }
+  | { type: 'activity'; taskId: string; parentConversationId: string; conversationId: string; generationId: string; activity: DelegationActivity };
 export interface ResearchActivity {
   id: string; tool: string; input: string; state: 'running' | 'completed' | 'failed' | 'cancelled';
   preview?: string; sources?: string[]; artifact?: string; error?: string;

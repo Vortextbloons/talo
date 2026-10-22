@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { PRIMARY_CONVERSATION_ID } from '../../../../packages/contracts/src/telegram';
   import { onMount } from 'svelte';
   import { chat, openConversation } from '../lib/chat.svelte';
   import { library, refreshLibrary, libraryCall, mutateLibrary, switchWorkspace, type HistoryHit } from '../lib/library.svelte';
@@ -27,7 +28,7 @@
     catch(e){library.error=String(e);} finally{if(version===searchVersion) searching=false;}
   }
   async function update(remove=false, archive=false) {
-    const c=chat.active?.conversation; if(!c)return;
+    const c=chat.active?.conversation; if(!c || c.id===PRIMARY_CONVERSATION_ID)return;
     if(await mutateLibrary(remove?'conversation_delete':'conversation_update',{id:c.id,name:title||c.title,workspaceId:c.workspaceId??library.activeWorkspace,archived:archive})){editing=false;deleting=false;}
   }
 </script>
@@ -42,8 +43,8 @@
   <form onsubmit={e=>{e.preventDefault();void search();}}><input aria-label="Search conversations" placeholder="Search conversations" bind:value={query} maxlength="300"/><button disabled={searching || !query.trim()} aria-label="Search history">{searching?'…':'Find'}</button></form>
   {#if searched}<div class="search-results"><button class="clear" onclick={()=>{searched=false;query='';}}>Clear search</button>{#each hits as hit, i(`${hit.conversationId}-${i}`)}<button disabled={working} onclick={()=>{void openConversation(hit.conversationId);}}><strong>{hit.title}</strong><small>{hit.text}</small></button>{:else}<p>No conversations found.</p>{/each}</div>{/if}
   <label class="archive"><input type="checkbox" bind:checked={showArchived}/> Show archived chats</label>
-  {#if chat.active}<button class="manage" disabled={working} onclick={()=>{title=chat.active?.conversation.title??'';editing=!editing;}}>Manage this chat</button>{/if}
-  {#if editing}<form class="edit-chat" onsubmit={e=>{e.preventDefault();void update();}}><label>Chat title<input bind:value={title} maxlength="100" required/></label><button disabled={library.busy}>Save title</button><button type="button" disabled={library.busy} onclick={()=>{void update(false,!chat.active?.conversation.archived);}}>{chat.active?.conversation.archived?'Restore chat':'Archive chat'}</button><button type="button" onclick={()=>deleting=true}>Delete chat</button>{#if deleting}<p>Delete this chat from Talo? Its original history file stays on this device.</p><button type="button" disabled={library.busy} onclick={()=>{void update(true);}}>Confirm delete</button>{/if}</form>{/if}
+  {#if chat.active && chat.active.conversation.id !== PRIMARY_CONVERSATION_ID}<button class="manage" disabled={working} onclick={()=>{title=chat.active?.conversation.title??'';editing=!editing;}}>Manage this chat</button>{/if}
+  {#if editing && chat.active?.conversation.id !== PRIMARY_CONVERSATION_ID}<form class="edit-chat" onsubmit={e=>{e.preventDefault();void update();}}><label>Chat title<input bind:value={title} maxlength="100" required/></label><button disabled={library.busy}>Save title</button><button type="button" disabled={library.busy} onclick={()=>{void update(false,!chat.active?.conversation.archived);}}>{chat.active?.conversation.archived?'Restore chat':'Archive chat'}</button><button type="button" onclick={()=>deleting=true}>Delete chat</button>{#if deleting}<p>Delete this chat from Talo? Its original history file stays on this device.</p><button type="button" disabled={library.busy} onclick={()=>{void update(true);}}>Confirm delete</button>{/if}</form>{/if}
   <button disabled={working || library.busy || chat.preview} onclick={()=>{void rebuild();}}>Rebuild search</button>
   {#if rebuildNotice}<p role="status">{rebuildNotice}</p>{/if}
   {#if library.error}<p role="alert">{library.error}</p>{/if}

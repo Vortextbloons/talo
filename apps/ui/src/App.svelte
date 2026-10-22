@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { PRIMARY_CONVERSATION_ID } from '../../../packages/contracts/src/telegram';
   import BrowserPanel from './components/BrowserPanel.svelte';
   import { initBrowser, closeBrowser } from './lib/browser.svelte';
   import { onMount } from 'svelte';
@@ -15,7 +16,7 @@
   import InboxPanel from './components/InboxPanel.svelte';
   import SkillsPanel from './components/SkillsPanel.svelte';
   import { agent, initAgent } from './lib/agent.svelte';
-  import { chat, disposeChat, initChat, createConversation, routing } from './lib/chat.svelte';
+  import { chat, disposeChat, initChat, createConversation, openConversation, routing } from './lib/chat.svelte';
   import { checkForUpdates } from './lib/updates.svelte';
   import { CUSTOM_BASE_URL_EXAMPLE, DEFAULT_PREFERENCE, PROVIDERS, parseProviderPreference, providerDescriptor } from '../../../packages/contracts/src/index';
   import type { Onboarding, RuntimeStatus, ServiceId } from '../../../packages/contracts/src/index';
@@ -25,6 +26,7 @@
   /** The rail shows a count only when something genuinely waits on a person. */
   const inboxCount = $derived(agent.asks.length + agent.assignments.filter(item=>item.status==='open').length + agent.drafts.length + agent.skillProposals.length);
   let taskFocus = $state('');
+  function openPrimary(): void { navigatePage('Chat'); void openConversation(PRIMARY_CONVERSATION_ID); }
   function navigatePage(next: Page) { if (page !== next) closeBrowser(); page = next; }
   /* The rail keeps its icons on screen and opens over the page on hover, so the layout never jumps. */
   const PIN_KEY = 'talo.nav.pinned';
@@ -118,7 +120,7 @@
     if(!event.ctrlKey||event.altKey||event.shiftKey||event.metaKey)return;
     if(event.key>='1'&&event.key<='6'){
       const item=pages[Number(event.key)-1];
-      if(item){event.preventDefault();navigatePage(item);}
+      if(item){event.preventDefault();if(item==='Chat')openPrimary();else navigatePage(item);}
       return;
     }
     if(event.key.toLowerCase()==='n'){
@@ -135,7 +137,7 @@
   <aside class="rail" aria-label="Main navigation">
     <div class="rail-inner">
       <div class="rail-top">
-        <button class="brand" onclick={()=>navigatePage('Chat')} title="Chat" aria-label="Talo — go to Chat">
+        <button class="brand" onclick={openPrimary} title="Chat" aria-label="Talo — go to Chat">
           <img src={mascot} alt=""/>
           <span class="wordmark">talo<span class="dot">.</span></span>
         </button>

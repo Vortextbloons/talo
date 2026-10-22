@@ -3,6 +3,7 @@
   import { isTauri } from '@tauri-apps/api/core';
   import ProviderSettings from './ProviderSettings.svelte';
   import ToolsSettings from './ToolsSettings.svelte';
+  import IntegrationsSettings from './IntegrationsSettings.svelte';
   import { chat, selectionLabel, routing } from '../lib/chat.svelte';
   import { rolesFor } from '../../../../packages/contracts/src/index';
   import { library } from '../lib/library.svelte';
@@ -26,7 +27,7 @@
     onRerunSetup: () => void;
   } = $props();
 
-  const TABS = ['You', 'Models', 'Capabilities', 'Advanced'] as const;
+  const TABS = ['You', 'Models', 'Capabilities', 'Integrations', 'Advanced'] as const;
   type Tab = typeof TABS[number];
   const TAB_KEY = 'talo.settings.tab';
   function initialTab(): Tab {
@@ -238,7 +239,7 @@
             </div>
           </div>
           <div class="row">
-            <div class="what"><strong>Model selection</strong><small>Auto picks models and thinking for you; Manual keeps your picks.</small></div>
+            <div class="what"><strong>Model selection</strong><small>Auto picks the model for the provider you choose; Manual picks models yourself.</small></div>
             <div class="how">
               <div class="seg" role="group" aria-label="Model selection">
                 <button aria-pressed={settings.routing !== 'manual'} onclick={() => void onPersist({ routing: 'auto' })}>Auto</button>
@@ -293,6 +294,10 @@
         </details>
       {/if}
     </div>
+  {/if}
+
+  {#if tab === 'Integrations'}
+    <div class="tabpanel" role="tabpanel" aria-label="Integrations"><IntegrationsSettings /></div>
   {/if}
 
   {#if tab === 'Advanced'}

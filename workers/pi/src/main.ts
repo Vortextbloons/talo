@@ -6,6 +6,7 @@ import { createWebTools, WEB_TOOLS, WebTransport } from './web.js';
 import { createBrowserTools, BROWSER_TOOLS } from './browser.js';
 import { createAgentTools, AGENT_TOOL } from './agent.js';
 import { createDelegationTools, DELEGATION_TOOL } from './delegation.js';
+import { activityFor } from './activity.js';
 import { McpManager } from './mcp.js';
 import type { Authorize } from './mcp.js';
 import { ToolRegistry } from './registry.js';
@@ -80,11 +81,11 @@ const authorizeFor = async(generation: Generation | null | undefined, action:str
     }
     return REGISTERED_TOOLS.includes(scope as any)&&!disabledTools.has(scope);
   }
-  const result=await permissionTransport.request('permission',{action,scope,summary},signal,90_000);
+  const result=await permissionTransport.request('permission',{action,scope,summary,conversationId:generation?.conversationId,generationId:generation?.id},signal,90_000);
   return result?.allowed===true;
 };
 const authorize: Authorize = (action,scope,summary,signal) => authorizeFor(
-  [...sessions.values()].find(record => record.generation && !record.generation.finalized)?.generation,
+  undefined,
   action, scope, summary, signal,
 );
 const registry = new ToolRegistry(authorize);
@@ -271,6 +272,7 @@ interface SessionRecord {
   error?: string;
   generation: Generation | null;
   lastTurn: LastTurn | undefined;
+  activityArgs: Map<string, unknown>;
   unsubscribe: (() => void) | undefined;
   closing: boolean;
   setContext: (context: string) => void;
@@ -481,6 +483,16 @@ function liveAssistant(record: SessionRecord, generation: Generation): ChatMessa
   return message;
 }
 
+function emitActivity(record: SessionRecord, generation: Generation, id: string, tool: string, args: unknown, state: 'running' | 'completed' | 'failed' | 'cancelled'): void {
+  const activity = activityFor(id, tool, args, state);
+  sendChat({
+    type: 'activity',
+    conversationId: record.conversationId,
+    generationId: generation.id,
+    activity,
+  } as ChatEvent);
+}
+
 function handleSessionEvent(record: SessionRecord, event: AgentSessionEvent): void {
   if (event.type === 'compaction_end' && event.result && !event.aborted) {
     send({ type: 'chat', event: { type: 'context', conversationId: record.conversationId, compacted: true, usage: record.session.getContextUsage() ?? null } });
@@ -488,6 +500,17 @@ function handleSessionEvent(record: SessionRecord, event: AgentSessionEvent): vo
   const generation = record.generation;
   if (!generation || generation.finalized || record.closing) return;
   lastActivity = Date.now();
+  if (event.type === 'tool_execution_start') {
+    record.activityArgs.set(event.toolCallId, event.args);
+    emitActivity(record, generation, event.toolCallId, event.toolName, event.args, 'running');
+    return;
+  }
+  if (event.type === 'tool_execution_end') {
+    const args = record.activityArgs.get(event.toolCallId);
+    record.activityArgs.delete(event.toolCallId);
+    emitActivity(record, generation, event.toolCallId, event.toolName, args, event.isError ? 'failed' : 'completed');
+    return;
+  }
   if (event.type === 'message_start') {
     if (event.message.role !== 'assistant') return;
     generation.text = '';
@@ -842,6 +865,7 @@ function finalizeGeneration(record: SessionRecord, generation: Generation): Prom
       ...(error ? { error } : {}),
     };
     generation.finalized = true;
+    record.activityArgs.clear();
     emitGeneration(record, generation, state, {
       text,
       message: assistant,
@@ -1026,7 +1050,7 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
           if (!record?.generation || record.generation.finalized) return;
           process.stdout.write(`${JSON.stringify({ type: 'chat', event: { type: 'research', conversationId, generationId: record.generation.id, activity } })}
 `);
-        }, conversationId)], () => capabilities.browser, sessionAuthorize);
+        }, conversationId, () => sessionRecord?.generation?.id)], () => capabilities.browser, sessionAuthorize);
     const agentTools=registry.wrap([...createAgentTools(agentTransport, conversationId)], undefined, sessionAuthorize);
     const delegationTools = params.delegation === true
       ? registry.wrap([...createDelegationTools(delegationTransport, conversationId)], undefined, sessionAuthorize)
@@ -1103,6 +1127,7 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
       sequence: 0,
       generation: null,
       lastTurn: restoreRetryableTurn(session),
+      activityArgs: new Map(),
       unsubscribe: undefined,
       closing: false,
       setContext: context => {

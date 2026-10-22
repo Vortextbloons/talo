@@ -24,7 +24,7 @@ function apply(state: LibraryState): void {
   chat.conversations=state.conversations;
   if(chat.active) {
     const info=state.conversations.find(c=>c.id===chat.active?.conversation.id);
-    if(!info || info.workspaceId!==state.activeWorkspace || info.archived) chat.active=null;
+    if(!info || (info.id!=='talo-primary' && info.workspaceId!==state.activeWorkspace) || info.archived) chat.active=null;
     else chat.active.conversation=info;
   }
 }

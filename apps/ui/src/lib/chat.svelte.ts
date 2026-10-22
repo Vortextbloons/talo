@@ -9,6 +9,7 @@ import type {
   ConnectionInfo,
   ConversationInfo,
   ConversationSnapshot,
+  DelegationActivity,
   DelegationTask,
   GenerationState,
   ModelSelection,
@@ -35,6 +36,8 @@ export interface DiscoveryState {
 
 export interface ChatStore {
   research: Record<string, ResearchActivity[]>;
+  /** Delegated child tasks created during a generation, so the chat can show the call inline. */
+  delegated: Record<string, string[]>;
   initialized: boolean;
   preview: boolean;
   phase: 'idle' | 'loading' | 'ready' | 'error';
@@ -61,10 +64,12 @@ export interface ChatStore {
   child: ConversationSnapshot | null;
   childParent: ConversationInfo | null;
   childLoading: boolean;
+  activity: Record<string, DelegationActivity[]>;
 }
 
 export const chat: ChatStore = $state({
   research: {},
+  delegated: {},
   initialized: false,
   preview: false,
   phase: 'idle',
@@ -91,11 +96,13 @@ export const chat: ChatStore = $state({
   child: null,
   childParent: null,
   childLoading: false,
+  activity: {},
 });
 
 const EVENT_NAME = 'talo://chat';
 const PREVIEW_MESSAGE = 'Open the desktop app to chat.';
 
+let telegramUnlisten: UnlistenFn | undefined;
 let unlisten: UnlistenFn | undefined;
 let queuedEvents: ChatEvent[] | null = null;
 let openToken = 0;
@@ -345,6 +352,15 @@ function applyDelegation(task: DelegationTask): void {
   if (active && active.conversation.id === task.parentConversationId) {
     active.delegations = [...(active.delegations ?? []).filter(item => item.id !== task.id), task]
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    const generationId = active.generationId;
+    if (generationId) {
+      const ids = chat.delegated[generationId] ?? [];
+      if (!ids.includes(task.id)) {
+        chat.delegated[generationId] = [...ids, task.id];
+        const keys = Object.keys(chat.delegated);
+        if (keys.length > 100) delete chat.delegated[keys[0]];
+      }
+    }
   }
   if (chat.child && chat.child.conversation.id === task.childConversationId) {
     chat.child.state = task.state === 'waiting' ? 'generating' : chat.child.state;
@@ -415,6 +431,16 @@ function handleGenerationEvent(event: Extract<ChatEvent, { type: 'generation' }>
 function handleEvent(event: ChatEvent): void {
   if (event.type === 'delegation') {
     applyDelegation(event.task);
+    return;
+  }
+  if (event.type === 'activity') {
+    const list = [...(chat.activity[event.taskId] ?? [])];
+    const index = list.findIndex(item => item.id === event.activity.id);
+    if (index >= 0) list[index] = { ...list[index], ...event.activity };
+    else list.push(event.activity);
+    chat.activity[event.taskId] = list.slice(-100);
+    const task = chat.active?.delegations?.find(item => item.id === event.taskId);
+    if (task) task.currentActivity = event.activity.label;
     return;
   }
   if (event.type === 'queue') {
@@ -515,6 +541,9 @@ export async function initChat(): Promise<void> {
       if (queuedEvents) queuedEvents.push(event.payload);
       else handleEvent(event.payload);
     });
+    telegramUnlisten = await listen('telegram-message', () => {
+      if (chat.active?.conversation.id === 'talo-primary') scheduleReconcile('talo-primary', 0);
+    });
     const bootstrap = await invoke<ChatBootstrap>('chat_bootstrap');
     applyBootstrap(bootstrap);
     chat.phase = 'ready';
@@ -535,6 +564,8 @@ export async function initChat(): Promise<void> {
 export function disposeChat(): void {
   unlisten?.();
   unlisten = undefined;
+  telegramUnlisten?.();
+  telegramUnlisten = undefined;
   if (reconcileTimer) clearTimeout(reconcileTimer);
   if (stopFallback) clearTimeout(stopFallback);
   reconcileTimer = undefined;
@@ -729,10 +760,7 @@ export async function createConversation(): Promise<boolean> {
     chat.child = null;
     chat.childParent = null;
     if (!snapshot.conversation.selection) chat.draftSelection = null;
-    if (routing.mode === 'auto' && selection) {
-      const roles = rolesFor(chat.connections.find(item => item.id === selection.connectionId)?.providerId ?? '');
-      if (roles) void setThinkingLevel(routing.tier === 'economy' ? roles.economyPilot.effort : roles.smartPilot.effort);
-    }
+    if (selection) applyRoutingEffort(selection.connectionId);
     return true;
   } catch (value) {
     chat.error = errorMessage(value);
@@ -766,6 +794,13 @@ export async function openConversation(conversationId: string): Promise<boolean>
   }
 }
 
+/** In Auto, pinning a pilot also pins the tier's thinking level for that conversation. */
+function applyRoutingEffort(connectionId: string): void {
+  if (routing.mode !== 'auto') return;
+  const roles = rolesFor(chat.connections.find(item => item.id === connectionId)?.providerId ?? '');
+  if (roles) void setThinkingLevel(routing.tier === 'economy' ? roles.economyPilot.effort : roles.smartPilot.effort);
+}
+
 export async function chooseModel(selection: ModelSelection | null): Promise<void> {
   if (!selection) return;
   if (isWorking()) {
@@ -785,6 +820,7 @@ export async function chooseModel(selection: ModelSelection | null): Promise<voi
     });
     upsertConversation(info);
     if (chat.active?.conversation.id === info.id) chat.active.conversation = info;
+    applyRoutingEffort(selection.connectionId);
   } catch (value) {
     chat.error = errorMessage(value);
   } finally {
@@ -999,6 +1035,7 @@ export async function openDelegationTask(taskId: string): Promise<boolean> {
     });
     chat.child = { ...snapshot, delegations: snapshot.delegations ?? [], queued: snapshot.queued ?? [] };
     chat.childParent = snapshot.parentConversation ?? null;
+    chat.activity[taskId] = snapshot.delegationActivity ?? [];
     return true;
   } catch (value) {
     chat.error = errorMessage(value);

@@ -269,6 +269,26 @@ impl ChatState {
                 emit_worker(app, WorkerState::Failed, Some(sanitize_error(&message)));
             }
             WorkerSignal::Chat(value) => {
+                if value.get("type").and_then(Value::as_str) == Some("activity") {
+                    let generation = value.get("generationId").and_then(Value::as_str).unwrap_or("");
+                    let conversation = value.get("conversationId").and_then(Value::as_str).unwrap_or("");
+                    if self.active.get(generation).is_some_and(|active| active.conversation_id == conversation) {
+                        let activity = value.get("activity").cloned().unwrap_or(Value::Null);
+                        if let Ok(Some((task_id, parent, activity))) =
+                            crate::delegation::record_activity(db, conversation, generation, &activity)
+                        {
+                            let _ = app.emit("talo://chat", json!({
+                                "type": "activity",
+                                "taskId": task_id,
+                                "parentConversationId": parent,
+                                "conversationId": conversation,
+                                "generationId": generation,
+                                "activity": activity,
+                            }));
+                        }
+                    }
+                    return;
+                }
                 if value.get("type").and_then(Value::as_str) == Some("research") {
                     let id = value.get("generationId").and_then(Value::as_str).unwrap_or("");
                     let conversation = value.get("conversationId").and_then(Value::as_str).unwrap_or("");
@@ -766,6 +786,7 @@ fn snapshot(
         .ok()
         .flatten()
         .and_then(|parent| storage::get_conversation(db, &parent).ok());
+    let delegation_activity = crate::delegation::activity_for_conversation(db, &conversation.id);
     Ok(ConversationSnapshot {
         conversation,
         messages,
@@ -779,6 +800,7 @@ fn snapshot(
         delegations,
         queued,
         parent_conversation,
+        delegation_activity,
     })
 }
 
@@ -974,21 +996,10 @@ fn parse_models(result: Value) -> Result<Vec<ProviderModelInfo>, String> {
 }
 
 fn chat_bootstrap_inner(host: &mut Host) -> Result<ChatBootstrap, String> {
+    crate::primary::ensure(&host.db).map_err(storage_error)?;
     let conversations = storage::list_conversations(&host.db).map_err(storage_error)?;
     let connections = storage::list_connections(&host.db).map_err(storage_error)?;
-    let selected = crate::library::setting(&host.db, "active_conversation", "");
-    let workspace = crate::library::setting(&host.db, "active_workspace", "general");
-    let active = match conversations
-        .iter()
-        .find(|c| c.id == selected && !c.archived && c.workspace_id == workspace)
-        .or_else(|| {
-            conversations
-                .iter()
-                .find(|c| !c.archived && c.workspace_id == workspace)
-        }) {
-        Some(conversation) => Some(conversation_open_inner(host, conversation.id.clone())?),
-        None => None,
-    };
+    let active = Some(conversation_open_inner(host, crate::primary::ID.into())?);
     Ok(ChatBootstrap {
         conversations,
         connections,
@@ -2186,6 +2197,7 @@ mod tests {
             .unwrap();
         storage::init(&db).unwrap();
         let mut host = Host {
+            telegram: crate::telegram::Telegram::default(),
             integrations: crate::integrations::Integrations::default(),
             db,
             supervisor: Supervisor::new(

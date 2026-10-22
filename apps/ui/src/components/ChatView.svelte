@@ -1,18 +1,20 @@
 <script lang="ts">
+  import { PRIMARY_CONVERSATION_ID } from '../../../../packages/contracts/src/telegram';
   import LibrarySidebar from './LibrarySidebar.svelte';
   import { library, mutateLibrary } from '../lib/library.svelte';
   import { tick, untrack, onMount } from 'svelte';
   import mascot from '../../../../packages/design/mascot.svg';
   import type { ChatMessage } from '../../../../packages/contracts/src/chat';
   import type { ThinkingLevelName } from '../../../../packages/contracts/src/index';
+  import { rolesFor } from '../../../../packages/contracts/src/index';
   import VirtualMessage from './VirtualMessage.svelte';
   import MessageBody from './MessageBody.svelte';
   import Reasoning from './Reasoning.svelte';
   import WebResearch from './WebResearch.svelte';
   import AgentCompanion from './AgentCompanion.svelte';
   import AskCard from './AskCard.svelte';
-  import DelegationTasks from './DelegationTasks.svelte';
   import ChildTaskView from './ChildTaskView.svelte';
+  import DelegationCalls from './DelegationCalls.svelte';
   import { asksFor } from '../lib/agent.svelte';
   import { browser, openBrowser, closeBrowser, selectBrowserSession, setBrowserWorkspaceVisible } from '../lib/browser.svelte';
   import {
@@ -27,8 +29,6 @@
     modelsFor,
     openConversation,
     openDelegationTask,
-    cancelAllDelegations,
-    cancelDelegation,
     parseSelectionKey,
     isSelectionAvailable,
     retryGeneration,
@@ -43,10 +43,6 @@
 
   let { onOpenSettings, name, tagline, showReasoning, agentName = 'Talo', onRenameAgent }: { onOpenSettings: () => void; name: string; tagline: string; showReasoning?: boolean; agentName?: string; onRenameAgent: (name: string) => Promise<void> } = $props();
 
-  const THREADS_KEY = 'talo.threads.open';
-  function initialThreadsOpen(): boolean {
-    try { return localStorage.getItem(THREADS_KEY) === '1'; } catch { return false; }
-  }
   let showArchived = $state(false);
   let confirmingDelete = $state<string | null>(null);
   let text = $state('');
@@ -61,19 +57,6 @@
   let viewingImage = $state<string | null>(null);
   let viewingName = $state<string | null>(null);
   let fileInput = $state<HTMLInputElement>();
-  let threadsOpen = $state(initialThreadsOpen());
-  function toggleThreads(): void {
-    threadsOpen = !threadsOpen;
-    try { localStorage.setItem(THREADS_KEY, threadsOpen ? '1' : '0'); } catch { /* storage can be unavailable */ }
-  }
-  /* The strip keeps a handful of conversations one click away; hovering opens the full list over the chat. */
-  const railThreads = $derived(chat.conversations
-    .filter(c => (c.workspaceId ?? 'general') === library.activeWorkspace && Boolean(c.archived) === showArchived)
-    .slice(0, 8));
-  function threadInitial(title: string): string {
-    const words = title.trim().split(/\s+/u).filter(Boolean);
-    return (words[0]?.[0] ?? '·').toUpperCase();
-  }
   let logEl = $state<HTMLDivElement>();
   let composerEl = $state<HTMLTextAreaElement>();
   let pinned = true;
@@ -98,10 +81,25 @@
   let thinkingTriggerEl = $state<HTMLButtonElement>();
 
   const active = $derived(chat.active);
+  const primary = $derived(active?.conversation.id === PRIMARY_CONVERSATION_ID);
+  const primaryWaiting = $derived(asksFor(PRIMARY_CONVERSATION_ID).length);
+  const otherChats = $derived(chat.conversations.filter(c => c.id !== PRIMARY_CONVERSATION_ID && (c.workspaceId ?? 'general') === library.activeWorkspace && Boolean(c.archived) === showArchived));
   const messages = $derived(chat.active?.messages ?? []);
   const delegations = $derived(chat.active?.delegations ?? []);
+  function calledTasks(generationId?: string | null) {
+    const ids = generationId ? chat.delegated[generationId] : undefined;
+    if (!ids?.length) return [];
+    return ids.flatMap(id => { const task = delegations.find(item => item.id === id); return task ? [task] : []; });
+  }
+  /* Calls made before this session restored the chat have no generation to sit under. */
+  const unattachedTasks = $derived.by(() => {
+    const attached = new Set(Object.values(chat.delegated).flat());
+    return delegations.filter(task => !attached.has(task.id));
+  });
   const queued = $derived(chat.active?.queued ?? []);
   const working = $derived(chat.active?.state === 'generating' || chat.active?.state === 'cancelling');
+  const activeTasks = $derived(delegations.filter(task => ['queued', 'running', 'waiting'].includes(task.state)).length);
+  const primaryStatus = $derived(primaryWaiting ? 'Needs your answer' : primary && working ? 'Working on your request' : primary && activeTasks ? `Working on ${activeTasks} ${activeTasks === 1 ? 'task' : 'tasks'}` : 'Your ongoing conversation');
   const cancelling = $derived(chat.active?.state === 'cancelling');
   const connected = $derived(chat.connections.filter(connection => connection.connected));
   const selection = $derived(chat.active?.conversation.selection ?? chat.draftSelection);
@@ -122,6 +120,24 @@
   const pickerGroups = $derived.by(() => {
     const groups: PickerGroup[] = [];
     for (const group of modelGroups) {
+      /* Auto replaces each curated provider's catalog with its tier pilot: pick the provider, Talo picks the model. */
+      const roles = routing.mode === 'auto' ? rolesFor(group.connection.providerId) : undefined;
+      const pick = roles ? (routing.tier === 'economy' ? roles.economyPilot : roles.smartPilot) : undefined;
+      if (pick) {
+        const pilot = group.models.find(model => model.id === pick.model);
+        groups.push({
+          id: group.connection.id,
+          name: group.connection.name,
+          options: [{
+            key: `${group.connection.id}::${pick.model}`,
+            label: pilot?.name ?? pick.model,
+            reasoning: pilot?.reasoning ?? false,
+            disabled: working,
+            selected: selectedKey === `${group.connection.id}::${pick.model}`,
+          }],
+        });
+        continue;
+      }
       const options: PickerOption[] = group.models.map(model => ({
         key: `${group.connection.id}::${model.id}`,
         label: model.name,
@@ -192,7 +208,7 @@
   );
 
   $effect(() => {
-    const id = chat.active?.conversation.id ?? 'primary';
+    const id = chat.child?.conversation.id ?? chat.active?.conversation.id ?? 'primary';
     untrack(() => selectBrowserSession(id));
   });
   onMount(() => { setBrowserWorkspaceVisible(true); return () => setBrowserWorkspaceVisible(false); });
@@ -619,30 +635,20 @@
 <svelte:window onpointerdown={onWindowPointerDown} onkeydown={(event) => { if (event.key === 'Escape' && (confirmingDelete || viewingImage)) { confirmingDelete = null; viewingImage = null; } }} />
 
 <div class="chat-workspace">
-<div class="chat-layout" class:rail-open={threadsOpen}>
+<div class="chat-layout">
   <aside class="threads" aria-label="Conversations">
-    <div class="rail-mini">
-      <button class="mini-new" disabled={chat.creating || chat.preview} title="New conversation" aria-label="New conversation" onclick={() => { void createConversation(); }}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 5.5v13M5.5 12h13"/></svg>
-      </button>
-      {#each railThreads as conversation (conversation.id)}
-        <button class="mini-thread" class:active={chat.active?.conversation.id === conversation.id} disabled={chat.creating} title={conversation.title || 'New conversation'} aria-label={conversation.title || 'New conversation'} onclick={() => { confirmingDelete = null; void openConversation(conversation.id); }}>
-          <span>{threadInitial(conversation.title || '')}</span>
-        </button>
-      {/each}
-      <button class="mini-open" title="All threads" aria-label="Show all threads" aria-expanded={threadsOpen} onclick={toggleThreads}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9.5 5.5 6.5 6.5-6.5 6.5"/></svg>
-      </button>
-    </div>
-    <div class="rail-full">
     <div class="rail-inner">
       <div class="rail-greeting">
         <strong>{greeting}</strong>
         <span>{tagline}</span>
       </div>
+      <button class="primary-chat" class:selected={primary} disabled={chat.creating || chat.preview} aria-current={primary ? 'true' : undefined} onclick={() => { void openConversation(PRIMARY_CONVERSATION_ID); }}>
+        <span class="primary-avatar"><img src={mascot} alt="" /><span class:busy={primary && (working || activeTasks > 0)}></span></span>
+        <span class="primary-copy"><strong>{agentName}</strong><small>{primaryStatus}</small></span>
+      </button>
       <LibrarySidebar bind:showArchived />
       <div class="threads-head">
-        <span>Threads</span>
+        <span>Other chats</span>
         <div class="threads-actions">
           <button
             class="new-thread"
@@ -650,12 +656,11 @@
             title="Start a new conversation"
             onclick={() => { void createConversation(); }}
           >New</button>
-          <button class="rail-toggle" title="Hide threads" aria-label="Hide thread list" aria-expanded={threadsOpen} onclick={toggleThreads}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="3.5"/><path d="M9.5 4.5v15"/></svg></button>
         </div>
       </div>
-      {#if chat.conversations.length}
+      {#if otherChats.length}
         <ul class="thread-list">
-          {#each chat.conversations.filter(c => (c.workspaceId ?? 'general') === library.activeWorkspace && Boolean(c.archived) === showArchived) as conversation (conversation.id)}
+          {#each otherChats as conversation (conversation.id)}
             <li class:active={chat.active?.conversation.id === conversation.id}>
               <button
                 class="thread-open"
@@ -692,22 +697,21 @@
           {/each}
         </ul>
       {:else}
-        <p class="threads-empty">Your first message starts a thread here.</p>
+        <p class="threads-empty">Start a separate chat for a focused topic.</p>
       {/if}
       {#if working}<p class="threads-note">Talo is replying. You can switch chats; new messages to this chat queue in order.</p>{/if}
-    </div>
     </div>
   </aside>
 
   <section class="conversation" aria-label="Conversation">
     {#if chat.child}
-      <ChildTaskView snapshot={chat.child} parent={chat.childParent} task={delegations.find(task => task.childConversationId === chat.child?.conversation.id) ?? null} agentName={agentName} onBack={closeDelegationTask} />
+      <ChildTaskView snapshot={chat.child} parent={chat.childParent} task={delegations.find(task => task.childConversationId === chat.child?.conversation.id) ?? null} activity={chat.activity[delegations.find(task => task.childConversationId === chat.child?.conversation.id)?.id ?? ''] ?? []} agentName={agentName} onBack={closeDelegationTask} />
     {:else}
     <div class="conversation-head">
       <div class="conversation-lead">
         <div class="conversation-title">
-          <strong>{active?.conversation.title || 'A new conversation'}</strong>
-          <span>{selection ? selectionLabel(selection) : 'No model chosen yet'}</span>
+          <strong>{primary ? agentName : active?.conversation.title || 'A new conversation'}</strong>
+          <span>{primary ? primaryStatus : selection ? selectionLabel(selection) : 'No model chosen yet'}</span>
         </div>
       </div>
 
@@ -726,13 +730,6 @@
         <button aria-label="Dismiss notice" onclick={dismissNotice}>×</button>
       </div>
     {/if}
-
-    <DelegationTasks
-      tasks={delegations}
-      onOpen={(task) => { void openDelegationTask(task.id); }}
-      onCancel={(task) => { void cancelDelegation(task.id); }}
-      onCancelAll={() => { const id = chat.active?.conversation.id; if (id) void cancelAllDelegations(id); }}
-    />
 
     {#if chat.phase === 'loading'}
       <div class="welcome connect" role="status">
@@ -789,6 +786,9 @@
                 {#if item.firstOfGeneration && item.turns[0].generationId && chat.research[item.turns[0].generationId]?.length}
                   <WebResearch items={chat.research[item.turns[0].generationId]} working={chat.active?.generationId === item.turns[0].generationId} onCancel={() => void stopGeneration()} />
                 {/if}
+                {#if calledTasks(item.turns[0].generationId).length}
+                  <DelegationCalls tasks={calledTasks(item.turns[0].generationId)} onOpen={(task) => { void openDelegationTask(task.id); }} />
+                {/if}
                 {#if showReasoning && item.turns.some(turn => turn.reasoning)}
                   <button type="button" class="turns-toggle" aria-expanded={Boolean(expandedTurns[item.id])} onclick={() => toggleTurns(item.id)}>
                     <svg class="turns-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9.5 6 6 6-6" /></svg>
@@ -821,6 +821,9 @@
               </div>
               {#if message.role === 'assistant' && message.generationId && chat.research[message.generationId]?.length && !messages.slice(0,index).some(previous => previous.role === 'assistant' && previous.generationId === message.generationId)}
                 <WebResearch items={chat.research[message.generationId]} working={message.status === 'generating'} onCancel={() => void stopGeneration()} />
+              {/if}
+              {#if message.role === 'assistant' && message.generationId && calledTasks(message.generationId).length}
+                <DelegationCalls tasks={calledTasks(message.generationId)} onOpen={(task) => { void openDelegationTask(task.id); }} />
               {/if}
               {#if message.attachments?.length}
                 <div class="message-images">
@@ -866,6 +869,9 @@
           {/if}
           </VirtualMessage>
         {/each}
+        {#if unattachedTasks.length}
+          <DelegationCalls tasks={unattachedTasks} onOpen={(task) => { void openDelegationTask(task.id); }} />
+        {/if}
       </div>
       {#if active?.after}<button class="secondary" onclick={() => void latest()}>Jump to latest</button>{/if}
     {/if}
@@ -1102,38 +1108,19 @@
 {/if}
 
 <style>
+  .primary-chat{display:flex;align-items:center;gap:12px;text-align:left;width:100%;padding:14px 12px;margin:2px 0 18px;border:1px solid var(--line-strong);border-radius:12px;background:var(--soft);color:var(--text);cursor:pointer}
+  .primary-chat.selected{background:#302d20;border-color:#655a32}.primary-chat:hover:not(:disabled){border-color:var(--yellow-deep)}.primary-chat:disabled{opacity:.5;cursor:not-allowed}.primary-avatar{position:relative;flex-shrink:0}.primary-avatar img{display:block;width:34px;height:34px}.primary-avatar>span{position:absolute;right:-2px;bottom:0;width:8px;height:8px;background:#9fb398;border:2px solid var(--panel);border-radius:50%}.primary-avatar>span.busy{background:var(--yellow)}.primary-copy{display:grid;gap:5px;min-width:0}.primary-copy strong{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.primary-copy small{font-size:10.5px;color:var(--muted);line-height:1.4}
+
   /* One full-height surface: the rail holds threads, the column holds the conversation. */
   .chat-workspace{flex:1;min-height:0;min-width:0;display:flex;position:relative}
   .browser-chip,.skill-chip{display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 9px;color:var(--muted);font-size:10px;white-space:nowrap}.browser-chip svg,.skill-chip svg{width:14px;height:14px}.browser-chip:hover:not(:disabled),.browser-chip.browser-active,.skill-chip:hover:not(:disabled){color:var(--yellow);border-color:var(--line-strong)}.skill-chip:disabled{opacity:.45;cursor:not-allowed}.browser-dot{width:4px;height:4px;background:var(--yellow);border-radius:50%;animation:pulse 1.5s ease-in-out infinite}
-  .chat-layout{--rail-mini:56px;--rail-w:240px;flex:1;min-width:0;min-height:0;display:grid;grid-template-columns:var(--rail-mini) minmax(0,1fr);transition:grid-template-columns .18s cubic-bezier(.2,.7,.3,1)}
+  .chat-layout{--rail-w:240px;flex:1;min-width:0;min-height:0;display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr)}
   .chat-layout>*{min-width:0}
-  .chat-layout.rail-open{grid-template-columns:var(--rail-w) minmax(0,1fr)}
-  .threads{position:relative;z-index:2;border-right:1px solid var(--line);min-height:0;overflow:visible;transition:border-color .2s ease}
-  /* A narrow strip keeps new-chat and recent conversations visible; the full list floats over
-     the conversation on hover, or stays put when the pin is on. */
-  .rail-mini{width:var(--rail-mini);height:100%;display:flex;flex-direction:column;align-items:center;gap:6px;padding:2px 0 8px;overflow:hidden}
-  .mini-new{width:34px;height:34px;flex-shrink:0;display:grid;place-items:center;padding:0;border:1px solid var(--line-strong);border-radius:9px;background:transparent;color:var(--muted)}
-  .mini-new svg{width:15px;height:15px}
-  .mini-new:hover:not(:disabled){color:var(--yellow);border-color:var(--yellow-deep)}
-  .mini-thread{position:relative;width:34px;height:34px;flex-shrink:0;display:grid;place-items:center;padding:0;border:1px solid transparent;border-radius:50%;background:var(--soft);color:var(--muted);font-size:12.5px;font-weight:550}
-  .mini-thread:hover:not(:disabled){color:var(--text);border-color:var(--line-strong)}
-  .mini-thread.active{color:var(--text);background:rgba(255,212,92,.1);border-color:rgba(255,212,92,.45)}
-  .mini-thread.active::before{content:"";position:absolute;left:-11px;top:10px;bottom:10px;width:2px;border-radius:2px;background:var(--yellow)}
-  .mini-open{margin-top:auto;width:30px;height:30px;flex-shrink:0;display:grid;place-items:center;padding:0;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--muted)}
-  .mini-open svg{width:13px;height:13px}
-  .mini-open:hover{color:var(--text);border-color:var(--line-strong);background:var(--soft)}
-  .rail-full{position:absolute;inset:0 auto 0 0;width:var(--rail-w);background:var(--bg);border-right:1px solid var(--line);box-shadow:20px 0 44px rgba(0,0,0,.45);opacity:0;pointer-events:none;transform:translateX(-8px);transition:opacity .16s ease,transform .16s ease}
-  .threads:hover .rail-full,.threads:focus-within .rail-full,.rail-open .rail-full{opacity:1;pointer-events:auto;transform:none}
-  .rail-open .rail-full{position:static;width:100%;box-shadow:none;border-right:0}
-  .rail-open .rail-mini{display:none}
+  .threads{position:relative;z-index:2;border-right:1px solid var(--line);min-height:0;overflow:visible}
   .rail-inner{width:100%;height:100%;padding:2px 20px 8px 0;overflow-y:auto;display:flex;flex-direction:column;scrollbar-gutter:stable}
   .rail-greeting{padding:6px 2px 20px}
   .rail-greeting strong{display:block;font-size:21px;letter-spacing:-.8px;font-weight:560}
   .rail-greeting span{display:block;margin-top:6px;font-size:12px;color:var(--muted);line-height:1.55}
-  .threads-reopen{display:inline-flex;align-items:center;justify-content:center;gap:7px;flex-shrink:0;background:transparent;border:1px solid transparent;border-radius:7px;color:var(--faint);padding:5px;line-height:1;transition:color .15s ease,border-color .15s ease,background .15s ease}
-  .rail-toggle{display:inline-flex;align-items:center;justify-content:center;gap:7px;flex-shrink:0;background:transparent;border:1px solid transparent;border-radius:7px;color:var(--faint);padding:5px;line-height:1;transition:color .15s ease,border-color .15s ease,background .15s ease}
-  .rail-toggle svg{width:15px;height:15px}
-  .rail-toggle:hover,.threads-reopen:hover{color:var(--text);border-color:var(--line-strong);background:var(--soft)}
   .threads-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
   .threads-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
   .threads-head>span{font-size:10.5px;color:var(--faint);letter-spacing:.1em;text-transform:uppercase}
@@ -1316,7 +1303,7 @@
   @keyframes mascot-bob{0%,100%{transform:translateY(1px) rotate(-1.5deg)}50%{transform:translateY(-3px) rotate(1.5deg)}}
   @keyframes stop-pulse{50%{border-color:var(--yellow-deep);box-shadow:0 0 0 3px rgba(255,212,92,.08)}}
   @media(max-width:980px){
-    .chat-layout{--rail-mini:50px;--rail-w:216px}
+    .chat-layout{--rail-w:216px}
     .conversation{padding-left:12px}
     .rail-inner{padding:0 16px 8px 0}
   }
@@ -1333,7 +1320,7 @@
   }
   @media(prefers-reduced-motion:reduce){
     .typing i,.cursor,.send[aria-busy="true"] svg,.loading-dot{animation:none}
-    .picker-chevron,.chat-layout,.threads,.rail-inner,.conversation,.rail-full,.mini-thread{transition:none}
+    .picker-chevron,.rail-inner,.conversation{transition:none}
   }
   @media(prefers-reduced-motion:reduce){
     .avatar.busy,.welcome img,.stop,.browser-dot,.message{animation:none}

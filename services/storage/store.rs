@@ -114,6 +114,7 @@ pub fn init(db: &Connection) -> Result<()> {
             "INSERT INTO schema_migrations(version) VALUES(3); PRAGMA user_version=3; COMMIT",
         )?;
     }
+    db.execute_batch(include_str!("telegram.sql"))?;
     Ok(())
 }
 
@@ -214,6 +215,8 @@ pub struct ConversationSnapshot {
     pub queued: Vec<QueuedTurnInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_conversation: Option<ConversationInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegation_activity: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1483,6 +1486,7 @@ mod tests {
             delegations: Vec::new(),
             queued: Vec::new(),
             parent_conversation: None,
+            delegation_activity: Vec::new(),
         };
         let value = serde_json::to_value(&snapshot).unwrap();
         // The UI Stop control reads snapshot.generationId; serializing generation_id would

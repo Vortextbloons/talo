@@ -151,3 +151,24 @@ test('delegation events update only their parent conversation cards', async () =
   api.handleEvent({ type: 'delegation', task: { ...task, id: 'other', parentConversationId: 'other-chat' } });
   assert.equal(api.chat.active.delegations.length, 1);
 });
+
+test('child activity updates the agent card and keeps a bounded timeline', async () => {
+  const api = await store();
+  const task = {
+    id: 'task-1', parentConversationId: 'chat', childConversationId: 'child-1',
+    title: 'Read the RFC', brief: 'Summarize it', state: 'running', delivered: false,
+    createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z',
+  };
+  api.applySnapshot(snapshot({ messages: [], delegations: [task] }));
+  const event = (state) => ({
+    type: 'activity', taskId: 'task-1', parentConversationId: 'chat',
+    conversationId: 'child-1', generationId: 'gen-child',
+    activity: { id: 'call-1', tool: 'tools', label: 'Searching the web', detail: 'Rust docs', state },
+  });
+  api.handleEvent(event('running'));
+  assert.equal(api.chat.active.delegations[0].currentActivity, 'Searching the web');
+  assert.equal(api.chat.activity['task-1'].length, 1);
+  api.handleEvent(event('completed'));
+  assert.equal(api.chat.activity['task-1'][0].state, 'completed');
+  assert.equal(api.chat.activity['task-1'].length, 1);
+});
