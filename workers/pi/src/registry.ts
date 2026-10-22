@@ -7,7 +7,7 @@ export class ToolRegistry {
   private entries = new Map<string, ManagedTool>();
   constructor(private authorize: Authorize) {}
   list() {return [...this.entries.values()];}
-  wrap(tools: ToolDefinition[], allow?: (name: string) => boolean):ToolDefinition[] {
+  wrap(tools: ToolDefinition[], allow?: (name: string) => boolean, authorize: Authorize = this.authorize):ToolDefinition[] {
     if(new Set(tools.map(t=>t.name)).size!==tools.length)throw new Error('Duplicate tool registration.');
     return tools.map(tool=>{
       const category = tool.name.startsWith('web_')?'Web Research':tool.name.startsWith('browser_')?'Browser':['mcp','tools','agent'].includes(tool.name)?'Integrations':'Files';
@@ -23,7 +23,7 @@ export class ToolRegistry {
         signal?.throwIfAborted();
         // A workspace bundle can narrow capabilities; the user can widen them in Workspaces.
         if(allow&&!allow(tool.name))throw new Error('This workspace does not include that capability. Ask the user to enable it in Workspaces.');
-        if(!await this.authorize('tool.use',tool.name,tool.label,signal))throw new Error('Tool is disabled or permission was denied.');
+        if(!await authorize('tool.use',tool.name,tool.label,signal))throw new Error('Tool is disabled or permission was denied.');
         const deadline=AbortSignal.any([AbortSignal.timeout(descriptor.timeoutMs),...(signal?[signal]:[])]);
         const result=await tool.execute(id,input,deadline,update,context);
         if(category!=='Files')return result;

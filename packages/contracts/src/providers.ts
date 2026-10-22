@@ -132,11 +132,7 @@ export const PROVIDERS: readonly ProviderDescriptor[] = [
 
 export const DEFAULT_PROVIDER: ProviderId = 'opencode';
 export const CUSTOM_PROVIDER: ProviderId = 'custom';
-export const CUSTOM_API_KEY_ENV = 'TALO_CUSTOM_API_KEY';
 export const CUSTOM_BASE_URL_EXAMPLE = 'http://localhost:11434/v1';
-export const CUSTOM_CONTEXT_WINDOW = 128000;
-export const CUSTOM_MAX_TOKENS = 16384;
-export const PI_MODELS_SCHEMA = 'https://pi.dev/schemas/models.schema.json';
 
 export function isProviderId(value: string): value is ProviderId {
   return PROVIDERS.some(provider => provider.id === value);
@@ -164,71 +160,6 @@ export function parseProviderPreference(value: unknown): ProviderPreference {
 
 export type ThinkingLevelName = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
-export interface PiModelEntry {
-  id: string;
-  name?: string;
-  api?: string;
-  baseUrl?: string;
-  reasoning?: boolean;
-  thinkingLevelMap?: Partial<Record<ThinkingLevelName, string | null>>;
-  input?: ('text' | 'image')[];
-  contextWindow?: number;
-  maxTokens?: number;
-  cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
-}
-export interface PiProviderEntry { baseUrl?: string; api?: string; apiKey?: string; models?: PiModelEntry[] }
-export interface PiModelsJson { $schema: string; providers: Record<string, PiProviderEntry> }
-
-function httpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch { return false; }
-}
-
-export function isLocalEndpoint(value: string): boolean {
-  try {
-    const host = new URL(value).hostname.toLowerCase();
-    return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1' || host === '[::1]' || host.endsWith('.localhost');
-  } catch { return false; }
-}
-
-/**
- * Build the models.json document Talo owns inside Talo's Pi agent directory.
- *
- * Native providers are deliberately omitted: Pi's bundled catalog already carries their
- * endpoints and reasoning metadata, and a `models` list here would replace it. Local
- * endpoints receive a literal placeholder key so they work without configuration. Hosted
- * custom endpoints read `TALO_CUSTOM_API_KEY` from the environment until Talo has a
- * credential store.
- */
-export function modelsJson(preference: ProviderPreference): PiModelsJson {
-  const empty: PiModelsJson = { $schema: PI_MODELS_SCHEMA, providers: {} };
-  if (preference.provider !== CUSTOM_PROVIDER) return empty;
-  const model = preference.model.trim();
-  const baseUrl = preference.baseUrl.trim();
-  if (!model || !httpUrl(baseUrl)) return empty;
-  return {
-    $schema: PI_MODELS_SCHEMA,
-    providers: {
-      [CUSTOM_PROVIDER]: {
-        baseUrl,
-        api: 'openai-completions',
-        apiKey: isLocalEndpoint(baseUrl) ? 'talo-local' : `$${CUSTOM_API_KEY_ENV}`,
-        models: [{
-          id: model,
-          name: model,
-          reasoning: preference.reasoning,
-          input: ['text'],
-          contextWindow: CUSTOM_CONTEXT_WINDOW,
-          maxTokens: CUSTOM_MAX_TOKENS,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        }],
-      },
-    },
-  };
-}
-
 /** Models with reasoning that Talo's bundled Pi registry reports for a provider. */
 export interface ProviderModelInfo {
   id: string;
@@ -240,4 +171,62 @@ export interface ProviderModelInfo {
   /** Input modalities from Pi's registry, e.g. ['text'] or ['text','image']. */
   input: string[];
 }
-export interface ProviderModelList { provider: ProviderId; name: string; native: boolean; models: ProviderModelInfo[] }
+
+/** One routed pick: a provider model id and the thinking level its role runs at. */
+export interface ProviderRoleModel { model: string; effort: ThinkingLevelName }
+
+/**
+ * Curated pilot and worker picks for a provider, researched against Pi's bundled catalog.
+ * The economy pilot runs on the Economy tier, the smart pilot on Recommended; workers are
+ * what delegation routes to. tierLabels name the two tiers the way the provider's pricing
+ * makes them meaningful (free providers say Fast/Smart, paid ones Economy/Recommended).
+ */
+export interface ProviderRoles {
+  economyPilot: ProviderRoleModel;
+  smartPilot: ProviderRoleModel;
+  flashWorker: ProviderRoleModel;
+  smartWorker: ProviderRoleModel;
+  tierLabels: { economy: string; recommended: string };
+}
+
+export const PROVIDER_ROLES: Partial<Record<ProviderId | 'chatgpt', ProviderRoles>> = {
+  chatgpt: {
+    economyPilot: { model: 'gpt-6-luna', effort: 'high' },
+    smartPilot: { model: 'gpt-6.1-sol', effort: 'medium' },
+    flashWorker: { model: 'gpt-6-luna', effort: 'low' },
+    smartWorker: { model: 'gpt-6-luna', effort: 'high' },
+    tierLabels: { economy: 'Economy', recommended: 'Recommended' },
+  },
+  opencode: {
+    economyPilot: { model: 'deepseek-v4.1-flash', effort: 'high' },
+    smartPilot: { model: 'deepseek-v4.1-flash', effort: 'high' },
+    flashWorker: { model: 'deepseek-v4.1-flash', effort: 'low' },
+    smartWorker: { model: 'deepseek-v4.1-flash', effort: 'high' },
+    tierLabels: { economy: 'Economy', recommended: 'Recommended' },
+  },
+  'opencode-go': {
+    economyPilot: { model: 'beam-free', effort: 'max' },
+    smartPilot: { model: 'deepseek-v4.1-flash', effort: 'high' },
+    flashWorker: { model: 'muse-spark-1.3-contributor', effort: 'high' },
+    smartWorker: { model: 'deepseek-v4.1-flash', effort: 'high' },
+    tierLabels: { economy: 'Economy', recommended: 'Recommended' },
+  },
+  openrouter: {
+    economyPilot: { model: 'nvidia/nemotron-3.5-super-vl', effort: 'medium' },
+    smartPilot: { model: 'deepseek/deepseek-v4.1-flash', effort: 'high' },
+    flashWorker: { model: 'openrouter/free', effort: 'low' },
+    smartWorker: { model: 'deepseek/deepseek-v4.1-flash', effort: 'max' },
+    tierLabels: { economy: 'Economy', recommended: 'Recommended' },
+  },
+  nvidia: {
+    economyPilot: { model: 'nvidia/nemotron-3.5-super-vl-120b-a12b', effort: 'medium' },
+    smartPilot: { model: 'stepfun-ai/step-5-preview', effort: 'high' },
+    flashWorker: { model: 'nvidia/nemotron-3.5-lightning-30b-a3b', effort: 'low' },
+    smartWorker: { model: 'nvidia/nemotron-3.5-lightning-30b-a3b', effort: 'high' },
+    tierLabels: { economy: 'Fast', recommended: 'Smart' },
+  },
+};
+
+export function rolesFor(providerId: string): ProviderRoles | undefined {
+  return PROVIDER_ROLES[providerId as keyof typeof PROVIDER_ROLES];
+}

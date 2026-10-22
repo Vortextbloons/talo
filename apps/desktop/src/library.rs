@@ -153,9 +153,9 @@ pub fn search(db: &Connection, p: &Value) -> Result<Value> {
     let mut hits = if query.is_empty() {
         Vec::new()
     } else {
-        rows(db,"SELECT c.id,c.title,m.text,c.archived FROM chat_fts JOIN chat_messages m ON m.rowid=chat_fts.rowid JOIN chat_conversations c ON c.id=m.conversation_id WHERE chat_fts MATCH ?1 AND c.workspace_id=?2 ORDER BY rank LIMIT 50",&[&query,&workspace],history_row)?
+        rows(db,"SELECT c.id,c.title,m.text,c.archived FROM chat_fts JOIN chat_messages m ON m.rowid=chat_fts.rowid JOIN chat_conversations c ON c.id=m.conversation_id WHERE chat_fts MATCH ?1 AND c.workspace_id=?2 AND c.delegation_parent_id IS NULL ORDER BY rank LIMIT 50",&[&query,&workspace],history_row)?
     };
-    for hit in rows(db,"SELECT id,title,'',archived FROM chat_conversations WHERE workspace_id=?1 AND instr(lower(title),lower(?2))>0 ORDER BY updated_at DESC LIMIT 50",&[&workspace,&raw],history_row)? {
+    for hit in rows(db,"SELECT id,title,'',archived FROM chat_conversations WHERE workspace_id=?1 AND delegation_parent_id IS NULL AND instr(lower(title),lower(?2))>0 ORDER BY updated_at DESC LIMIT 50",&[&workspace,&raw],history_row)? {
         if hits.len()>=50{break;}
         if !hits.iter().any(|h|h["conversationId"]==hit["conversationId"]){hits.push(hit);}
     }
@@ -235,9 +235,12 @@ fn action(db: &mut Connection, operation: &str, p: &Value) -> Result<Value> {
             sql(db.execute("UPDATE chat_conversations SET title=?2,workspace_id=?3,archived=?4,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?1",params![id,name(p)?,workspace,p.get("archived").and_then(Value::as_bool).unwrap_or(false)]))?;
         }
         "conversation_delete" => {
+            let id = field(p, "id")?;
+            let _ = db.execute("DELETE FROM agent_delegations WHERE parent_conversation_id=?1", [id]);
+            let _ = db.execute("DELETE FROM chat_conversations WHERE delegation_parent_id=?1", [id]);
             sql(db.execute(
                 "DELETE FROM chat_conversations WHERE id=?1",
-                [field(p, "id")?],
+                [id],
             ))?;
         }
         "history_search" => return search(db, p),

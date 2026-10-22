@@ -252,11 +252,12 @@ fn active_workspace(db: &Connection) -> String {
     library::setting(db, "active_workspace", "general")
 }
 
-/// Agent-authored objects created since local midnight, shared across both kinds.
+/// Agent-authored objects created since local midnight, shared across every kind.
 pub fn used_today(db: &Connection) -> i64 {
     db.query_row(
         "SELECT (SELECT count(*) FROM library_workspaces WHERE agent_owned=1 AND created_at>=date('now')) \
-              + (SELECT count(*) FROM agent_assignments WHERE created_at>=date('now'))",
+              + (SELECT count(*) FROM agent_assignments WHERE created_at>=date('now')) \
+              + (SELECT count(*) FROM agent_skills WHERE created_at>=date('now'))",
         [],
         |r| r.get(0),
     )
@@ -451,6 +452,17 @@ pub fn message(h: &mut Host, app: &tauri::AppHandle, message: Value) {
     let p = message["params"].clone();
     let conversation = p["conversationId"].as_str().unwrap_or("").to_string();
     let operation = p["operation"].as_str().unwrap_or("").to_string();
+    let child_task = crate::delegation::task_for_child_conversation(&h.db, &conversation).ok().flatten();
+    if child_task.is_some()
+        && matches!(operation.as_str(), "space_create" | "space_update" | "task_assign")
+    {
+        reply(
+            h,
+            message["id"].clone(),
+            Err("Delegated child tasks cannot create assignments or change workspaces. Report the need in your result.".into()),
+        );
+        return;
+    }
     if operation == "ask" {
         if h.agent_asks.len() >= MAX_PENDING_ASKS {
             reply(h, message["id"].clone(), Err("Too many questions are already waiting. Ask again after some are answered.".into()));
@@ -477,7 +489,18 @@ pub fn message(h: &mut Host, app: &tauri::AppHandle, message: Value) {
             "questions": questions,
             "createdAt": created,
             "expiresAt": created + ASK_TIMEOUT.as_millis() as i64,
+            "parentConversationId": child_task.as_ref().map(|task| task.parent_conversation_id.clone()),
+            "taskId": child_task.as_ref().map(|task| task.id.clone()),
+            "taskTitle": child_task.as_ref().map(|task| task.title.clone()),
         });
+        if let Some(task) = &child_task {
+            if !matches!(task.state.as_str(), "queued" | "running" | "waiting") {
+                reply(h, message["id"].clone(), Err("This delegated task is no longer active.".into()));
+                return;
+            }
+            let _ = crate::delegation::set_state(&h.db, &task.id, "waiting", None, None);
+            crate::delegation::emit_task_update(&h.db, app, &task.id);
+        }
         h.agent_asks.insert(
             id,
             PendingAsk {
@@ -498,10 +521,25 @@ pub fn message(h: &mut Host, app: &tauri::AppHandle, message: Value) {
             "space_update" => update_space(&h.db, &p),
             "task_assign" => assign(&h.db, &p, &conversation),
             "task_list" => Ok(json!({"assignments": assignments(&h.db, None)?})),
+            "skill_list" => {
+                let workspace = crate::storage::get_conversation(&h.db, &conversation)
+                    .map(|conversation| conversation.workspace_id)
+                    .unwrap_or_else(|_| library::setting(&h.db, "active_workspace", "general"));
+                Ok(crate::skills::agent_view(&h.db, &h.supervisor.data, &workspace))
+            }
+            "skill_create" | "skill_update" => {
+                if crate::storage::conversation_is_delegated(&h.db, &conversation).unwrap_or(false) {
+                    return Err("Report the suggested skill change in your result. The parent conversation proposes it so the user reviews one card, not several.".into());
+                }
+                crate::skills::propose(&h.db, &p, &conversation)
+            }
             _ => Err("Unknown agent operation".into()),
         }
     })();
-    let write = !matches!(operation.as_str(), "state" | "space_list" | "task_list");
+    let write = !matches!(
+        operation.as_str(),
+        "state" | "space_list" | "task_list" | "skill_list"
+    );
     reply(h, message["id"].clone(), result);
     if write {
         let _ = app.emit("agent-changed", ());
@@ -539,10 +577,13 @@ fn assignments(db: &Connection, status: Option<&str>) -> Result<Vec<Value>, Stri
 /// Everything the Inbox and the chat question card need in one read.
 pub fn state(db: &Connection, h: &Host) -> Value {
     let asks: Vec<Value> = h.agent_asks.values().map(|ask| ask.ask.clone()).collect();
+    let skills = crate::skills::state(db);
     json!({
         "assignments": assignments(db, None).unwrap_or_default(),
         "asks": asks,
         "drafts": spaces(db, true).unwrap_or_default(),
+        "skills": skills["skills"],
+        "skillProposals": skills["skillProposals"],
         "budget": {"used": used_today(db), "limit": DAILY_OBJECT_LIMIT},
     })
 }
@@ -620,6 +661,12 @@ pub fn answer(h: &mut Host, app: &tauri::AppHandle, p: &Value) -> Result<(), Str
         .unwrap_or_default();
     let answers = resolve_answers(&questions, &provided)?;
     let pending = h.agent_asks.remove(&id).expect("pending ask checked");
+    if let Some(task_id) = pending.ask["taskId"].as_str() {
+        if crate::delegation::get(&h.db, task_id).ok().flatten().is_some_and(|task| task.state == "waiting") {
+            let _ = crate::delegation::set_state(&h.db, task_id, "running", None, None);
+            crate::delegation::emit_task_update(&h.db, app, task_id);
+        }
+    }
     h.supervisor.relay_agent(json!({
         "jsonrpc": "2.0",
         "id": pending.call["id"],
@@ -641,6 +688,12 @@ pub fn expire(h: &mut Host, app: &tauri::AppHandle) -> bool {
     let changed = !ids.is_empty();
     for id in ids {
         if let Some(pending) = h.agent_asks.remove(&id) {
+            if let Some(task_id) = pending.ask["taskId"].as_str() {
+                if crate::delegation::get(&h.db, task_id).ok().flatten().is_some_and(|task| task.state == "waiting") {
+                    let _ = crate::delegation::set_state(&h.db, task_id, "running", None, None);
+                    crate::delegation::emit_task_update(&h.db, app, task_id);
+                }
+            }
             if pending.epoch == epoch {
                 let answers = pending.ask["questions"]
                     .as_array()
@@ -744,6 +797,11 @@ pub async fn agent_action(
         let shared = app.state::<Shared>();
         let mut h = shared.lock().map_err(|_| "Agent state unavailable")?;
         let p = payload.unwrap_or(json!({}));
+        let data = || {
+            app.path()
+                .app_data_dir()
+                .map_err(|error| error.to_string())
+        };
         let result = match operation.as_str() {
             "state" | "refresh" => Ok(state(&h.db, &h)),
             "answer" => answer(&mut h, app, &p).map(|_| state(&h.db, &h)),
@@ -751,6 +809,19 @@ pub async fn agent_action(
             "space_accept" => accept_space(&h.db, &p).map(|_| json!(true)),
             "space_dismiss" => dismiss_space(&h.db, &p).map(|_| json!(true)),
             "space_permission" => set_permission(&h.db, &p).map(|_| json!(true)),
+            "skill_save" => crate::skills::save(&h.db, &data()?, &p).map(|_| json!(true)),
+            "skill_enable" => {
+                let id = label(&p, "id", 100)?;
+                let enabled = p
+                    .get("enabled")
+                    .and_then(Value::as_bool)
+                    .ok_or("enabled must be true or false")?;
+                crate::skills::set_enabled(&h.db, &id, enabled).map(|_| json!(true))
+            }
+            "skill_delete" | "skill_dismiss" => {
+                let id = label(&p, "id", 100)?;
+                crate::skills::delete(&h.db, &data()?, &id).map(|_| json!(true))
+            }
             _ => Err("Unknown agent operation".into()),
         };
         let result = result?;
@@ -809,6 +880,7 @@ mod tests {
             .unwrap();
         crate::storage::init(&db).unwrap();
         init(&db).unwrap();
+        crate::skills::init(&db).unwrap();
         init(&db).unwrap();
         db
     }

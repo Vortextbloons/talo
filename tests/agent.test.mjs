@@ -7,6 +7,7 @@ import { Type } from 'typebox';
 import { startWorker } from './helpers/worker.mjs';
 import { startMockProvider } from './helpers/mock-provider.mjs';
 import { createAgentTools } from '../dist/workers/pi/src/agent.js';
+import { createDelegationTools } from '../dist/workers/pi/src/delegation.js';
 import { WebTransport } from '../dist/workers/pi/src/web.js';
 import { ToolRegistry } from '../dist/workers/pi/src/registry.js';
 
@@ -32,6 +33,28 @@ test('the agent tool forwards its conversation and renders the host answer', asy
   transport.receive({ jsonrpc: '2.0', id: message.id, result: { askId: 'ask-1', expired: false, answers: [{ questionId: 'q1', optionId: 'b', decided: false }] } });
   const result = await pending;
   assert.match(result.content[0].text, /"optionId":"b"/);
+});
+
+test('the delegation tool forwards a stable start request and returns its task id', async () => {
+  const frames = [];
+  const transport = new WebTransport(frame => frames.push(frame), 'Talo');
+  const [tool] = createDelegationTools(transport, 'parent-1');
+  assert.equal(tool.name, 'delegate');
+  const pending = tool.execute('d1', {
+    operation: 'start',
+    title: 'Read the RFC',
+    brief: 'Summarize section 4 only.',
+  }, undefined);
+  assert.equal(frames[0].message.method, 'delegation.call');
+  assert.equal(frames[0].message.params.conversationId, 'parent-1');
+  assert.equal(frames[0].message.params.operation, 'start');
+  transport.receive({
+    jsonrpc: '2.0',
+    id: frames[0].message.id,
+    result: { id: 'task-1', title: 'Read the RFC', state: 'queued' },
+  });
+  const result = await pending;
+  assert.match(result.content[0].text, /"id":"task-1"/);
 });
 
 test('a workspace bundle can withhold a capability from its own tools', async () => {

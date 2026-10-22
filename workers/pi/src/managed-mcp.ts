@@ -4,7 +4,7 @@ import type { ToolCategory } from '../../../packages/contracts/src/tools.js';
 import { sanitizeError } from './providers.js';
 
 export interface ManagedMcpGroup {
-  id: 'talo-research' | 'talo-browser' | 'talo-agent';
+  id: 'talo-research' | 'talo-browser' | 'talo-agent' | 'talo-delegate';
   category: ToolCategory;
   description: string;
   tools: ToolDefinition[];

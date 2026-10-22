@@ -49,6 +49,7 @@
     <p class="hint">
       If you don’t answer by {expires}, Talo continues with
       <strong>{defaultSummary()}</strong>.
+      {#if ask.taskTitle}<span class="task-note">From delegated task: {ask.taskTitle}.</span>{/if}
       {#if onOpenChat}<button class="link" type="button" onclick={onOpenChat}>Open chat</button>{/if}
     </p>
   </header>
@@ -111,6 +112,7 @@
   h3{font-size:14.5px;margin:4px 0 6px;font-weight:550;letter-spacing:-.2px;color:var(--text)}
   .hint{font-size:11.5px;line-height:1.6;color:var(--muted);margin:0}
   .hint strong{color:var(--text);font-weight:550}
+  .task-note{display:inline-block;margin-left:6px;color:var(--yellow-deep)}
   .link{background:none;border:0;padding:0;margin-left:6px;color:var(--yellow);font:inherit;font-size:11.5px;text-decoration:underline;cursor:pointer}
   fieldset{border:0;padding:10px 0 0;margin:0}
   fieldset+fieldset{border-top:1px solid var(--line)}

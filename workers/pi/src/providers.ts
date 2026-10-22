@@ -10,9 +10,9 @@ import type {
 } from '@earendil-works/pi-ai';
 
 /** Talo-owned, non-secret provider projection written by the host after onboarding. */
-export const PREFERENCE_FILE = 'provider.json';
+const PREFERENCE_FILE = 'provider.json';
 /** Pi's compatible-endpoint file inside Talo's agent directory. */
-export const MODELS_FILE = 'models.json';
+const MODELS_FILE = 'models.json';
 
 const CUSTOM_PROVIDER = 'custom';
 const CUSTOM_PROVIDER_NAME = 'Custom OpenAI-compatible';
@@ -65,7 +65,7 @@ export interface ProviderPreference {
   reasoning: boolean;
 }
 
-export const DEFAULT_PREFERENCE: ProviderPreference = {
+const DEFAULT_PREFERENCE: ProviderPreference = {
   provider: 'opencode',
   model: '',
   baseUrl: '',
@@ -75,7 +75,7 @@ export const DEFAULT_PREFERENCE: ProviderPreference = {
 const PROVIDER_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 const SESSION_PATH_MAX = 4096;
 /** Friendly aliases accepted without rewriting Pi's bundled catalog. */
-const PROVIDER_ALIASES: Record<string, string> = { gemini: 'google' };
+const PROVIDER_ALIASES: Record<string, string> = { gemini: 'google', chatgpt: 'openai' };
 
 export function canonicalProviderId(provider: string): string {
   return PROVIDER_ALIASES[provider] ?? provider;
@@ -166,7 +166,7 @@ function httpUrl(value: string): boolean {
   }
 }
 
-export function isLocalEndpoint(value: string): boolean {
+function isLocalEndpoint(value: string): boolean {
   try {
     const host = new URL(value).hostname.toLowerCase();
     return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' ||
@@ -193,7 +193,7 @@ interface ModelsJsonDocument {
  * Only the custom OpenAI-compatible placeholder is written, and its key is either an env
  * indirection or a non-secret local placeholder.
  */
-export function modelsJson(preference: ProviderPreference): ModelsJsonDocument {
+function modelsJson(preference: ProviderPreference): ModelsJsonDocument {
   const empty: ModelsJsonDocument = { $schema: PI_MODELS_SCHEMA, providers: {} };
   if (preference.provider !== CUSTOM_PROVIDER) return empty;
   const model = preference.model.trim();
@@ -237,7 +237,7 @@ export async function syncModelsJson(agentDir: string, preference: ProviderPrefe
 }
 
 /** Ephemeral credential store: nothing is ever written to auth.json or any other file. */
-export class MemoryCredentialStore implements CredentialStore {
+class MemoryCredentialStore implements CredentialStore {
   private readonly values = new Map<string, Credential>();
 
   async read(providerId: string, _options?: AuthOperationOptions): Promise<Credential | undefined> {
@@ -279,7 +279,7 @@ export async function createModelRuntime(agentDir: string): Promise<ModelRuntime
   });
 }
 
-export interface ProviderRegistration {
+interface ProviderRegistration {
   provider: string;
   model?: string;
   baseUrl?: string;
@@ -306,6 +306,7 @@ function customModel(modelId: string, reasoning: boolean): ProviderModelConfig {
  * never supplying a models list for them.
  */
 export function registerProviderEndpoint(runtime: ModelRuntime, registration: ProviderRegistration): void {
+  if (registration.provider === 'chatgpt') return;
   const provider = canonicalProviderId(registration.provider);
   const baseUrl = registration.baseUrl;
   const existing = runtime.getProvider(provider);
@@ -339,13 +340,13 @@ export async function setProviderKey(runtime: ModelRuntime, provider: string, ap
   await runtime.setRuntimeApiKey(canonicalProviderId(provider), apiKey);
 }
 
-export function providerName(runtime: ModelRuntime, provider: string): string {
+function providerName(runtime: ModelRuntime, provider: string): string {
   const runtimeProvider = canonicalProviderId(provider);
   return runtime.getProvider(runtimeProvider)?.name ||
     (runtimeProvider === CUSTOM_PROVIDER ? CUSTOM_PROVIDER_NAME : provider);
 }
 
-export function isNativeProvider(runtime: ModelRuntime, provider: string): boolean {
+function isNativeProvider(runtime: ModelRuntime, provider: string): boolean {
   const runtimeProvider = canonicalProviderId(provider);
   if (runtimeProvider === CUSTOM_PROVIDER) return false;
   if (runtime.getRegisteredProviderConfig(runtimeProvider) !== undefined) return false;
@@ -353,7 +354,7 @@ export function isNativeProvider(runtime: ModelRuntime, provider: string): boole
   return runtime.getProvider(runtimeProvider) !== undefined;
 }
 
-export interface ProviderModelDescription {
+interface ProviderModelDescription {
   id: string;
   name: string;
   reasoning: boolean;
@@ -362,7 +363,7 @@ export interface ProviderModelDescription {
   maxTokens: number;
 }
 
-export interface ProviderModelList {
+interface ProviderModelList {
   provider: string;
   name: string;
   native: boolean;
@@ -370,7 +371,7 @@ export interface ProviderModelList {
 }
 
 /** Registry metadata exactly as Pi resolves it. Loaded lazily with the SDK. */
-export async function describeModels(runtime: ModelRuntime, provider: string): Promise<ProviderModelDescription[]> {
+async function describeModels(runtime: ModelRuntime, provider: string): Promise<ProviderModelDescription[]> {
   const { getSupportedThinkingLevels } = await import('@earendil-works/pi-ai');
   return runtime.getModels(canonicalProviderId(provider)).map(model => ({
     id: model.id,
@@ -415,7 +416,7 @@ export function resolveModel(runtime: ModelRuntime, provider: string, modelId: s
   return model;
 }
 
-export interface ProviderValidation {
+interface ProviderValidation {
   provider: string;
   name: string;
   native: boolean;
@@ -499,4 +500,4 @@ export function sessionFilePath(session: AgentSession): string | null {
   return session.sessionFile ?? session.sessionManager.getSessionFile() ?? null;
 }
 
-export { CUSTOM_PROVIDER, CUSTOM_PROVIDER_NAME };
+export { CUSTOM_PROVIDER };

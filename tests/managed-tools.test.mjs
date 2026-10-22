@@ -34,6 +34,16 @@ test('managed Pi extension lazily exposes grouped MCP schemas and preserves nati
   }finally{await extension.close();await external.close();}
 });
 
+test('an operation the tool does not have fails with the valid names, not a trust prompt',async()=>{
+  const external=new McpManager(async()=>true);
+  const extension=new ManagedToolsExtension([group('talo-research',[tool('web_search',async()=>({content:[],details:{}}))])],external,async()=>true);
+  try{
+    await assert.rejects(extension.tool.execute('guess',{operation:'call_tool',server:'talo-agent',tool:'agent',arguments:{}},undefined),/Unknown operation\. Use list, discover or call\./);
+    await assert.rejects(extension.tool.execute('missing',{operation:'call',tool:'agent',arguments:{}},undefined),/Unknown server/);
+    await assert.rejects(extension.tool.execute('discover',{operation:'discover'},undefined),/Choose a server/);
+  }finally{await extension.close();await external.close();}
+});
+
 test('browser MCP calls remain session-local, retain approval broker, and propagate cancellation',async()=>{
   const external=new McpManager(async()=>true);
   const seen=[];

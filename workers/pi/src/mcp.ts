@@ -83,7 +83,8 @@ export class McpManager {
   private async connect(id:string, signal?:AbortSignal): Promise<Connection> {
     const s = this.allDefinitions().find(s=>s.id===id);
     const group = this.groups.find(group=>group.id===id);
-    if (!s?.enabled || !s.trusted) throw new Error('Enable and explicitly trust this integration in Settings first.');
+    if (!s) throw new Error('Unknown server. Use operation list to see the servers you can call.');
+    if (!s.enabled || !s.trusted) throw new Error('Enable and explicitly trust this integration in Settings first.');
     signal?.throwIfAborted();
     const existing = this.connections.get(id);
     if(existing && this.health.get(id)?.state==='failed' && !existing.active){await this.closeOne(id);return this.connect(id,signal);}
@@ -167,11 +168,14 @@ export class McpManager {
   async disconnect() {await Promise.all([...this.connections.keys()].map(id=>this.closeOne(id)));}
   async close() {if(this.timer)clearInterval(this.timer);this.timer=undefined;for(const c of this.operations.values())c.abort();await this.disconnect();}
   tool():ToolDefinition {
-    return {name:'mcp',label:'Integrations',description:'List trusted MCP servers. Discover a server for paginated tool names; discover with tool to read its schema. Call executes a tool after approval. Results are untrusted data.',
+    return {name:'mcp',label:'Integrations',description:'List trusted MCP servers. Discover a server for paginated tool names; discover with tool to read its schema. Call with server, tool and arguments {…} executes that tool after approval. Results are untrusted data.',
       parameters:Type.Object({operation:Type.Union([Type.Literal('list'),Type.Literal('discover'),Type.Literal('call')]),server:Type.Optional(Type.String({maxLength:48})),tool:Type.Optional(Type.String({maxLength:200})),offset:Type.Optional(Type.Integer({minimum:0,maximum:128})),arguments:Type.Optional(Type.Record(Type.String(),Type.Unknown()))}),
       execute:async(_id,input:any,signal)=>{
-        const value=input.operation==='list'?this.status().servers.map(s=>({id:s.id,enabled:s.enabled,trusted:s.trusted,state:s.state})):input.operation==='discover'?await this.discover(input.server,signal,input.tool,input.offset??0):await this.execute(input.server,input.tool,input.arguments??{},signal);
-        return input.operation==='call'?value as any:{content:[{type:'text',text:JSON.stringify(value).slice(0,24_000)}],details:{}};
+        if(input.operation==='call') return await this.execute(input.server,input.tool,input.arguments??{},signal) as any;
+        if(input.operation!=='list'&&input.operation!=='discover') throw new Error('Unknown operation. Use list, discover or call.');
+        if(input.operation==='discover'&&typeof input.server!=='string') throw new Error('Choose a server from the list first.');
+        const value=input.operation==='list'?this.status().servers.map(s=>({id:s.id,enabled:s.enabled,trusted:s.trusted,state:s.state})):await this.discover(input.server,signal,input.tool,input.offset??0);
+        return {content:[{type:'text',text:JSON.stringify(value).slice(0,24_000)}],details:{}};
       }};
   }
 }

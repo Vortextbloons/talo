@@ -16,6 +16,31 @@ async function filesUnder(directory) {
   return result;
 }
 
+test('ChatGPT browser sign-in crosses the worker bridge without exposing credentials or using API-key auth', { timeout: 30_000 }, async () => {
+  const data = await mkdtemp(path.join(os.tmpdir(), 'talo-chatgpt-worker-'));
+  const worker = startWorker(data);
+  try {
+    await worker.waitReady();
+    const started = await worker.request('login', 'chatgpt.begin', { hostId: 'urn:uuid:11111111-1111-4111-8111-111111111111' });
+    const url = new URL(started.url);
+    assert.equal(url.origin, 'https://auth.openai.com');
+    assert.equal(url.searchParams.get('agent_name_hint'), 'Talo');
+    assert.equal(url.searchParams.get('ext_agent_host_id'), 'urn:uuid:11111111-1111-4111-8111-111111111111');
+    const callback = new URL(url.searchParams.get('redirect_uri'));
+    assert.equal(callback.hostname, '127.0.0.1');
+    assert.equal(callback.pathname, '/auth/callback');
+    assert.deepEqual(await worker.request('poll', 'chatgpt.poll', { attemptId: started.attemptId }), { pending: true });
+    await assert.rejects(worker.request('models', 'models.list', { provider: 'chatgpt' }), /Connect your ChatGPT account/);
+    assert.deepEqual(await worker.request('cancel', 'chatgpt.poll', { attemptId: started.attemptId, cancel: true }), { pending: false });
+    for (const file of await filesUnder(data)) {
+      assert.ok(!(await readFile(file, 'utf8')).includes(url.searchParams.get('state')));
+    }
+  } finally {
+    await worker.kill();
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
 test('provider discovery uses the bundled Pi catalog without a session', { timeout: 120_000 }, async () => {
   const data = await mkdtemp(path.join(os.tmpdir(), 'talo-providers-'));
   const worker = startWorker(data);

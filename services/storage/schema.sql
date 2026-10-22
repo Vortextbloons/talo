@@ -13,7 +13,9 @@ CREATE TABLE IF NOT EXISTS chat_conversations (
   connection_id TEXT,
   model_id TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  delegation_parent_id TEXT,
+  delegation_task_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS chat_conversations_updated
@@ -67,6 +69,17 @@ CREATE TABLE IF NOT EXISTS chat_generations (
 
 CREATE INDEX IF NOT EXISTS chat_generations_conversation
   ON chat_generations(conversation_id);
+
+-- User turns accepted while their conversation is generating. Drained in insertion order.
+CREATE TABLE IF NOT EXISTS chat_turn_queue (
+  generation_id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'user' CHECK(kind IN ('user','delegation')),
+  text TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chat_turn_queue_conversation
+  ON chat_turn_queue(conversation_id);
 -- One mutating generation per conversation. This is the durable half of the
 -- generation lock; in-memory state is only a projection of it.
 CREATE UNIQUE INDEX IF NOT EXISTS chat_generations_one_active

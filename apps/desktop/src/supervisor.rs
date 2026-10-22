@@ -104,6 +104,7 @@ pub(crate) fn pump_wait(fallback: Duration) {
 pub enum WorkerSignal {
     Tools(Value),
     Agent(Value),
+    Delegation(Value),
     Web(Value),
     Browser(Value),
     Ready,
@@ -421,6 +422,9 @@ impl Supervisor {
     pub fn relay_agent(&mut self, message: Value) {
         if let Some(pi) = self.pi.as_mut() { let _ = writeln!(pi.stdin, "{}", json!({"type":"agent_response","message":message})); let _ = pi.stdin.flush(); }
     }
+    pub fn relay_delegation(&mut self, message: Value) {
+        if let Some(pi) = self.pi.as_mut() { let _ = writeln!(pi.stdin, "{}", json!({"type":"delegation_response","message":message})); let _ = pi.stdin.flush(); }
+    }
     pub fn browser_request(&mut self, message: Value) {
         if message["method"] == "cancel" && self.browser.is_none() { return; }
         let id = message["id"].clone(); let epoch = self.worker_epoch;
@@ -650,6 +654,9 @@ fn read_worker(
             Some("agent") => {
                 if let Some(message) = value.get("message") { push(WorkerSignal::Agent(message.clone())); }
             }
+            Some("delegation") => {
+                if let Some(message) = value.get("message") { push(WorkerSignal::Delegation(message.clone())); }
+            }
             Some("browser") => {
                 if let Some(message) = value.get("message") { push(WorkerSignal::Browser(message.clone())); }
             }
@@ -732,7 +739,7 @@ fn wipe_line(line: &mut String) {
 
 fn wipe_param_secrets(params: &mut Value) {
     if let Value::Object(map) = params {
-        for key in ["apiKey", "api_key", "token", "authorization", "credential"] {
+        for key in ["apiKey", "api_key", "token", "authorization", "credential", "access", "refresh", "idToken"] {
             if let Some(Value::String(secret)) = map.get_mut(key) {
                 unsafe {
                     secret.as_bytes_mut().fill(0);

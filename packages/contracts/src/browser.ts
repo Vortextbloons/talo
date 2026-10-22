@@ -12,7 +12,6 @@ export interface BrowserStatus {
   busy: boolean;
   error?: string;
 }
-export interface BrowserSessionDescriptor { id: BrowserSessionId; kind: 'primary' | 'isolated'; persistent: boolean }
 /** Private UI stream. Never persisted, attached to chat, or supplied to a model. */
 export interface BrowserFrame { tabId: string; data: string; width: number; height: number }
 export interface BrowserInput {

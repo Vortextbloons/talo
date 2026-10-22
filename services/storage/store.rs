@@ -55,6 +55,26 @@ pub fn init(db: &Connection) -> Result<()> {
     if has_reasoning == 0 {
         db.execute_batch("ALTER TABLE chat_messages ADD COLUMN reasoning TEXT")?;
     }
+    for column in ["delegation_parent_id", "delegation_task_id"] {
+        let exists: i64 = db.query_row(
+            "SELECT count(*) FROM pragma_table_info('chat_conversations') WHERE name=?1",
+            [column],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            db.execute_batch(&format!("ALTER TABLE chat_conversations ADD COLUMN {column} TEXT"))?;
+        }
+    }
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS chat_turn_queue(
+           generation_id TEXT PRIMARY KEY,
+           conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+           kind TEXT NOT NULL DEFAULT 'user' CHECK(kind IN ('user','delegation')),
+           text TEXT NOT NULL DEFAULT '',
+           created_at TEXT NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS chat_turn_queue_conversation ON chat_turn_queue(conversation_id);",
+    )?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")?;
     let migrated: i64 = db.query_row(
         "SELECT count(*) FROM schema_migrations WHERE version=3",
@@ -168,6 +188,14 @@ pub struct NewAttachment {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct QueuedTurnInfo {
+    pub id: String,
+    pub text: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConversationSnapshot {
     pub conversation: ConversationInfo,
     pub messages: Vec<ChatMessage>,
@@ -180,6 +208,12 @@ pub struct ConversationSnapshot {
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegations: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queued: Vec<QueuedTurnInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_conversation: Option<ConversationInfo>,
 }
 
 #[derive(Debug, Serialize)]
@@ -282,7 +316,7 @@ const CONVERSATION_COLUMNS: &str =
 
 pub fn list_conversations(db: &Connection) -> Result<Vec<ConversationInfo>> {
     let sql = format!(
-        "SELECT {CONVERSATION_COLUMNS} FROM chat_conversations ORDER BY updated_at DESC, rowid DESC"
+        "SELECT {CONVERSATION_COLUMNS} FROM chat_conversations WHERE delegation_parent_id IS NULL ORDER BY updated_at DESC, rowid DESC"
     );
     let mut statement = db.prepare(&sql)?;
     let rows = statement.query_map([], conversation_from_row)?;
@@ -652,8 +686,142 @@ pub fn start_generation(db: &mut Connection, new: NewGeneration<'_>) -> Result<(
     Ok(())
 }
 
-/// Re-arm an existing terminal generation. The user turn is not duplicated: Pi's session
-/// (or the fallback prompt) owns the actual retry.
+/// Reserve a generation that begins from an internal custom message (a child result delivery).
+/// No user row is created, so the parent transcript never shows a fabricated turn.
+pub fn start_delivery_generation(
+    db: &mut Connection,
+    new: NewGeneration<'_>,
+) -> Result<()> {
+    let tx = db.transaction()?;
+    ensure_no_active(&tx, new.conversation_id, None)?;
+    tx.execute(
+        &format!(
+            "INSERT INTO chat_generations(id,conversation_id,state,sequence,error,created_at,updated_at)
+             VALUES(?1,?2,'generating',0,NULL,{NOW},{NOW})"
+        ),
+        params![new.id, new.conversation_id],
+    )?;
+    tx.execute(
+        &format!(
+            "INSERT INTO chat_messages(id,conversation_id,role,text,status,generation_id,error,created_at,updated_at)
+             VALUES(?1,?2,'assistant','','generating',?3,NULL,{NOW},{NOW})"
+        ),
+        params![new.assistant_id, new.conversation_id, new.id],
+    )?;
+    tx.execute(
+        &format!("UPDATE chat_conversations SET updated_at={NOW} WHERE id=?1"),
+        params![new.conversation_id],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+pub struct QueuedTurnRow {
+    pub generation_id: String,
+    pub conversation_id: String,
+    pub kind: String,
+    pub text: String,
+    pub created_at: String,
+}
+
+/// Accept a turn while its conversation is generating. Insertion order is delivery order.
+pub fn enqueue_turn(
+    db: &Connection,
+    generation_id: &str,
+    conversation_id: &str,
+    kind: &str,
+    text: &str,
+) -> Result<()> {
+    db.execute(
+        &format!(
+            "INSERT INTO chat_turn_queue(generation_id,conversation_id,kind,text,created_at)
+             VALUES(?1,?2,?3,?4,{NOW})"
+        ),
+        params![generation_id, conversation_id, kind, text],
+    )?;
+    Ok(())
+}
+
+pub fn list_queue(db: &Connection, conversation_id: &str) -> Result<Vec<QueuedTurnRow>> {
+    let mut statement = db.prepare(
+        "SELECT generation_id,conversation_id,kind,text,created_at FROM chat_turn_queue
+         WHERE conversation_id=?1 ORDER BY rowid ASC LIMIT 50",
+    )?;
+    let rows = statement.query_map(params![conversation_id], |row| {
+        Ok(QueuedTurnRow {
+            generation_id: row.get(0)?,
+            conversation_id: row.get(1)?,
+            kind: row.get(2)?,
+            text: row.get(3)?,
+            created_at: row.get(4)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// The oldest queued turn for a conversation that has no active generation.
+pub fn next_queued_turn(db: &Connection) -> Result<Option<QueuedTurnRow>> {
+    let row = db
+        .query_row(
+            "SELECT q.generation_id,q.conversation_id,q.kind,q.text,q.created_at FROM chat_turn_queue q
+             WHERE NOT EXISTS(SELECT 1 FROM chat_generations g WHERE g.conversation_id=q.conversation_id
+                              AND g.state IN ('generating','cancelling'))
+             ORDER BY q.rowid ASC LIMIT 1",
+            [],
+            |row| {
+                Ok(QueuedTurnRow {
+                    generation_id: row.get(0)?,
+                    conversation_id: row.get(1)?,
+                    kind: row.get(2)?,
+                    text: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            },
+        )
+        .optional()?;
+    Ok(row)
+}
+
+pub fn take_queued_turn(db: &Connection, generation_id: &str) -> Result<bool> {
+    Ok(db.execute(
+        "DELETE FROM chat_turn_queue WHERE generation_id=?1",
+        params![generation_id],
+    )? > 0)
+}
+
+/// Mark a conversation as a hidden child of a delegation task.
+pub fn mark_delegated_conversation(
+    db: &Connection,
+    conversation_id: &str,
+    parent_conversation_id: &str,
+    task_id: &str,
+    workspace_id: &str,
+) -> Result<()> {
+    db.execute(
+        &format!(
+            "UPDATE chat_conversations SET delegation_parent_id=?2,delegation_task_id=?3,workspace_id=?4,updated_at={NOW}
+             WHERE id=?1"
+        ),
+        params![conversation_id, parent_conversation_id, task_id, workspace_id],
+    )?;
+    Ok(())
+}
+
+pub fn delegation_parent(db: &Connection, conversation_id: &str) -> Result<Option<String>> {
+    Ok(db
+        .query_row(
+            "SELECT delegation_parent_id FROM chat_conversations WHERE id=?1",
+            params![conversation_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten())
+}
+
+pub fn conversation_is_delegated(db: &Connection, conversation_id: &str) -> Result<bool> {
+    Ok(delegation_parent(db, conversation_id)?.is_some())
+}
 pub fn begin_retry(
     db: &mut Connection,
     conversation_id: &str,
@@ -1312,6 +1480,9 @@ mod tests {
             sequence: 4,
             error: None,
             thinking_level: None,
+            delegations: Vec::new(),
+            queued: Vec::new(),
+            parent_conversation: None,
         };
         let value = serde_json::to_value(&snapshot).unwrap();
         // The UI Stop control reads snapshot.generationId; serializing generation_id would

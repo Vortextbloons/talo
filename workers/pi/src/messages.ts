@@ -146,14 +146,3 @@ export function lastRetryableTurn(session: AgentSession): LastTurn | undefined {
   }
   return undefined;
 }
-
-export function assistantAfterLastUser(messages: ChatMessage[]): ChatMessage | undefined {
-  let lastUser = -1;
-  for (let index = 0; index < messages.length; index += 1) {
-    if (messages[index].role === 'user') lastUser = index;
-  }
-  for (let index = messages.length - 1; index > lastUser; index -= 1) {
-    if (messages[index].role === 'assistant') return messages[index];
-  }
-  return undefined;
-}

@@ -2,16 +2,39 @@
   import { onMount } from 'svelte';
   import AskCard from './AskCard.svelte';
   import { agent, agentAction, refreshAgent } from '../lib/agent.svelte';
-  import { refreshLibrary } from '../lib/library.svelte';
+  import { library, refreshLibrary } from '../lib/library.svelte';
   import { openConversation } from '../lib/chat.svelte';
-  import type { Assignment, WorkspaceBundle } from '../../../../packages/contracts/src/agent';
+  import type { Assignment, Skill, WorkspaceBundle } from '../../../../packages/contracts/src/agent';
 
   let { onOpenChat }: { onOpenChat: () => void } = $props();
 
   const open = $derived(agent.assignments.filter(item => item.status === 'open'));
   const settled = $derived(agent.assignments.filter(item => item.status !== 'open').slice(0, 8));
+  /** Unsaved edits per proposal, keyed by skill proposal id. */
+  type SkillDraft = { title: string; description: string; instructions: string; workspaceId: string };
+  let edits = $state<Record<string, SkillDraft>>({});
 
-  onMount(() => { void refreshAgent(); });
+  onMount(() => { void refreshAgent(); void refreshLibrary(); });
+
+  function draftOf(proposal: Skill): SkillDraft {
+    return edits[proposal.id] ?? {
+      title: proposal.title,
+      description: proposal.description,
+      instructions: proposal.instructions,
+      workspaceId: proposal.workspaceId ?? '',
+    };
+  }
+  function change(proposal: Skill, patch: Partial<SkillDraft>): void {
+    edits[proposal.id] = { ...draftOf(proposal), ...patch };
+  }
+  async function approve(proposal: Skill): Promise<void> {
+    const draft = draftOf(proposal);
+    if (await agentAction('skill_save', { id: proposal.id, ...draft, workspaceId: draft.workspaceId || 'global' })) delete edits[proposal.id];
+  }
+  function skillScope(proposal: Skill): string {
+    if (!proposal.workspaceId) return 'every project';
+    return library.workspaces.find(space => space.id === proposal.workspaceId)?.name ?? 'a project';
+  }
 
   async function openChat(conversationId: string | null): Promise<void> {
     if (conversationId && await openConversation(conversationId)) onOpenChat();
@@ -27,7 +50,7 @@
     if (space.pinned.length) parts.push(`${space.pinned.length} pinned note${space.pinned.length === 1 ? '' : 's'}`);
     if (space.capabilities.length) parts.push(space.capabilities.join(', '));
     if (space.memoryScope !== 'inherit') parts.push(`memory ${space.memoryScope}`);
-    return parts.join(' · ') || 'an empty workspace';
+    return parts.join(' · ') || 'an empty project';
   }
 </script>
 
@@ -38,7 +61,7 @@
   <section>
     <h2>Waiting on you <span>{agent.asks.length}</span></h2>
     {#each agent.asks as ask (ask.id)}
-      <AskCard {ask} onOpenChat={() => void openChat(ask.conversationId)} />
+      <AskCard {ask} onOpenChat={() => void openChat(ask.parentConversationId ?? ask.conversationId)} />
     {:else}
       <p class="hint">No open questions. When Talo needs a decision it cannot infer, the card appears here and in the chat.</p>
     {/each}
@@ -68,7 +91,7 @@
   </section>
 
   <section>
-    <h2>Proposed workspaces <span>{agent.drafts.length}</span></h2>
+    <h2>Proposed projects <span>{agent.drafts.length}</span></h2>
     {#each agent.drafts as space (space.id)}
       <article>
         <div class="body">
@@ -80,12 +103,50 @@
           {/if}
         </div>
         <div class="actions">
-          <button class="primary" disabled={agent.busy} onclick={() => void agentAction('space_accept', { id: space.id }).then(refreshLibrary)}>Add workspace</button>
+          <button class="primary" disabled={agent.busy} onclick={() => void agentAction('space_accept', { id: space.id }).then(refreshLibrary)}>Add project</button>
           <button disabled={agent.busy} onclick={() => void agentAction('space_dismiss', { id: space.id })}>Dismiss</button>
         </div>
       </article>
     {:else}
-      <p class="hint">No drafts. Talo proposes a workspace when a topic deserves its own brief, notes and memory scope.</p>
+      <p class="hint">No drafts. Talo proposes a project when ongoing work needs its own chats, instructions, and memories.</p>
+    {/each}
+  </section>
+
+  <section>
+    <h2>Proposed skills <span>{agent.skillProposals.length}</span></h2>
+    {#each agent.skillProposals as proposal (proposal.id)}
+      {@const draft = draftOf(proposal)}
+      <article>
+        <div class="body">
+          <strong>{draft.title}</strong>
+          <p class="why">{proposal.replaces ? 'An update to a skill you already approved' : 'A new skill'} · available in {skillScope(proposal)}</p>
+          <label class="field">When to use it
+            <input maxlength="1024" value={draft.description} oninput={(event) => change(proposal, { description: event.currentTarget.value })} />
+          </label>
+          <label class="field">Where it applies
+            <select value={draft.workspaceId} onchange={(event) => change(proposal, { workspaceId: event.currentTarget.value })}>
+              <option value="">Every project</option>
+              {#each library.workspaces.filter(space => !space.archived) as space (space.id)}
+                <option value={space.id}>{space.name}</option>
+              {/each}
+            </select>
+          </label>
+          <details>
+            <summary>Instructions</summary>
+            <textarea rows="12" maxlength="12000" aria-label="Skill instructions" value={draft.instructions} oninput={(event) => change(proposal, { instructions: event.currentTarget.value })}></textarea>
+          </details>
+          <small>
+            Nothing changes in your chats until you approve it.{proposal.replaces ? ' The approved version stays active until then.' : ''}
+            {#if proposal.sourceConversationId}<button class="link" type="button" onclick={() => void openChat(proposal.sourceConversationId)}>where it came from</button>{/if}
+          </small>
+        </div>
+        <div class="actions">
+          <button class="primary" disabled={agent.busy || !draft.title.trim() || !draft.description.trim() || !draft.instructions.trim()} onclick={() => void approve(proposal)}>Approve</button>
+          <button disabled={agent.busy} onclick={() => void agentAction('skill_dismiss', { id: proposal.id })}>Dismiss</button>
+        </div>
+      </article>
+    {:else}
+      <p class="hint">No proposed skills. After a workflow works well, Talo can offer to save the steps for next time.</p>
     {/each}
   </section>
 
@@ -130,6 +191,11 @@
   .primary:hover:not(:disabled){background:#ffdd7f;border-color:#ffdd7f}
   .link{background:none;border:0;padding:0;margin-left:5px;color:var(--yellow);font:inherit;font-size:11px;text-decoration:underline;cursor:pointer}
   .hint{font-size:12px;color:var(--muted);line-height:1.65;margin:0}
+  .field{display:grid;gap:6px;font-size:11px;font-weight:550;color:var(--muted);margin-top:9px}
+  .field input,.field select,textarea{width:100%;box-sizing:border-box;border:1px solid var(--line-strong);background:var(--paper);border-radius:8px;padding:8px 10px;color:var(--text);font:inherit;font-size:12px;line-height:1.6;min-width:0}
+  textarea{resize:vertical;margin-top:8px;font-family:var(--font-mono,inherit)}
+  details summary{cursor:pointer;font-size:11px;font-weight:550;color:var(--muted);margin-top:9px}
+  article .body{max-width:100%}
   .settled{opacity:.72}
   .settled strong{font-weight:500}
 </style>

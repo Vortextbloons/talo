@@ -5,7 +5,7 @@
   import { sendMessage } from '../lib/chat.svelte';
   let { items, onCancel, working }: { items: ResearchActivity[]; onCancel: () => void; working: boolean } = $props();
   let openError = $state('');
-  const label = (tool: string) => tool.startsWith('browser_') ? 'Browser · ' + tool.slice(8).replaceAll('_', ' ') : tool === 'web_search' ? 'Searching' : tool === 'web_crawl' ? 'Exploring website' : tool === 'web_screenshot' ? 'Capturing page' : tool === 'web_fetch' ? 'Reading' : tool.replaceAll('_', ' ');
+  const label = (tool: string) => tool.startsWith('browser_') ? 'Browser · ' + tool.slice(8).replaceAll('_', ' ') : tool === 'web_search' ? 'Searching' : tool === 'web_crawl' ? 'Exploring website' : tool === 'web_screenshot' ? 'Capturing page' : tool === 'web_fetch' ? 'Reading' : tool === 'skill' ? 'Used skill' : tool.replaceAll('_', ' ');
   const running = $derived(working && items.some(item => item.state === 'running'));
   const pages = $derived(new Set(items.filter(item => ['browser_open','web_fetch','web_crawl'].includes(item.tool)).map(item => item.input)).size);
   const failed = $derived(items.filter(item => item.state === 'failed').length);

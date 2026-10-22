@@ -9,12 +9,14 @@ import type {
   ConnectionInfo,
   ConversationInfo,
   ConversationSnapshot,
+  DelegationTask,
   GenerationState,
   ModelSelection,
   MessagePage,
   ResearchActivity,
 } from '../../../../packages/contracts/src/chat';
 import type { ProviderModelInfo, ThinkingLevelName } from '../../../../packages/contracts/src/index';
+import { rolesFor } from '../../../../packages/contracts/src/index';
 import { providerName } from './connection-providers';
 
 const THINKING_LEVEL_NAMES: ThinkingLevelName[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -56,6 +58,9 @@ export interface ChatStore {
   thinkingBusy: boolean;
   historyLoading: boolean;
   historyRevision: number;
+  child: ConversationSnapshot | null;
+  childParent: ConversationInfo | null;
+  childLoading: boolean;
 }
 
 export const chat: ChatStore = $state({
@@ -83,6 +88,9 @@ export const chat: ChatStore = $state({
   thinkingBusy: false,
   historyLoading: false,
   historyRevision: 0,
+  child: null,
+  childParent: null,
+  childLoading: false,
 });
 
 const EVENT_NAME = 'talo://chat';
@@ -97,6 +105,7 @@ let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
 let stopFallback: ReturnType<typeof setTimeout> | undefined;
 let sequenceByGeneration = new Map<string, number>();
 let finishedGenerations = new Set<string>();
+let promotedQueued = new Map<string, string>();
 
 function errorMessage(value: unknown): string {
   if (typeof value === 'string') return value.slice(0, 800);
@@ -167,6 +176,8 @@ function applySnapshot(snapshot: ConversationSnapshot): void {
 
   chat.active = {
     ...snapshot,
+    delegations: snapshot.delegations ?? [],
+    queued: snapshot.queued ?? [],
     messages: snapshot.messages.map(message => ({ ...message })),
   };
 
@@ -291,6 +302,68 @@ function scheduleReconcile(conversationId: string, delay = 300): void {
   }, delay);
 }
 
+function handleChildGenerationEvent(event: Extract<ChatEvent, { type: 'generation' }>): void {
+  const child = chat.child;
+  if (!child || child.conversation.id !== event.conversationId) return;
+  const terminal = event.state === 'completed' || event.state === 'cancelled' || event.state === 'failed';
+  if (event.delta) {
+    const existing = child.messages.find(message => message.role === 'assistant' && message.generationId === event.generationId);
+    if (existing) {
+      existing.text = (event.delta.reset ? '' : existing.text) + (event.delta.text ?? '');
+      const reasoning = (event.delta.reset ? '' : existing.reasoning ?? '') + (event.delta.reasoning ?? '');
+      if (reasoning) existing.reasoning = reasoning;
+      else delete existing.reasoning;
+      existing.status = statusFor(event.state);
+    } else {
+      child.messages.push({
+        id: `assistant-${event.generationId}`,
+        role: 'assistant',
+        text: event.delta.text ?? '',
+        status: statusFor(event.state),
+        generationId: event.generationId,
+        ...(event.delta.reasoning ? { reasoning: event.delta.reasoning } : {}),
+      });
+    }
+  }
+  if (event.text !== undefined) {
+    const existing = child.messages.find(message => message.role === 'assistant' && message.generationId === event.generationId);
+    if (existing) existing.text = event.text;
+  }
+  if (event.message) {
+    const index = child.messages.findIndex(message => message.id === event.message!.id);
+    if (index >= 0) child.messages[index] = { ...child.messages[index], ...event.message };
+    else child.messages.push({ ...event.message });
+  }
+  child.state = event.state;
+  child.generationId = terminal ? null : event.generationId;
+  child.sequence = Math.max(child.sequence, event.sequence);
+  if (event.error) child.error = event.error;
+}
+
+function applyDelegation(task: DelegationTask): void {
+  const active = chat.active;
+  if (active && active.conversation.id === task.parentConversationId) {
+    active.delegations = [...(active.delegations ?? []).filter(item => item.id !== task.id), task]
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+  if (chat.child && chat.child.conversation.id === task.childConversationId) {
+    chat.child.state = task.state === 'waiting' ? 'generating' : chat.child.state;
+  }
+}
+
+function promoteQueuedTurn(conversation: ConversationSnapshot, generationId: string): void {
+  const text = promotedQueued.get(generationId);
+  if (text === undefined) return;
+  promotedQueued.delete(generationId);
+  if (conversation.messages.some(message => message.role === 'user' && message.text === text)) return;
+  conversation.messages.push({
+    id: `local-user-${generationId}`,
+    role: 'user',
+    text,
+    status: 'completed',
+  });
+}
+
 function handleGenerationEvent(event: Extract<ChatEvent, { type: 'generation' }>): void {
   const conversation = chat.active;
   if (!conversation || conversation.conversation.id !== event.conversationId) {
@@ -313,6 +386,7 @@ function handleGenerationEvent(event: Extract<ChatEvent, { type: 'generation' }>
     void refreshSnapshot(event.conversationId, true, event);
     return;
   }
+  promoteQueuedTurn(conversation, event.generationId);
   sequenceByGeneration.set(event.generationId, event.sequence);
   conversation.sequence = event.sequence;
 
@@ -339,6 +413,25 @@ function handleGenerationEvent(event: Extract<ChatEvent, { type: 'generation' }>
 }
 
 function handleEvent(event: ChatEvent): void {
+  if (event.type === 'delegation') {
+    applyDelegation(event.task);
+    return;
+  }
+  if (event.type === 'queue') {
+    if (chat.active?.conversation.id === event.conversationId) {
+      const nextIds = new Set(event.queued.map(turn => turn.id));
+      for (const turn of chat.active.queued ?? []) {
+        if (!nextIds.has(turn.id)) promotedQueued.set(turn.id, turn.text);
+      }
+      chat.active.queued = event.queued;
+    }
+    return;
+  }
+  if (event.type === 'session') return;
+  if (event.type === 'generation' && chat.child?.conversation.id === event.conversationId) {
+    handleChildGenerationEvent(event);
+    return;
+  }
   if (event.type === 'generation' && pendingSnapshot?.conversationId === event.conversationId) {
     pendingSnapshot.events.push(event);
     return;
@@ -449,6 +542,7 @@ export function disposeChat(): void {
   window.removeEventListener('focus', reconcileOnFocus);
   document.removeEventListener('visibilitychange', reconcileOnFocus);
   queuedEvents = null;
+  promotedQueued = new Map();
   chat.initialized = false;
 }
 
@@ -553,9 +647,22 @@ export function isSelectionAvailable(selection: ModelSelection | null): boolean 
   return models.some(model => model.id === selection.modelId);
 }
 
+/** Routing preferences mirrored from settings; App.svelte hydrates and updates them. */
+export const routing = $state({ mode: 'auto' as 'auto' | 'manual', tier: 'recommended' as 'economy' | 'recommended' });
+
 export function pickDefaultSelection(): ModelSelection | null {
   const current = chat.draftSelection;
   if (current && isSelectionAvailable(current)) return current;
+
+  if (routing.mode === 'auto') {
+    for (const connection of chat.connections) {
+      if (!connection.connected) continue;
+      const roles = rolesFor(connection.providerId);
+      if (!roles) continue;
+      const pick = routing.tier === 'economy' ? roles.economyPilot : roles.smartPilot;
+      return { connectionId: connection.id, modelId: pick.model };
+    }
+  }
 
   for (const connection of chat.connections) {
     if (!connection.connected) continue;
@@ -610,10 +717,6 @@ export async function createConversation(): Promise<boolean> {
     chat.error = PREVIEW_MESSAGE;
     return false;
   }
-  if (isWorking()) {
-    chat.error = 'Stop the current reply before starting another conversation.';
-    return false;
-  }
   chat.creating = true;
   chat.error = '';
   try {
@@ -623,7 +726,13 @@ export async function createConversation(): Promise<boolean> {
       selection ? { selection } : {},
     );
     applySnapshot(snapshot);
+    chat.child = null;
+    chat.childParent = null;
     if (!snapshot.conversation.selection) chat.draftSelection = null;
+    if (routing.mode === 'auto' && selection) {
+      const roles = rolesFor(chat.connections.find(item => item.id === selection.connectionId)?.providerId ?? '');
+      if (roles) void setThinkingLevel(routing.tier === 'economy' ? roles.economyPilot.effort : roles.smartPilot.effort);
+    }
     return true;
   } catch (value) {
     chat.error = errorMessage(value);
@@ -639,10 +748,9 @@ export async function openConversation(conversationId: string): Promise<boolean>
     return false;
   }
   if (chat.active?.conversation.id === conversationId) return true;
-  if (isWorking() || chat.sending) {
-    chat.error = 'Stop the current reply before opening another conversation.';
-    return false;
-  }
+  if (chat.sending) return false;
+  chat.child = null;
+  chat.childParent = null;
   const token = ++openToken;
   chat.openingId = conversationId;
   chat.error = '';
@@ -779,10 +887,6 @@ export async function sendMessage(rawText: string, attachments: ChatAttachmentIn
     return false;
   }
   if (chat.sending) return false;
-  if (isWorking()) {
-    chat.error = 'Talo is still replying. Stop the reply or wait for it to finish.';
-    return false;
-  }
 
   let selection = chat.active?.conversation.selection ?? chat.draftSelection;
   if (!selection) {
@@ -818,6 +922,21 @@ export async function sendMessage(rawText: string, attachments: ChatAttachmentIn
     }
 
     generationId = newId();
+    // Follow-ups accepted while this chat is generating wait in the host queue, in order.
+    if (conversation.conversation.id === chat.active?.conversation.id && isWorking()) {
+      if (attachments.length) {
+        chat.error = 'Wait for the current reply before attaching an image.';
+        return false;
+      }
+      conversation.queued = [...(conversation.queued ?? []), { id: generationId, text, createdAt: new Date().toISOString() }];
+      await invoke('chat_send', {
+        conversationId: conversation.conversation.id,
+        generationId,
+        text,
+        attachments: [],
+      });
+      return true;
+    }
     // Previews come straight from the composer so the picture appears with the bubble.
     const previews: ChatAttachment[] = attachments.map((attachment, index) => ({
       id: `local-image-${generationId}-${index}`,
@@ -836,7 +955,11 @@ export async function sendMessage(rawText: string, attachments: ChatAttachmentIn
     noteFirstMessage(conversation.conversation.id, text, previews.length > 0);
     return true;
   } catch (value) {
-    if (generationId) rollbackOptimistic(generationId);
+    if (generationId) {
+      rollbackOptimistic(generationId);
+      const active = chat.active;
+      if (active) active.queued = (active.queued ?? []).filter(turn => turn.id !== generationId);
+    }
     chat.error = errorMessage(value);
     return false;
   } finally {
@@ -861,6 +984,49 @@ export async function stopGeneration(): Promise<void> {
     }, 15000);
   } catch (value) {
     if (conversation.generationId === generationId) conversation.state = 'generating';
+    chat.error = errorMessage(value);
+  }
+}
+
+export async function openDelegationTask(taskId: string): Promise<boolean> {
+  if (!isTauri()) return false;
+  chat.childLoading = true;
+  chat.error = '';
+  try {
+    const snapshot = await invoke<ConversationSnapshot>('delegation_action', {
+      operation: 'open',
+      payload: { taskId },
+    });
+    chat.child = { ...snapshot, delegations: snapshot.delegations ?? [], queued: snapshot.queued ?? [] };
+    chat.childParent = snapshot.parentConversation ?? null;
+    return true;
+  } catch (value) {
+    chat.error = errorMessage(value);
+    return false;
+  } finally {
+    chat.childLoading = false;
+  }
+}
+
+export function closeDelegationTask(): void {
+  chat.child = null;
+  chat.childParent = null;
+}
+
+export async function cancelDelegation(taskId: string): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    await invoke('delegation_action', { operation: 'cancel', payload: { taskId } });
+  } catch (value) {
+    chat.error = errorMessage(value);
+  }
+}
+
+export async function cancelAllDelegations(conversationId: string): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    await invoke('delegation_action', { operation: 'cancel_all', payload: { conversationId } });
+  } catch (value) {
     chat.error = errorMessage(value);
   }
 }
@@ -922,6 +1088,32 @@ export interface ConnectInput {
   name: string;
   apiKey: string;
   modelId?: string;
+  connectionId?: string;
+}
+
+let chatgptAttemptId = '';
+let chatgptCancelled = false;
+
+export function cancelChatGPT(): void {
+  chatgptCancelled = true;
+}
+
+async function signInChatGPT(connectionId?: string): Promise<ConnectionInfo> {
+  chatgptCancelled = false;
+  chatgptAttemptId = await invoke<string>('chatgpt_begin', { connectionId: connectionId ?? null });
+  try {
+    while (!chatgptCancelled) {
+      const connection = await invoke<ConnectionInfo | null>('chatgpt_poll', { attemptId: chatgptAttemptId, cancel: false });
+      if (connection) { chatgptAttemptId = ''; return connection; }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    throw new Error('ChatGPT sign-in cancelled.');
+  } finally {
+    if (chatgptAttemptId) {
+      await invoke('chatgpt_poll', { attemptId: chatgptAttemptId, cancel: true }).catch(() => {});
+      chatgptAttemptId = '';
+    }
+  }
 }
 
 /** The caller must clear its password field before awaiting this call. */
@@ -935,7 +1127,7 @@ export async function connectProvider(input: ConnectInput): Promise<ConnectionIn
   chat.connectingProvider = input.providerId;
   chat.connectingName = input.name;
   try {
-    const info = await invoke<ConnectionInfo>('provider_connect', {
+    const info = input.providerId === 'chatgpt' ? await signInChatGPT(input.connectionId) : await invoke<ConnectionInfo>('provider_connect', {
       providerId: input.providerId,
       name: input.name,
       apiKey: input.apiKey,
@@ -968,12 +1160,14 @@ export async function disconnectProvider(connectionId: string): Promise<void> {
   }
   chat.error = '';
   try {
-    await invoke('provider_disconnect', { connectionId });
-    chat.connections = chat.connections.filter(connection => connection.id !== connectionId);
+    const warning = await invoke<string | null>('provider_disconnect', { connectionId });
+    const connection = chat.connections.find(connection => connection.id === connectionId);
+    if (connection?.providerId === 'chatgpt') connection.connected = false;
+    else chat.connections = chat.connections.filter(connection => connection.id !== connectionId);
     delete chat.models[connectionId];
     delete chat.discovery[connectionId];
     if (chat.draftSelection?.connectionId === connectionId) chat.draftSelection = pickDefaultSelection();
-    chat.notice = 'Provider disconnected.';
+    chat.notice = warning || 'Provider disconnected.';
   } catch (value) {
     chat.error = errorMessage(value);
   }
@@ -985,23 +1179,4 @@ export function dismissError(): void {
 
 export function dismissNotice(): void {
   chat.notice = '';
-}
-
-/** Kept for the interface preview and for tests that need a clean first paint. */
-export function resetChatForPreview(): void {
-  chat.phase = 'ready';
-  chat.preview = true;
-  chat.error = '';
-  chat.notice = '';
-  chat.connecting = false;
-  chat.connectingProvider = '';
-  chat.connectingName = '';
-  chat.connections = [];
-  chat.conversations = [];
-  chat.active = null;
-  chat.draftSelection = null;
-  chat.thinkingLevel = null;
-  chat.thinkingBusy = false;
-  sequenceByGeneration = new Map();
-  finishedGenerations = new Set();
 }

@@ -37,6 +37,16 @@ interface DirectChoice {
 
 const DIRECT: DirectChoice[] = [
   {
+    id: 'chatgpt',
+    name: 'ChatGPT plan',
+    tagline: 'Use your ChatGPT plan. Sign in through your browser; plan limits apply.',
+    keysUrl: '',
+    docsUrl: 'https://developers.openai.com/siwc/token-sharing-open-source',
+    apiBaseUrl: 'https://api.openai.com/v1',
+    envVar: '',
+    suggestedModels: [],
+  },
+  {
     id: 'openai',
     name: 'OpenAI',
     tagline: 'GPT models through the OpenAI API.',
@@ -78,7 +88,7 @@ const DIRECT: DirectChoice[] = [
   },
 ];
 
-const order = ['openai', 'anthropic', 'google', 'openrouter', 'opencode', 'opencode-go', 'nvidia', 'custom'];
+const order = ['chatgpt', 'openai', 'anthropic', 'google', 'openrouter', 'opencode', 'opencode-go', 'nvidia', 'custom'];
 
 function fromDescriptor(descriptor: ProviderDescriptor): ProviderChoice {
   return {

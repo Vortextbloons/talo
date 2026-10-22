@@ -121,3 +121,33 @@ test('failed latest load does not report a successful jump', async () => {
   assert.equal(api.chat.active.after, 'older');
   assert.equal(api.chat.historyRevision, 0);
 });
+
+test('a queued follow-up becomes a visible user turn when its generation starts', async () => {
+  const api = await store();
+  api.applySnapshot(snapshot({
+    state: 'completed',
+    generationId: null,
+    queued: [{ id: 'queued-gen', text: 'Follow up later', createdAt: new Date().toISOString() }],
+    messages: [message('current')],
+  }));
+  api.handleEvent({ type: 'queue', conversationId: 'chat', queued: [] });
+  api.handleEvent({ type: 'generation', conversationId: 'chat', generationId: 'queued-gen', state: 'generating', sequence: 1 });
+  assert.ok(api.chat.active.messages.some(item => item.role === 'user' && item.text === 'Follow up later'));
+  assert.equal(api.chat.active.queued.length, 0);
+});
+
+test('delegation events update only their parent conversation cards', async () => {
+  const api = await store();
+  api.applySnapshot(snapshot({ messages: [] }));
+  const task = {
+    id: 'task-1', parentConversationId: 'chat', childConversationId: 'child-1',
+    title: 'Read the RFC', brief: 'Summarize it', state: 'running', delivered: false,
+    createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z',
+  };
+  api.handleEvent({ type: 'delegation', task });
+  assert.equal(api.chat.active.delegations[0].state, 'running');
+  api.handleEvent({ type: 'delegation', task: { ...task, state: 'failed', error: 'Provider failed' } });
+  assert.equal(api.chat.active.delegations[0].state, 'failed');
+  api.handleEvent({ type: 'delegation', task: { ...task, id: 'other', parentConversationId: 'other-chat' } });
+  assert.equal(api.chat.active.delegations.length, 1);
+});

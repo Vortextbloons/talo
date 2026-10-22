@@ -575,3 +575,104 @@ test('concurrent opens cannot share one authoritative session file', { timeout:4
     assert.ok((await readFile(opened.path,'utf8')).includes('Original history'));
   }finally{await worker.close();await mock.close();await rm(data,{recursive:true,force:true});}
 });
+
+test('cancelling one conversation leaves a concurrent generation untouched', { timeout: 60000 }, async () => {
+  const data = await mkdtemp(path.join(os.tmpdir(), 'talo-cancel-isolation-'));
+  const mock = await startMockProvider({
+    chunks: ['one', ' two', ' three', ' four', ' five', ' six'],
+    delayMs: 120,
+  });
+  const worker = startWorker(data, { idleMs: 60_000 });
+  try {
+    await worker.waitReady();
+    for (const id of ['cancel-a', 'cancel-b']) {
+      await worker.request(`open-${id}`, 'session.open', {
+        conversationId: id,
+        sessionPath: null,
+        provider: 'custom',
+        model: 'mock-model',
+        baseUrl: mock.url,
+        apiKey: mock.state.key,
+      }, 40_000);
+    }
+    const mark = worker.mark();
+    await worker.request('send-a', 'session.prompt', {
+      conversationId: 'cancel-a',
+      generationId: 'ga',
+      text: 'Stop this one',
+    });
+    await worker.request('send-b', 'session.prompt', {
+      conversationId: 'cancel-b',
+      generationId: 'gb',
+      text: 'Keep this one',
+    });
+    await worker.waitFrom(mark, event =>
+      event.type === 'chat' && event.event?.type === 'generation' &&
+      event.event.generationId === 'ga' && typeof event.event.delta?.text === 'string' && event.event.delta.text.length > 0,
+      20_000);
+    assert.equal((await worker.request('abort-a', 'session.abort', { generationId: 'ga' }, 20_000)).aborted, true);
+    const [cancelled, completed] = await Promise.all([
+      worker.waitGeneration('cancel-a', 'ga', ['cancelled', 'failed', 'completed'], mark, 30_000),
+      worker.waitGeneration('cancel-b', 'gb', ['cancelled', 'failed', 'completed'], mark, 40_000),
+    ]);
+    assert.equal(cancelled.event.state, 'cancelled');
+    assert.equal(completed.event.state, 'completed', completed.event.error);
+    assert.equal(completed.event.text, mock.state.chunks.join(''));
+    const first = await worker.request('snap-a', 'session.snapshot', { conversationId: 'cancel-a' });
+    const second = await worker.request('snap-b', 'session.snapshot', { conversationId: 'cancel-b' });
+    assert.equal(first.messages.at(-1).status, 'cancelled');
+    assert.equal(second.messages.at(-1).status, 'completed');
+    assert.ok(worker.generationEvents('cancel-a', 'ga').every(event => event.conversationId === 'cancel-a'));
+    assert.ok(worker.generationEvents('cancel-b', 'gb').every(event => event.conversationId === 'cancel-b'));
+  } finally {
+    await worker.kill();
+    await mock.close();
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
+test('a delegated result resumes the parent as hidden context, not a fabricated user turn', { timeout: 40000 }, async () => {
+  const data = await mkdtemp(path.join(os.tmpdir(), 'talo-delivery-'));
+  const mock = await startMockProvider({ chunks: ['Combined', ' answer'] });
+  const worker = startWorker(data, { idleMs: 60_000 });
+  try {
+    await worker.waitReady();
+    await worker.request('open', 'session.open', {
+      conversationId: 'parent',
+      sessionPath: null,
+      provider: 'custom',
+      model: 'mock-model',
+      baseUrl: mock.url,
+      apiKey: mock.state.key,
+    }, 40_000);
+    const first = worker.mark();
+    await worker.request('first', 'session.prompt', {
+      conversationId: 'parent',
+      generationId: 'first',
+      text: 'Original question',
+    });
+    assert.equal((await worker.waitGeneration('parent', 'first', ['completed', 'failed'], first)).event.state, 'completed');
+
+    const delivery = worker.mark();
+    await worker.request('deliver', 'session.deliver', {
+      conversationId: 'parent',
+      generationId: 'delivery',
+      text: 'Task: Read the RFC\nState: completed\nResult: Section 4 is stable.',
+    });
+    const done = await worker.waitGeneration('parent', 'delivery', ['completed', 'failed'], delivery);
+    assert.equal(done.event.state, 'completed', done.event.error);
+    assert.equal(done.event.text, 'Combined answer');
+
+    const snapshot = await worker.request('snap', 'session.snapshot', { conversationId: 'parent' });
+    assert.equal(snapshot.messages.filter(message => message.role === 'user').length, 1);
+    assert.equal(snapshot.messages.filter(message => message.role === 'assistant').length, 2);
+    assert.ok(!snapshot.messages.some(message => message.role === 'user' && message.text.includes('Section 4 is stable')));
+    const request = mock.state.requests.filter(item => item.url.endsWith('/chat/completions')).at(-1);
+    assert.ok(request.body.messages.some(message => message.role === 'custom' || JSON.stringify(message.content).includes('Section 4 is stable')),
+      'the structured result should reach the model as context');
+  } finally {
+    await worker.kill();
+    await mock.close();
+    await rm(data, { recursive: true, force: true });
+  }
+});

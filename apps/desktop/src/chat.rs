@@ -120,6 +120,18 @@ pub enum ChatEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    #[serde(rename = "delegation", rename_all = "camelCase")]
+    Delegation { task: Value },
+    #[serde(rename = "queue", rename_all = "camelCase")]
+    Queue {
+        conversation_id: String,
+        queued: Vec<storage::QueuedTurnInfo>,
+    },
+    #[serde(rename = "session", rename_all = "camelCase")]
+    Session {
+        conversation_id: String,
+        state: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -186,6 +198,7 @@ struct SessionBinding {
     model_id: String,
     session_path: Option<String>,
     thinking_level: Option<String>,
+    credential_hash: Option<String>,
 }
 
 /// In-memory projection of durable chat state. It is rebuilt from SQLite after a restart.
@@ -244,7 +257,7 @@ impl ChatState {
         signal: WorkerSignal,
     ) {
         match signal {
-            WorkerSignal::Web(_) | WorkerSignal::Browser(_) | WorkerSignal::Tools(_) | WorkerSignal::Agent(_) => {}, // handled before chat projection
+            WorkerSignal::Web(_) | WorkerSignal::Browser(_) | WorkerSignal::Tools(_) | WorkerSignal::Agent(_) | WorkerSignal::Delegation(_) => {}, // handled before chat projection
             WorkerSignal::Ready => emit_worker(app, WorkerState::Ready, None),
             WorkerSignal::Sleeping => {
                 self.sessions.clear();
@@ -275,7 +288,13 @@ impl ChatState {
                     return;
                 }
                 if let Ok(event) = serde_json::from_value::<ChatEvent>(value) {
-                    self.on_generation_event(db, app, event);
+                    match event {
+                        ChatEvent::Session { conversation_id, state } if state == "closed" => {
+                            self.sessions.remove(&conversation_id);
+                        }
+                        ChatEvent::Session { .. } => {}
+                        other => self.on_generation_event(db, app, other),
+                    }
                 }
             }
             WorkerSignal::Eof => {
@@ -502,6 +521,8 @@ impl ChatState {
             error: error.clone(),
             attachments: None,
         });
+        let final_text = text.clone();
+        let final_error = error.clone();
         emit_generation(
             app,
             &active.conversation_id,
@@ -513,6 +534,7 @@ impl ChatState {
             Some(message),
             error,
         );
+        crate::delegation::on_generation_finished(db, app, generation_id, state, &final_text, final_error.as_deref());
     }
 
     fn ensure_session(
@@ -538,6 +560,10 @@ impl ChatState {
             model_id: model_id.to_string(),
             session_path: conversation.session_path.clone(),
             thinking_level: known_level,
+            credential_hash: if connection.provider_id == "chatgpt" {
+                use sha2::{Digest, Sha256};
+                secret.map(|secret| format!("{:x}", Sha256::digest(&**secret)))
+            } else { None },
         };
         if self.sessions.get(&conversation.id) == Some(&binding) {
             return Ok(());
@@ -558,6 +584,16 @@ impl ChatState {
         if let Some(base_url) = &connection.base_url {
             params["baseUrl"] = Value::String(base_url.clone());
         }
+        let scheduled = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM automation_runs WHERE conversation_id=?1)",
+                [&conversation.id],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap_or(false);
+        let child = storage::conversation_is_delegated(db, &conversation.id).unwrap_or(true);
+        params["delegation"] = json!(!scheduled && !child);
+        params["skills"] = crate::skills::for_conversation(db, &supervisor.data, conversation);
         let result = supervisor
             .request("session.open", params, SESSION_TIMEOUT)
             .map_err(|error| error.to_string())?;
@@ -596,6 +632,39 @@ impl ChatState {
             },
         );
         Ok(())
+    }
+
+    /// Push a thinking level onto the conversation's open session and record the effective
+    /// value. Unlike the user-facing command this has no generation guard: the worker router
+    /// applies routed levels to a child before its first prompt.
+    fn session_thinking(
+        &mut self,
+        supervisor: &mut Supervisor,
+        conversation_id: &str,
+        level: &str,
+    ) -> Result<String, String> {
+        let result = supervisor
+            .request(
+                "session.thinking",
+                json!({"conversationId": conversation_id, "level": level}),
+                SESSION_TIMEOUT,
+            )
+            .map_err(|error| {
+                if error.is_timeout() {
+                    "Changing thinking timed out".to_string()
+                } else {
+                    sanitize_error(&error.to_string())
+                }
+            })?;
+        let effective = result
+            .get("level")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Pi worker did not return a thinking level".to_string())?
+            .to_string();
+        if let Some(binding) = self.sessions.get_mut(conversation_id) {
+            binding.thinking_level = Some(effective.clone());
+        }
+        Ok(effective)
     }
 
     fn fail_live(
@@ -682,6 +751,21 @@ fn snapshot(
         .sessions
         .get(&conversation.id)
         .and_then(|binding| binding.thinking_level.clone());
+    let delegations = crate::delegation::list(db, &conversation.id).unwrap_or_default();
+    let queued = storage::list_queue(db, &conversation.id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|turn| turn.kind == "user")
+        .map(|turn| storage::QueuedTurnInfo {
+            id: turn.generation_id,
+            text: turn.text,
+            created_at: turn.created_at,
+        })
+        .collect();
+    let parent_conversation = storage::delegation_parent(db, &conversation.id)
+        .ok()
+        .flatten()
+        .and_then(|parent| storage::get_conversation(db, &parent).ok());
     Ok(ConversationSnapshot {
         conversation,
         messages,
@@ -692,6 +776,9 @@ fn snapshot(
         sequence,
         error: error.map(|error| sanitize_error(&error)),
         thinking_level,
+        delegations,
+        queued,
+        parent_conversation,
     })
 }
 
@@ -806,7 +893,10 @@ fn load_connection(
     Ok((connection, selection.model_id.clone()))
 }
 
-fn decrypt_secret(connection: &ConnectionRow) -> Result<Option<Secret>, String> {
+fn decrypt_secret(db: &rusqlite::Connection, supervisor: &mut Supervisor, connection: &ConnectionRow) -> Result<Option<Secret>, String> {
+    if connection.provider_id == "chatgpt" {
+        return crate::chatgpt::access(db, supervisor, connection).map(Some);
+    }
     connection
         .secret
         .as_ref()
@@ -839,15 +929,7 @@ fn title_from(text: &str) -> Option<String> {
 pub fn sanitize_error(message: &str) -> String {
     let flattened = message
         .chars()
-        .map(|character| {
-            if character == '\n' || character == '\r' || character == '\t' {
-                ' '
-            } else if character.is_control() {
-                ' '
-            } else {
-                character
-            }
-        })
+        .map(|character| if character.is_control() { ' ' } else { character })
         .collect::<String>();
     let mut redacted = String::new();
     let mut after_bearer = false;
@@ -946,11 +1028,19 @@ fn conversation_open_inner(
     let conversation =
         storage::get_conversation(&host.db, &conversation_id).map_err(storage_error)?;
     host.db.execute("INSERT INTO settings(key,value) VALUES('active_conversation',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[&conversation_id]).map_err(|e|e.to_string())?;
-    if !host.chat.has_active_for(&conversation_id) {
+    conversation_snapshot_inner(host, conversation)
+}
+
+/// Build a snapshot for any conversation without changing which main chat is selected.
+pub(crate) fn conversation_snapshot_inner(
+    host: &mut Host,
+    conversation: ConversationInfo,
+) -> Result<ConversationSnapshot, String> {
+    if !host.chat.has_active_for(&conversation.id) {
         if let Some(path) = &conversation.session_path {
             match crate::library::transcript(path) {
                 Ok(messages) => {
-                    crate::library::rebuild_projection(&mut host.db, &conversation_id, &messages)?;
+                    crate::library::rebuild_projection(&mut host.db, &conversation.id, &messages)?;
                 }
                 Err(error) => {
                     let mut result = snapshot(&host.db, &host.chat, conversation)?;
@@ -1001,7 +1091,7 @@ fn conversation_thinking_inner(
     let conversation =
         storage::get_conversation(&host.db, &conversation_id).map_err(storage_error)?;
     let (connection, model_id) = load_connection(&host.db, &conversation)?;
-    let secret = decrypt_secret(&connection)?;
+    let secret = decrypt_secret(&host.db, &mut host.supervisor, &connection)?;
     host.chat.ensure_session(
         &mut host.db,
         &mut host.supervisor,
@@ -1010,28 +1100,7 @@ fn conversation_thinking_inner(
         &model_id,
         secret.as_ref(),
     )?;
-    let result = host
-        .supervisor
-        .request(
-            "session.thinking",
-            json!({"conversationId": &conversation_id, "level": &level}),
-            SESSION_TIMEOUT,
-        )
-        .map_err(|error| {
-            if error.is_timeout() {
-                "Changing thinking timed out".to_string()
-            } else {
-                sanitize_error(&error.to_string())
-            }
-        })?;
-    let effective = result
-        .get("level")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "Pi worker did not return a thinking level".to_string())?
-        .to_string();
-    if let Some(binding) = host.chat.sessions.get_mut(&conversation_id) {
-        binding.thinking_level = Some(effective.clone());
-    }
+    let effective = host.chat.session_thinking(&mut host.supervisor, &conversation_id, &level)?;
     Ok(effective)
 }
 
@@ -1065,17 +1134,24 @@ pub(crate) fn chat_send_inner(
     } = &mut *host;
 
     // The bundled Pi ModelRuntime and its ephemeral credentials are shared by all
-    // conversations. Serialize work app-wide so Stop and credential changes stay immediate.
-    if chat.any_active() {
-        return Err(
-            "A response is already in progress. Stop it before sending another message.".into(),
-        );
+    // conversations. Concurrent sessions are supported, so only the same conversation
+    // serializes; other chats and delegated children keep running.
+    let active = chat.has_active_for(&conversation_id);
+    if active && !attachments.is_empty() {
+        return Err("Wait for the current reply before attaching an image.".into());
     }
     if text.trim().is_empty() && attachments.is_empty() {
         return Err("Write a message first".into());
     }
     if text.len() > MAX_MESSAGE_BYTES {
         return Err("That message is too long".into());
+    }
+    if active {
+        let generation_id = validate_id(&generation_id, "generation id")?;
+        storage::enqueue_turn(db, &generation_id, &conversation_id, "user", &text)
+            .map_err(storage_error)?;
+        emit_queue(app, db, &conversation_id);
+        return Ok(());
     }
     // Validate before the generation row exists so a bad image never leaves a stuck turn.
     let validated = attachments::validate(
@@ -1151,7 +1227,7 @@ pub(crate) fn chat_send_inner(
         None,
     );
 
-    let secret = match decrypt_secret(&connection) {
+    let secret = match decrypt_secret(db, supervisor, &connection) {
         Ok(secret) => secret,
         Err(error) => {
             chat.fail_live(db, &app, &generation_id, error);
@@ -1175,6 +1251,7 @@ pub(crate) fn chat_send_inner(
         "text": text,
         "context": agent_context(db, &conversation, &text),
         "capabilities": crate::agent::capabilities_for(db, &conversation.workspace_id),
+        "skills": crate::skills::for_conversation(db, &supervisor.data, &conversation),
         "images": stored
             .iter()
             .map(|image| json!({
@@ -1194,6 +1271,336 @@ pub(crate) fn chat_send_inner(
         Err(error) => chat.fail_live(db, &app, &generation_id, error.to_string()),
     }
     Ok(())
+}
+
+pub(crate) fn emit_queue(app: &AppHandle, db: &rusqlite::Connection, conversation_id: &str) {
+    let queued = storage::list_queue(db, conversation_id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|turn| turn.kind == "user")
+        .map(|turn| storage::QueuedTurnInfo {
+            id: turn.generation_id,
+            text: turn.text,
+            created_at: turn.created_at,
+        })
+        .collect::<Vec<_>>();
+    emit(
+        app,
+        ChatEvent::Queue {
+            conversation_id: conversation_id.to_string(),
+            queued,
+        },
+    );
+}
+
+fn child_context(db: &rusqlite::Connection, conversation: &ConversationInfo) -> String {
+    let parent = storage::delegation_parent(db, &conversation.id)
+        .ok()
+        .flatten()
+        .and_then(|id| storage::get_conversation(db, &id).ok());
+    let title = parent
+        .as_ref()
+        .map(|parent| parent.title.as_str())
+        .unwrap_or("the parent conversation");
+    let mut context = format!(
+        "\n\nYou are a delegated child task in Talo. Complete only this bounded task and report a concise result.\nParent chat: {title}\nYou cannot delegate further, assign tasks to the user, ask for permissions, or change workspaces. If one of those is required, report it in your result instead.\n"
+    );
+    context.truncate(context.floor_char_boundary(4096));
+    context
+}
+
+/// Start one bounded child generation using the parent's provider, model and workspace.
+pub(crate) fn chat_child_send_inner(
+    app: &AppHandle,
+    host: &mut Host,
+    task: &crate::delegation::DelegationTask,
+) -> Result<(), String> {
+    let Host {
+        db,
+        supervisor,
+        chat,
+        ..
+    } = &mut *host;
+    let conversation =
+        storage::get_conversation(db, &task.child_conversation_id).map_err(storage_error)?;
+    if chat.has_active_for(&conversation.id) {
+        return Ok(());
+    }
+    let (connection, model_id) = load_connection(db, &conversation)?;
+    let generation_id = uuid::Uuid::new_v4().to_string();
+    let assistant_id = uuid::Uuid::new_v4().to_string();
+    let text = format!("Task: {}\n\n{}", task.title, task.brief);
+    storage::start_generation(
+        db,
+        NewGeneration {
+            id: &generation_id,
+            conversation_id: &conversation.id,
+            assistant_id: &assistant_id,
+            text: &text,
+            title: Some(&task.title),
+        },
+    )
+    .map_err(storage_error)?;
+    chat.active.insert(
+        generation_id.clone(),
+        ActiveGeneration {
+            conversation_id: conversation.id.clone(),
+            state: GenerationState::Generating,
+            sequence: 1,
+            text: String::new(),
+            reasoning: String::new(),
+            assistant_id,
+            cancel_requested: false,
+            worker_sequence: 0,
+            journal_bytes: 0,
+            checkpoint_bytes: 64 * 1024,
+        },
+    );
+    emit_generation(
+        app,
+        &conversation.id,
+        &generation_id,
+        1,
+        GenerationState::Generating,
+        Some(String::new()),
+        Some(String::new()),
+        None,
+        None,
+    );
+    let secret = match decrypt_secret(db, supervisor, &connection) {
+        Ok(secret) => secret,
+        Err(error) => {
+            chat.fail_live(db, app, &generation_id, error);
+            return Ok(());
+        }
+    };
+    if let Err(error) = chat.ensure_session(
+        db,
+        supervisor,
+        &conversation,
+        &connection,
+        &model_id,
+        secret.as_ref(),
+    ) {
+        chat.fail_live(db, app, &generation_id, error);
+        return Ok(());
+    }
+    if let Some(level) = task.thinking_level.as_deref() {
+        if let Err(error) = chat.session_thinking(supervisor, &conversation.id, level) {
+            chat.fail_live(db, app, &generation_id, sanitize_error(&error));
+            return Ok(());
+        }
+    }
+    if let Err(error) = crate::delegation::set_generation(db, &task.id, &generation_id, "running") {
+        chat.fail_live(db, app, &generation_id, error);
+        return Ok(());
+    }
+    let mut context = child_context(db, &conversation);
+    context.push_str(&agent_context(db, &conversation, &text));
+    context.truncate(context.floor_char_boundary(4096));
+    let params = json!({
+        "conversationId": conversation.id,
+        "generationId": generation_id,
+        "text": text,
+        "context": context,
+        "capabilities": crate::agent::capabilities_for(db, &conversation.workspace_id),
+        "skills": crate::skills::for_conversation(db, &supervisor.data, &conversation),
+        "delegation": false,
+    });
+    match supervisor.request("session.prompt", params, PROMPT_TIMEOUT) {
+        Ok(_) => {}
+        Err(error) if error.is_timeout() => {}
+        Err(error) => chat.fail_live(db, app, &generation_id, sanitize_error(&error.to_string())),
+    }
+    Ok(())
+}
+
+/// Resume a parent from persisted child outcomes. The text reaches Pi as a hidden custom
+/// message, so no fabricated user turn appears in the transcript.
+pub(crate) fn chat_delivery_send_inner(
+    app: &AppHandle,
+    host: &mut Host,
+    conversation_id: &str,
+    generation_id: &str,
+    text: &str,
+) -> Result<(), String> {
+    let Host {
+        db,
+        supervisor,
+        chat,
+        ..
+    } = &mut *host;
+    let conversation = storage::get_conversation(db, conversation_id).map_err(storage_error)?;
+    if chat.has_active_for(&conversation.id) {
+        return Err("The parent conversation is still generating".into());
+    }
+    let (connection, model_id) = load_connection(db, &conversation)?;
+    let assistant_id = uuid::Uuid::new_v4().to_string();
+    storage::start_delivery_generation(
+        db,
+        NewGeneration {
+            id: generation_id,
+            conversation_id: &conversation.id,
+            assistant_id: &assistant_id,
+            text,
+            title: None,
+        },
+    )
+    .map_err(storage_error)?;
+    chat.active.insert(
+        generation_id.to_string(),
+        ActiveGeneration {
+            conversation_id: conversation.id.clone(),
+            state: GenerationState::Generating,
+            sequence: 1,
+            text: String::new(),
+            reasoning: String::new(),
+            assistant_id,
+            cancel_requested: false,
+            worker_sequence: 0,
+            journal_bytes: 0,
+            checkpoint_bytes: 64 * 1024,
+        },
+    );
+    emit_generation(
+        app,
+        &conversation.id,
+        generation_id,
+        1,
+        GenerationState::Generating,
+        Some(String::new()),
+        Some(String::new()),
+        None,
+        None,
+    );
+    let secret = match decrypt_secret(db, supervisor, &connection) {
+        Ok(secret) => secret,
+        Err(error) => {
+            chat.fail_live(db, app, &generation_id, error);
+            return Ok(());
+        }
+    };
+    if let Err(error) = chat.ensure_session(
+        db,
+        supervisor,
+        &conversation,
+        &connection,
+        &model_id,
+        secret.as_ref(),
+    ) {
+        chat.fail_live(db, app, generation_id, error);
+        return Ok(());
+    }
+    let params = json!({
+        "conversationId": conversation.id,
+        "generationId": generation_id,
+        "text": text,
+        "context": agent_context(db, &conversation, text),
+        "capabilities": crate::agent::capabilities_for(db, &conversation.workspace_id),
+        "skills": crate::skills::for_conversation(db, &supervisor.data, &conversation),
+        "delegation": true,
+    });
+    match supervisor.request("session.deliver", params, PROMPT_TIMEOUT) {
+        Ok(_) => {}
+        Err(error) if error.is_timeout() => {}
+        Err(error) => chat.fail_live(db, app, generation_id, sanitize_error(&error.to_string())),
+    }
+    Ok(())
+}
+
+/// Start the oldest queued turn whose conversation is idle.
+pub(crate) fn drain_queue_inner(app: &AppHandle, host: &mut Host) {
+    for _ in 0..4 {
+        let Some(turn) = storage::next_queued_turn(&host.db).ok().flatten() else {
+            break;
+        };
+        if !storage::take_queued_turn(&host.db, &turn.generation_id).unwrap_or(false) {
+            break;
+        }
+        emit_queue(app, &host.db, &turn.conversation_id);
+        let result = if turn.kind == "delegation" {
+            chat_delivery_send_inner(
+                app,
+                host,
+                &turn.conversation_id,
+                &turn.generation_id,
+                &turn.text,
+            )
+        } else {
+            chat_send_inner(
+                app,
+                host,
+                turn.conversation_id.clone(),
+                turn.generation_id.clone(),
+                turn.text.clone(),
+                vec![],
+            )
+        };
+        if let Err(error) = result {
+            fail_queued_turn(app, host, &turn, &sanitize_error(&error));
+        }
+    }
+}
+
+fn fail_queued_turn(
+    app: &AppHandle,
+    host: &mut Host,
+    turn: &storage::QueuedTurnRow,
+    error: &str,
+) {
+    let assistant_id = uuid::Uuid::new_v4().to_string();
+    let new = NewGeneration {
+        id: &turn.generation_id,
+        conversation_id: &turn.conversation_id,
+        assistant_id: &assistant_id,
+        text: &turn.text,
+        title: None,
+    };
+    let started = if turn.kind == "delegation" {
+        storage::start_delivery_generation(&mut host.db, new)
+    } else {
+        storage::start_generation(&mut host.db, new)
+    };
+    let Ok(()) = started else {
+        emit(
+            app,
+            ChatEvent::Generation {
+                conversation_id: turn.conversation_id.clone(),
+                generation_id: turn.generation_id.clone(),
+                sequence: 1,
+                state: GenerationState::Failed,
+                text: Some(String::new()),
+                reasoning: None,
+                delta: None,
+                message: None,
+                error: Some(error.to_string()),
+            },
+        );
+        return;
+    };
+    let persisted = storage::finalize_generation(
+        &mut host.db,
+        &turn.generation_id,
+        "failed",
+        "",
+        None,
+        "failed",
+        Some(error),
+        1,
+    )
+    .ok()
+    .flatten();
+    emit_generation(
+        app,
+        &turn.conversation_id,
+        &turn.generation_id,
+        1,
+        GenerationState::Failed,
+        Some(String::new()),
+        None,
+        persisted,
+        Some(error.to_string()),
+    );
 }
 
 fn chat_retry_inner(
@@ -1220,7 +1627,7 @@ fn chat_retry_inner(
         chat.on_lifecycle(db, &app, lifecycle);
     }
     let conversation = storage::get_conversation(db, &conversation_id).map_err(storage_error)?;
-    if chat.any_active() {
+    if chat.has_active_for(&conversation_id) {
         return Err("A response is already in progress. Stop it before retrying.".into());
     }
     let (connection, model_id) = load_connection(db, &conversation)?;
@@ -1255,7 +1662,7 @@ fn chat_retry_inner(
         None,
     );
 
-    let secret = match decrypt_secret(&connection) {
+    let secret = match decrypt_secret(db, supervisor, &connection) {
         Ok(secret) => secret,
         Err(error) => {
             chat.fail_live(db, &app, &generation_id, error);
@@ -1279,8 +1686,9 @@ fn chat_retry_inner(
     let reference_context =
         agent_context(db, &conversation, &plan.user_text);
     let capabilities = json!(crate::agent::capabilities_for(db, &conversation.workspace_id));
+    let skills = crate::skills::for_conversation(db, &supervisor.data, &conversation);
     let params = if had_sqlite_session {
-        json!({"conversationId": conversation_id, "generationId": generation_id, "context":reference_context, "capabilities":capabilities, "images": images_for_generation(db, &conversation_id, &generation_id)})
+        json!({"conversationId": conversation_id, "generationId": generation_id, "context":reference_context, "capabilities":capabilities, "skills":skills, "images": images_for_generation(db, &conversation_id, &generation_id)})
     } else {
         json!({
             "conversationId": conversation_id,
@@ -1288,6 +1696,7 @@ fn chat_retry_inner(
             "text": plan.user_text,
             "context": reference_context,
             "capabilities": capabilities,
+            "skills": skills,
             "images": images_for_generation(db, &conversation_id, &generation_id),
         })
     };
@@ -1468,13 +1877,21 @@ fn provider_connect_inner(
     Ok(row.info())
 }
 
-fn provider_disconnect_inner(host: &mut Host, connection_id: String) -> Result<(), String> {
+fn provider_disconnect_inner(host: &mut Host, connection_id: String) -> Result<Option<String>, String> {
     if host.chat.any_active() {
         return Err("Stop the current response before changing provider connections".into());
     }
-    storage::delete_connection(&host.db, &connection_id).map_err(storage_error)?;
+    let connection = storage::get_connection(&host.db, &connection_id).map_err(storage_error)?;
+    if connection.provider_id == "chatgpt" {
+        if !crate::chatgpt::disconnect(&host.db, &mut host.supervisor, &connection)? {
+            host.chat.sessions.clear();
+            return Ok(Some("Disconnected locally. Remote sign-out was not confirmed; remove Talo in ChatGPT Settings to end its access.".into()));
+        }
+    } else {
+        storage::delete_connection(&host.db, &connection_id).map_err(storage_error)?;
+    }
     host.chat.sessions.clear();
-    Ok(())
+    Ok(None)
 }
 
 fn provider_models_inner(
@@ -1482,7 +1899,7 @@ fn provider_models_inner(
     connection_id: String,
 ) -> Result<Vec<ProviderModelInfo>, String> {
     let connection = storage::get_connection(&host.db, &connection_id).map_err(storage_error)?;
-    let secret = decrypt_secret(&connection)?;
+    let secret = decrypt_secret(&host.db, &mut host.supervisor, &connection)?;
     host.supervisor.ensure_worker()?;
     let mut params = json!({
         "provider": &connection.provider_id,
@@ -1681,7 +2098,7 @@ pub async fn provider_connect(
 }
 
 #[tauri::command]
-pub async fn provider_disconnect(app: AppHandle, connection_id: String) -> Result<(), String> {
+pub async fn provider_disconnect(app: AppHandle, connection_id: String) -> Result<Option<String>, String> {
     run_blocking(app, move |app| {
         let shared = app.state::<Shared>();
         let mut host = shared

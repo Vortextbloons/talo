@@ -7,6 +7,15 @@ export interface ConversationInfo {
   createdAt: string; updatedAt: string; selection: ModelSelection | null;
   workspaceId?: string; archived?: boolean;
 }
+export type DelegationState = 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
+/** One child task attached to a parent conversation. Child transcripts are not main chats. */
+export interface DelegationTask {
+  id: string; parentConversationId: string; childConversationId: string;
+  title: string; brief: string; state: DelegationState;
+  result?: string; error?: string; delivered: boolean;
+  createdAt: string; updatedAt: string;
+}
+export interface QueuedTurn { id: string; text: string; createdAt: string }
 export interface ChatMessage {
   id: string; role: 'user' | 'assistant'; text: string;
   /** Complete accumulated thinking text when the model exposes it; absent otherwise. */
@@ -26,6 +35,12 @@ export interface ConversationSnapshot {
   generationId: string | null; state: GenerationState; sequence: number; error?: string;
   /** Effective Pi thinking level for the open session, when known. */
   thinkingLevel?: string;
+  /** Child tasks owned by this (main) conversation. */
+  delegations?: DelegationTask[];
+  /** User turns waiting behind the active generation, oldest first. */
+  queued?: QueuedTurn[];
+  /** Set when this snapshot is a child task transcript. */
+  parentConversation?: ConversationInfo;
 }
 export interface MessagePage {
   messages: ChatMessage[]; before: string | null; after: string | null;
@@ -39,7 +54,10 @@ export type ChatEvent = {
   type: 'generation'; conversationId: string; generationId: string; sequence: number;
   state: GenerationState; text?: string; reasoning?: string; delta?: StreamDelta; message?: ChatMessage; error?: string;
 } | { type: 'worker'; state: 'starting' | 'ready' | 'stopped' | 'failed'; error?: string }
-  | { type: 'research'; conversationId: string; generationId: string; activity: ResearchActivity };
+  | { type: 'research'; conversationId: string; generationId: string; activity: ResearchActivity }
+  | { type: 'delegation'; task: DelegationTask }
+  | { type: 'queue'; conversationId: string; queued: QueuedTurn[] }
+  | { type: 'session'; conversationId: string; state: 'closed' };
 export interface ResearchActivity {
   id: string; tool: string; input: string; state: 'running' | 'completed' | 'failed' | 'cancelled';
   preview?: string; sources?: string[]; artifact?: string; error?: string;
@@ -48,7 +66,8 @@ export interface ResearchActivity {
 
 /** Private host/worker operations. apiKey is ephemeral and must never be echoed or logged. */
 export type WorkerMethod = 'ping' | 'shutdown' | 'models.list' | 'provider.validate' |
-  'session.open' | 'session.prompt' | 'session.retry' | 'session.abort' | 'session.snapshot' |
+  'chatgpt.begin' | 'chatgpt.poll' | 'chatgpt.refresh' | 'chatgpt.revoke' |
+  'session.open' | 'session.prompt' | 'session.retry' | 'session.deliver' | 'session.abort' | 'session.snapshot' |
   'session.thinking' | 'tools.configure' | 'tools.status' | 'tools.test' | 'tools.cancel';
 export interface WorkerRequest { id: string; method: WorkerMethod; params?: Record<string, unknown> }
 export type WorkerEvent =
@@ -65,6 +84,11 @@ export type WorkerEvent =
  * chat_send({ conversationId, generationId, text, attachments? }) -> void (accepted; events
  * carry result). attachments is a bounded list of {name?, mimeType, data}; the host stores
  * each image under the Pi agent workspace and forwards it to the model as image content.
+ * While the same conversation is generating, a text follow-up is durably queued and the
+ * snapshot's `queued` list shows it in order. Other conversations keep generating.
+ * delegation_action({operation,payload}) -> value. Operations: list({conversationId}),
+ * open({taskId}) returns the child transcript snapshot without changing the active main
+ * chat, cancel({taskId}) and cancel_all({conversationId}).
  * chat_retry({ conversationId, generationId }) -> void (reuse the failed/stopped generation ID)
  * chat_stop({ generationId }) -> void
  * provider_list() -> ConnectionInfo[]
@@ -79,6 +103,8 @@ export type WorkerEvent =
  * The worker sends images natively when the model accepts image input and
  * otherwise appends the on-disk paths so Pi's own tools can read them.
  * session.retry params: conversationId, generationId, images?, capabilities?.
+ * session.deliver params: conversationId, generationId, text (structured child results; delivered
+ * as a hidden custom message, never as a fabricated user turn).
  * session.abort params: generationId. session.snapshot returns {messages,state,generationId,sequence}.
  * session.thinking params: conversationId, level ('minimal'|'low'|'medium'|'high'|'xhigh'|'max');
  * result { level } is the effective level after Pi clamps it to the model's registry levels.

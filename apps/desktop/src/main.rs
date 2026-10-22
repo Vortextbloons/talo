@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod chat;
+mod chatgpt;
 mod agent;
 mod automation;
 mod diagnostics;
+mod delegation;
 mod power;
 mod attachments;
 mod browser;
@@ -18,6 +20,7 @@ mod scheduler;
 mod storage;
 mod supervisor;
 mod research;
+mod skills;
 mod runtime;
 use permissions::Permissions;
 use rusqlite::Connection;
@@ -133,6 +136,7 @@ impl Host {
         for signal in self.supervisor.drain_signals() {
             if let supervisor::WorkerSignal::Tools(message) = signal { integrations::message(self, app, message); }
             else if let supervisor::WorkerSignal::Agent(message) = signal { agent::message(self, app, message); }
+            else if let supervisor::WorkerSignal::Delegation(message) = signal { delegation::message(self, app, message); }
             else if let supervisor::WorkerSignal::Browser(message) = signal { self.browser_message(app, message); }
             else { self.chat.on_worker_signal(&mut self.db, app, signal); }
         }
@@ -153,7 +157,8 @@ impl Host {
             automation::event(self,None,match &lifecycle { supervisor::Lifecycle::Started=>"worker_started", supervisor::Lifecycle::Exited{..}=>"worker_exited" });
             self.chat.on_lifecycle(&mut self.db, app, lifecycle);
         }
-        let busy = self.chat.is_generating();
+        delegation::tick(self, app);
+        let busy = self.chat.is_generating() || self.chat.any_active() || delegation::has_pending(&self.db);
         if self.supervisor.idle_stop(busy) {
             automation::event(self,None,"worker_hibernated");
             self.chat.on_worker_intentionally_stopped(app);
@@ -262,6 +267,8 @@ async fn save_settings(app: tauri::AppHandle, settings: Value) -> Result<(), Str
             "baseUrl",
             "reasoning",
             "showReasoning",
+            "routing",
+            "performance",
             "memory",
             "complete",
         ];
@@ -353,13 +360,15 @@ async fn resolve_permission(
     run_blocking(app, move |app| {
         let shared = app.state::<Shared>();
         let mut h = shared.lock().map_err(|e| e.to_string())?;
-        let current = h.browser_approvals.get(&id).is_none_or(|(_, at, epoch)| at.elapsed() < Duration::from_secs(90) && *epoch == h.supervisor.worker_epoch());
+        let epoch_now = h.supervisor.worker_epoch();
+        let fresh = |at: Instant, epoch: u64| at.elapsed() < Duration::from_secs(90) && epoch == epoch_now;
+        let current = h.browser_approvals.get(&id).is_none_or(|(_, at, epoch)| fresh(*at, *epoch));
         let Host {
             db, permissions, ..
         } = &mut *h;
         permissions.resolve(db, &id, allowed && current)?;
         if let Some((mut message, at, epoch)) = h.browser_approvals.remove(&id) {
-            let valid = allowed && at.elapsed() < Duration::from_secs(90) && epoch == h.supervisor.worker_epoch();
+            let valid = allowed && fresh(at, epoch);
             if valid {
                 let resource = json!({"tool":message["params"]["name"],"arguments":message["params"]["arguments"],"target":message["params"]["target"]}).to_string();
                 h.permissions.consume(&id, "browser.action", &resource)?;
@@ -498,6 +507,7 @@ fn main() {
             automation::automation_action,
             integrations::tools_action,
             agent::agent_action,
+            delegation::delegation_action,
             runtime_status,
             browser::browser_control,
             browser::browser_view,
@@ -528,6 +538,8 @@ fn main() {
             chat::chat_stop,
             chat::provider_list,
             chat::provider_connect,
+            chatgpt::chatgpt_begin,
+            chatgpt::chatgpt_poll,
             chat::provider_disconnect,
             chat::provider_models
         ])
@@ -545,7 +557,11 @@ fn main() {
             storage::init(&db)?;
             scheduler::init(&db)?;
             agent::init(&db)?;
+            skills::init(&db)?;
+            skills::sync(&db, &data);
+            delegation::init(&db)?;
             scheduler::recover(&db)?;
+            delegation::recover(&db)?;
             // Interrupted executions require approval again after restart.
             db.execute(
                 "UPDATE tasks SET state='awaiting_permission' WHERE state='running'",

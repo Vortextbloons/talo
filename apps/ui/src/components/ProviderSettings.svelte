@@ -4,6 +4,7 @@
   import {
     chat,
     connectProvider,
+    cancelChatGPT,
     dismissError,
     dismissNotice,
     discoverModels,
@@ -23,6 +24,7 @@
   let elapsed = $state(0);
   let timer: ReturnType<typeof setInterval> | undefined;
   let localError = $state('');
+  let savedAccount = $state('');
 
   onDestroy(() => {
     if (timer) clearInterval(timer);
@@ -30,6 +32,8 @@
 
   const descriptor = $derived(providerChoice(providerId));
   const placeholder = $derived(descriptor.placeholder);
+  const chatgpt = $derived(providerId === 'chatgpt');
+  const savedAccounts = $derived(chat.connections.filter(connection => connection.providerId === 'chatgpt'));
   const pending = $derived(busy || chat.connecting);
   const connected = $derived(chat.connections.filter(connection => connection.connected));
 
@@ -55,12 +59,13 @@
     // A key must never carry over when the provider changes.
     apiKey = '';
     localError = '';
+    savedAccount = '';
   }
 
   async function connect(event: SubmitEvent): Promise<void> {
     event.preventDefault();
     if (pending || chat.preview || placeholder) return;
-    if (!apiKey.trim()) {
+    if (!chatgpt && !apiKey.trim()) {
       localError = 'Enter an API key for this provider.';
       return;
     }
@@ -76,13 +81,14 @@
         name: displayName.trim() || descriptor.name,
         apiKey: key,
         modelId: modelId.trim() || undefined,
+        connectionId: chatgpt ? savedAccount || undefined : undefined,
       });
       if (info) {
         displayName = info.name;
         modelId = '';
       } else {
         // The global banner keeps the host's sanitized reason even if this form is remounted.
-        localError = 'Connection failed. Check the key and try again.';
+        localError = chatgpt ? 'ChatGPT sign-in did not finish. Try again.' : 'Connection failed. Check the key and try again.';
       }
     } catch (value) {
       localError = value instanceof Error
@@ -123,7 +129,7 @@
 
 <section class="card providers">
   <h2>Model providers</h2>
-  <p class="intro">Connect with an API key, then choose a model in Chat. Talo keeps the conversation history; the key stays out of it.</p>
+  <p class="intro">Connect your ChatGPT plan or use an API key, then choose a model in Chat. Your credentials stay out of conversations.</p>
 
   {#if chat.error}
     <div class="settings-message error" role="alert">
@@ -164,7 +170,7 @@
       {/each}
     </div>
   {:else}
-    <p class="empty-line">No providers are connected yet. Add a key to start your first conversation.</p>
+    <p class="empty-line">No providers are connected yet. Connect a provider to start your first conversation.</p>
   {/if}
 
   <!-- The form stays out of the way once a provider works; the empty state opens it. -->
@@ -178,9 +184,11 @@
       <div class="pending" role="status" aria-live="polite">
         <span class="spinner" aria-hidden="true"></span>
         <div>
-          <strong>Checking your key with {descriptor.name}…</strong>
+          <strong>{chatgpt ? 'Finish signing in with ChatGPT in your browser…' : `Checking your key with ${descriptor.name}…`}</strong>
           <small>
-            {#if elapsed >= 20}
+            {#if chatgpt}
+              Choose your account and allow Talo to use your ChatGPT plan. You can cancel this sign-in below.
+            {:else if elapsed >= 20}
               This is taking longer than usual. Keep this window open; the form stays locked until the desktop host answers.
             {:else}
               The desktop host is verifying the key. This can take a few seconds. The key field is already cleared and the form is locked while the check runs.
@@ -198,15 +206,32 @@
           {/each}
         </select>
       </label>
-      <label for="connection-name">Name in Talo
+      {#if !chatgpt}<label for="connection-name">Name in Talo
         <input id="connection-name" bind:value={displayName} maxlength="80" placeholder={descriptor.name} disabled={placeholder || pending} />
-      </label>
+      </label>{/if}
     </div>
 
     {#if placeholder}
       <div class="placeholder-note">
         <strong>Custom endpoints are a placeholder for now.</strong>
         <p>The setup screen can declare a local OpenAI-compatible endpoint, but chat connections for custom endpoints are not enabled yet. No key is collected here.</p>
+      </div>
+    {:else if chatgpt}
+      <p class="provider-note">{descriptor.tagline} API billing is separate.</p>
+      {#if savedAccounts.length}
+        <label for="chatgpt-account">Account
+          <select id="chatgpt-account" bind:value={savedAccount} disabled={pending}>
+            <option value="">Add a ChatGPT account</option>
+            {#each savedAccounts as account (account.id)}
+              <option value={account.id}>{account.name}</option>
+            {/each}
+          </select>
+        </label>
+      {/if}
+      <div class="connect-actions">
+        <button class="primary" type="submit" disabled={pending || chat.preview}>Continue with ChatGPT</button>
+        {#if pending}<button type="button" onclick={cancelChatGPT}>Cancel sign-in</button>{/if}
+        <small>Sign-in opens in your browser. Talo protects your account credentials on this computer.</small>
       </div>
     {:else}
       <p class="provider-note">{descriptor.tagline} {#if descriptor.keysUrl}Create a key at <span class="link">{descriptor.keysUrl}</span>.{/if}</p>

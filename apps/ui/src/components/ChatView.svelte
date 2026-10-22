@@ -11,6 +11,8 @@
   import WebResearch from './WebResearch.svelte';
   import AgentCompanion from './AgentCompanion.svelte';
   import AskCard from './AskCard.svelte';
+  import DelegationTasks from './DelegationTasks.svelte';
+  import ChildTaskView from './ChildTaskView.svelte';
   import { asksFor } from '../lib/agent.svelte';
   import { browser, openBrowser, closeBrowser, selectBrowserSession, setBrowserWorkspaceVisible } from '../lib/browser.svelte';
   import {
@@ -18,11 +20,15 @@
     loadHistory,
     jumpToLatest,
     chooseModel,
+    closeDelegationTask,
     createConversation,
     dismissError,
     dismissNotice,
     modelsFor,
     openConversation,
+    openDelegationTask,
+    cancelAllDelegations,
+    cancelDelegation,
     parseSelectionKey,
     isSelectionAvailable,
     retryGeneration,
@@ -32,6 +38,7 @@
     sendMessage,
     stopGeneration,
     setThinkingLevel,
+    routing,
   } from '../lib/chat.svelte';
 
   let { onOpenSettings, name, tagline, showReasoning, agentName = 'Talo', onRenameAgent }: { onOpenSettings: () => void; name: string; tagline: string; showReasoning?: boolean; agentName?: string; onRenameAgent: (name: string) => Promise<void> } = $props();
@@ -74,13 +81,15 @@
   let lastConversationId: string | null = null;
   let lastHistoryRevision = 0;
 
-  interface PickerOption { key: string; group: string; label: string; reasoning: boolean; disabled: boolean; selected: boolean }
+  interface PickerOption { key: string; label: string; reasoning: boolean; disabled: boolean; selected: boolean }
   interface PickerGroup { id: string; name: string; options: PickerOption[] }
 
   let pickerOpen = $state(false);
   let pickerActive = $state('');
+  let pickerQuery = $state('');
   let pickerEl = $state<HTMLDivElement>();
   let menuEl = $state<HTMLDivElement>();
+  let pickerSearchEl = $state<HTMLInputElement>();
   let triggerEl = $state<HTMLButtonElement>();
   let thinkingOpen = $state(false);
   let thinkingActive = $state('');
@@ -90,9 +99,10 @@
 
   const active = $derived(chat.active);
   const messages = $derived(chat.active?.messages ?? []);
+  const delegations = $derived(chat.active?.delegations ?? []);
+  const queued = $derived(chat.active?.queued ?? []);
   const working = $derived(chat.active?.state === 'generating' || chat.active?.state === 'cancelling');
   const cancelling = $derived(chat.active?.state === 'cancelling');
-  const generating = $derived(chat.active?.state === 'generating');
   const connected = $derived(chat.connections.filter(connection => connection.connected));
   const selection = $derived(chat.active?.conversation.selection ?? chat.draftSelection);
   const selectionAvailable = $derived(isSelectionAvailable(selection));
@@ -114,7 +124,6 @@
     for (const group of modelGroups) {
       const options: PickerOption[] = group.models.map(model => ({
         key: `${group.connection.id}::${model.id}`,
-        group: group.connection.name,
         label: model.name,
         reasoning: model.reasoning,
         disabled: working,
@@ -122,13 +131,24 @@
       }));
       if (!options.length) {
         const note = chat.discovery[group.connection.id]?.loading ? 'Discovering models…' : 'No models found — refresh in Settings';
-        options.push({ key: `${group.connection.id}::`, group: group.connection.name, label: note, reasoning: false, disabled: true, selected: false });
+        options.push({ key: `${group.connection.id}::`, label: note, reasoning: false, disabled: true, selected: false });
       }
       groups.push({ id: group.connection.id, name: group.connection.name, options });
     }
     return groups;
   });
   const pickerOptions = $derived(pickerGroups.flatMap(group => group.options));
+  const pickerFilteredGroups = $derived.by(() => {
+    const query = pickerQuery.trim().toLowerCase();
+    if (!query) return pickerGroups;
+    return pickerGroups
+      .map(group => ({
+        ...group,
+        options: group.options.filter(option => option.label.toLowerCase().includes(query) || group.name.toLowerCase().includes(query)),
+      }))
+      .filter(group => group.options.length);
+  });
+  const pickerFilteredOptions = $derived(pickerFilteredGroups.flatMap(group => group.options));
   /* Pi reports image input per model; without it the worker hands over the file path. */
   const imagesSupported = $derived.by(() => {
     if (!selection) return false;
@@ -141,7 +161,7 @@
     const found = pickerOptions.find(option => option.selected);
     if (found) return found;
     if (selection && !selectionInGroups) {
-      return { key: selectedKey, group: '', label: selectionLabel(selection), reasoning: false, disabled: true, selected: true };
+      return { key: selectedKey, label: selectionLabel(selection), reasoning: false, disabled: true, selected: true };
     }
     return null;
   });
@@ -161,7 +181,7 @@
     !connected.length ? 'Connect a provider to begin'
       : !selection ? 'Choose a model below'
         : !selectionAvailable ? 'Choose a connected model'
-          : working ? 'Talo is replying'
+          : working ? 'Talo is replying — new messages queue'
             : '',
   );
   const placeholder = $derived(
@@ -213,10 +233,20 @@
     });
   }
 
+  /* A visible action, so remembering a workflow never requires knowing a command. */
+  const SKILL_REQUEST = 'Save how we just did this as a skill I can reuse. Use the talo-agent tool with operation skill_create. Write the instructions from what actually worked: when to use it, required tools and prerequisites, the steps and any naming conventions, the decisions that need my input, mistakes to avoid, and how to verify the outcome. Leave out passwords, account numbers, document contents and login cookies.';
+  function skillRequest(detail: string): string {
+    return detail ? SKILL_REQUEST + '\n\nThe workflow: ' + detail : SKILL_REQUEST;
+  }
+  /** `/learn` is only a shortcut for the Save as skill action; both send the same request. */
+  function expandShortcut(value: string): string {
+    const match = /^\/learn\b\s*([\s\S]*)$/i.exec(value.trim());
+    return match ? skillRequest(match[1].trim()) : value;
+  }
   async function submit(): Promise<void> {
     const images = draftImages.map(image => ({ name: image.name, mimeType: image.mimeType, data: image.data }));
-    if (working || chat.sending || (!text.trim() && !images.length)) return;
-    const value = text;
+    if (chat.sending || (!text.trim() && !images.length)) return;
+    const value = expandShortcut(text);
     const accepted = await sendMessage(value, images);
     if (accepted) {
       text = '';
@@ -333,13 +363,14 @@
 
   /* Custom model dropdown: the native select popup is drawn by the OS and stays light. */
   function openPicker(): void {
-    const enabled = pickerOptions.filter(option => !option.disabled);
-    const selectedUsable = pickerSelected && !pickerSelected.disabled && pickerOptions.some(option => option.key === pickerSelected.key);
+    pickerQuery = '';
+    const enabled = pickerFilteredOptions.filter(option => !option.disabled);
+    const selectedUsable = pickerSelected && !pickerSelected.disabled && pickerFilteredOptions.some(option => option.key === pickerSelected.key);
     pickerActive = selectedUsable ? pickerSelected!.key : enabled[0]?.key ?? '';
     pickerOpen = true;
-    // Roving focus: the active option takes the keyboard, arrows move it.
+    // The search field takes the keyboard first; arrows move through the options.
     tick().then(() => {
-      menuEl?.querySelector<HTMLElement>(`[data-key="${CSS.escape(pickerActive)}"]`)?.focus();
+      pickerSearchEl?.focus();
     });
   }
 
@@ -349,7 +380,7 @@
   }
 
   function movePicker(delta: number, jump?: number): void {
-    const enabled = pickerOptions.filter(option => !option.disabled);
+    const enabled = pickerFilteredOptions.filter(option => !option.disabled);
     if (!enabled.length) return;
     const index = enabled.findIndex(option => option.key === pickerActive);
     let next: number;
@@ -375,7 +406,24 @@
     if (event.key === 'End') { event.preventDefault(); movePicker(0, 1); return; }
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      const option = pickerOptions.find(item => item.key === pickerActive);
+      const option = pickerFilteredOptions.find(item => item.key === pickerActive);
+      if (option && !option.disabled) void pickModel(option);
+    }
+  }
+
+  function onPickerSearch(event: Event): void {
+    pickerQuery = (event.currentTarget as HTMLInputElement).value;
+    const enabled = pickerFilteredOptions.filter(option => !option.disabled);
+    if (!enabled.some(option => option.key === pickerActive)) pickerActive = enabled[0]?.key ?? '';
+  }
+
+  function onPickerSearchKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); closePicker(true); return; }
+    if (event.key === 'ArrowDown') { event.preventDefault(); movePicker(1); return; }
+    if (event.key === 'ArrowUp') { event.preventDefault(); movePicker(-1); return; }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      const option = pickerFilteredOptions.find(item => item.key === pickerActive);
       if (option && !option.disabled) void pickModel(option);
     }
   }
@@ -574,11 +622,11 @@
 <div class="chat-layout" class:rail-open={threadsOpen}>
   <aside class="threads" aria-label="Conversations">
     <div class="rail-mini">
-      <button class="mini-new" disabled={working || chat.creating || chat.preview} title="New conversation" aria-label="New conversation" onclick={() => { void createConversation(); }}>
+      <button class="mini-new" disabled={chat.creating || chat.preview} title="New conversation" aria-label="New conversation" onclick={() => { void createConversation(); }}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 5.5v13M5.5 12h13"/></svg>
       </button>
       {#each railThreads as conversation (conversation.id)}
-        <button class="mini-thread" class:active={chat.active?.conversation.id === conversation.id} disabled={working || chat.creating} title={conversation.title || 'New conversation'} aria-label={conversation.title || 'New conversation'} onclick={() => { confirmingDelete = null; void openConversation(conversation.id); }}>
+        <button class="mini-thread" class:active={chat.active?.conversation.id === conversation.id} disabled={chat.creating} title={conversation.title || 'New conversation'} aria-label={conversation.title || 'New conversation'} onclick={() => { confirmingDelete = null; void openConversation(conversation.id); }}>
           <span>{threadInitial(conversation.title || '')}</span>
         </button>
       {/each}
@@ -598,8 +646,8 @@
         <div class="threads-actions">
           <button
             class="new-thread"
-            disabled={working || chat.creating || chat.preview}
-            title={working ? 'Stop the current reply before starting another conversation' : 'Start a new conversation'}
+            disabled={chat.creating || chat.preview}
+            title="Start a new conversation"
             onclick={() => { void createConversation(); }}
           >New</button>
           <button class="rail-toggle" title="Hide threads" aria-label="Hide thread list" aria-expanded={threadsOpen} onclick={toggleThreads}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="3.5"/><path d="M9.5 4.5v15"/></svg></button>
@@ -611,7 +659,7 @@
             <li class:active={chat.active?.conversation.id === conversation.id}>
               <button
                 class="thread-open"
-                disabled={working || chat.creating}
+                disabled={chat.creating}
                 aria-current={chat.active?.conversation.id === conversation.id ? 'true' : undefined}
                 title={conversation.title || 'New conversation'}
                 onclick={() => { confirmingDelete = null; void openConversation(conversation.id); }}
@@ -636,7 +684,7 @@
                   class="thread-delete"
                   title="Delete chat"
                   aria-label={`Delete ${conversation.title || 'this conversation'}`}
-                  disabled={working || library.busy}
+                  disabled={library.busy}
                   onclick={() => { confirmingDelete = conversation.id; }}
                 ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16" /><path d="M9.5 4.5h5" /><path d="M6.5 7l.9 12a1.8 1.8 0 0 0 1.8 1.6h5.6a1.8 1.8 0 0 0 1.8-1.6l.9-12" /><path d="M10.5 11v6" /><path d="M13.5 11v6" /></svg></button>
               {/if}
@@ -646,12 +694,15 @@
       {:else}
         <p class="threads-empty">Your first message starts a thread here.</p>
       {/if}
-      {#if working}<p class="threads-note">Stop the reply before switching threads.</p>{/if}
+      {#if working}<p class="threads-note">Talo is replying. You can switch chats; new messages to this chat queue in order.</p>{/if}
     </div>
     </div>
   </aside>
 
   <section class="conversation" aria-label="Conversation">
+    {#if chat.child}
+      <ChildTaskView snapshot={chat.child} parent={chat.childParent} task={delegations.find(task => task.childConversationId === chat.child?.conversation.id) ?? null} agentName={agentName} onBack={closeDelegationTask} />
+    {:else}
     <div class="conversation-head">
       <div class="conversation-lead">
         <div class="conversation-title">
@@ -675,6 +726,13 @@
         <button aria-label="Dismiss notice" onclick={dismissNotice}>×</button>
       </div>
     {/if}
+
+    <DelegationTasks
+      tasks={delegations}
+      onOpen={(task) => { void openDelegationTask(task.id); }}
+      onCancel={(task) => { void cancelDelegation(task.id); }}
+      onCancelAll={() => { const id = chat.active?.conversation.id; if (id) void cancelAllDelegations(id); }}
+    />
 
     {#if chat.phase === 'loading'}
       <div class="welcome connect" role="status">
@@ -816,6 +874,12 @@
     {#each asksFor(active?.conversation.id) as ask (ask.id)}
       <AskCard {ask} />
     {/each}
+    {#if queued.length}
+      <div class="queued" role="status" aria-label="Queued messages">
+        <span>{queued.length === 1 ? 'Queued message' : `${queued.length} queued messages`} — sent after the current reply.</span>
+        {#each queued as turn (turn.id)}<p>{turn.text}</p>{/each}
+      </div>
+    {/if}
     <form
       class="composer"
       class:dragging={dragOver}
@@ -880,43 +944,67 @@
               <svg class="picker-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9.5 6 6 6-6" /></svg>
             </button>
             {#if pickerOpen}
-              <div class="picker-menu" id="chat-model-menu" role="listbox" tabindex="-1" aria-labelledby="chat-model-label" bind:this={menuEl}>
-                {#each pickerOptions as option, index (option.key)}
-                  {#if index === 0 || pickerOptions[index - 1].group !== option.group}
-                    <div class="picker-group">{option.group}</div>
+              <div class="picker-menu" id="chat-model-menu" bind:this={menuEl}>
+                <input
+                  class="picker-search"
+                  type="text"
+                  placeholder="Search models…"
+                  aria-label="Search models"
+                  bind:this={pickerSearchEl}
+                  value={pickerQuery}
+                  oninput={onPickerSearch}
+                  onkeydown={onPickerSearchKeydown}
+                />
+                <div class="picker-list" role="listbox" aria-labelledby="chat-model-label">
+                  {#each pickerFilteredGroups as group (group.id)}
+                    <div class="picker-group">{group.name}</div>
+                    {#each group.options as option (option.key)}
+                      <div
+                        role="option"
+                        data-key={option.key}
+                        class="picker-option"
+                        class:selected={option.selected}
+                        class:active={pickerActive === option.key}
+                        class:disabled={option.disabled}
+                        aria-selected={option.selected}
+                        aria-disabled={option.disabled}
+                        tabindex={pickerActive === option.key ? 0 : -1}
+                        onfocus={() => { pickerActive = option.key; }}
+                        onpointerenter={() => { if (!option.disabled) pickerActive = option.key; }}
+                        onkeydown={(event) => { event.stopPropagation(); onMenuKeydown(event); }}
+                        onclick={() => { void pickModel(option); }}
+                      >
+                        <span class="picker-dot" aria-hidden="true"></span>
+                        <span class="picker-name">{option.label}</span>
+                        {#if option.reasoning}<span class="picker-tag">reasoning</span>{/if}
+                      </div>
+                    {/each}
+                  {/each}
+                  {#if !pickerFilteredOptions.length}
+                    <p class="picker-empty">No models match “{pickerQuery.trim()}”</p>
                   {/if}
-                  <div
-                    role="option"
-                    id={`chat-model-opt-${index}`}
-                    data-key={option.key}
-                    class="picker-option"
-                    class:selected={option.selected}
-                    class:active={pickerActive === option.key}
-                    class:disabled={option.disabled}
-                    aria-selected={option.selected}
-                    aria-disabled={option.disabled}
-                    tabindex={pickerActive === option.key ? 0 : -1}
-                    onfocus={() => { pickerActive = option.key; }}
-                    onpointerenter={() => { if (!option.disabled) pickerActive = option.key; }}
-                    onkeydown={(event) => { event.stopPropagation(); onMenuKeydown(event); }}
-                    onclick={() => { void pickModel(option); }}
-                  >
-                    <span class="picker-dot" aria-hidden="true"></span>
-                    <span class="picker-name">{option.label}</span>
-                    {#if option.reasoning}<span class="picker-tag">reasoning</span>{/if}
-                  </div>
-                {/each}
+                </div>
               </div>
             {/if}
           </div>
           {#if chat.selectingModel}<span class="picker-status" role="status">Saving…</span>{/if}
         </div>
         <div class="send-area">
+          <button
+            type="button"
+            class="skill-chip"
+            title="Talo drafts the steps you just used, then asks you to review them in the Inbox"
+            aria-label="Save this workflow as a skill"
+            disabled={!connected.length || working || chat.sending || chat.preview}
+            onclick={() => void sendMessage(skillRequest(''))}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.8 13.5 8l4.2 1.5-4.2 1.5L12 15.2l-1.5-4.2L6.3 9.5 10.5 8 12 3.8Z"/><path d="M17.4 15.2l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8Z"/></svg><span>Save as skill</span>
+          </button>
           <button type="button" class="browser-chip" class:browser-active={browser.status.state === 'connected'} aria-label="Open browser preview" aria-expanded={browser.view !== 'closed'} disabled={chat.preview} onclick={() => browser.view === 'side' ? closeBrowser() : void openBrowser('side')} title="Watch the browser without interrupting Pi">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></svg><span>Browser</span>{#if browser.status.busy}<span class="browser-dot"></span>{/if}
           </button>
           {#if composerHint}<span class="composer-hint">{composerHint}</span>{/if}
-          {#if thinkingOptions.length}
+          {#if thinkingOptions.length && routing.mode === 'manual'}
             <div class="thinking-wrap" bind:this={thinkingWrapEl}>
               <button
                 type="button"
@@ -968,37 +1056,37 @@
               onclick={() => { void stopGeneration(); }}
               aria-label={cancelling ? 'Stopping reply' : 'Stop reply'}
             >{cancelling ? 'Stopping…' : 'Stop'}</button>
-          {:else}
-            <button
-              type="button"
-              class="attach"
-              title="Attach an image"
-              aria-label="Attach an image"
-              disabled={!connected.length || working || chat.sending || draftImages.length >= MAX_IMAGES}
-              onclick={() => fileInput?.click()}
-            ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 15.5V10a2.5 2.5 0 0 0-5 0v6a4.5 4.5 0 0 0 9 0V8a2 2 0 1 0-4 0v7" /><path d="M17 6.5h1a3 3 0 0 1 3 3v5" /></svg></button>
-            <input
-              class="file-input"
-              type="file"
-              accept={IMAGE_TYPES.join(',')}
-              multiple
-              bind:this={fileInput}
-              onchange={(event) => {
-                const input = event.currentTarget;
-                void addImages(input.files).then(() => { input.value = ''; });
-              }}
-            />
-            <button
-              type="submit"
-              class="send"
-              disabled={!connected.length || !selection || !selectionAvailable || (!text.trim() && !draftImages.length) || chat.sending || chat.preview}
-              aria-label={chat.sending ? 'Sending message' : 'Send message'}
-              aria-busy={chat.sending}
-            ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 19.5V5.5" /><path d="m5.5 11.5 6.5-6.5 6.5 6.5" /></svg></button>
           {/if}
+          <button
+            type="button"
+            class="attach"
+            title="Attach an image"
+            aria-label="Attach an image"
+            disabled={!connected.length || working || chat.sending || draftImages.length >= MAX_IMAGES}
+            onclick={() => fileInput?.click()}
+          ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 15.5V10a2.5 2.5 0 0 0-5 0v6a4.5 4.5 0 0 0 9 0V8a2 2 0 1 0-4 0v7" /><path d="M17 6.5h1a3 3 0 0 1 3 3v5" /></svg></button>
+          <input
+            class="file-input"
+            type="file"
+            accept={IMAGE_TYPES.join(',')}
+            multiple
+            bind:this={fileInput}
+            onchange={(event) => {
+              const input = event.currentTarget;
+              void addImages(input.files).then(() => { input.value = ''; });
+            }}
+          />
+          <button
+            type="submit"
+            class="send"
+            disabled={!connected.length || !selection || !selectionAvailable || (!text.trim() && !draftImages.length) || chat.sending || chat.preview}
+            aria-label={working ? 'Queue message' : chat.sending ? 'Sending message' : 'Send message'}
+            aria-busy={chat.sending}
+          ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 19.5V5.5" /><path d="m5.5 11.5 6.5-6.5 6.5 6.5" /></svg></button>
         </div>
       </div>
     </form>
+    {/if}
     {/if}
   </section>
 </div>
@@ -1016,7 +1104,7 @@
 <style>
   /* One full-height surface: the rail holds threads, the column holds the conversation. */
   .chat-workspace{flex:1;min-height:0;min-width:0;display:flex;position:relative}
-  .browser-chip{display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 9px;color:var(--muted);font-size:10px;white-space:nowrap}.browser-chip svg{width:14px;height:14px}.browser-chip:hover:not(:disabled),.browser-chip.browser-active{color:var(--yellow);border-color:var(--line-strong)}.browser-dot{width:4px;height:4px;background:var(--yellow);border-radius:50%;animation:pulse 1.5s ease-in-out infinite}
+  .browser-chip,.skill-chip{display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 9px;color:var(--muted);font-size:10px;white-space:nowrap}.browser-chip svg,.skill-chip svg{width:14px;height:14px}.browser-chip:hover:not(:disabled),.browser-chip.browser-active,.skill-chip:hover:not(:disabled){color:var(--yellow);border-color:var(--line-strong)}.skill-chip:disabled{opacity:.45;cursor:not-allowed}.browser-dot{width:4px;height:4px;background:var(--yellow);border-radius:50%;animation:pulse 1.5s ease-in-out infinite}
   .chat-layout{--rail-mini:56px;--rail-w:240px;flex:1;min-width:0;min-height:0;display:grid;grid-template-columns:var(--rail-mini) minmax(0,1fr);transition:grid-template-columns .18s cubic-bezier(.2,.7,.3,1)}
   .chat-layout>*{min-width:0}
   .chat-layout.rail-open{grid-template-columns:var(--rail-w) minmax(0,1fr)}
@@ -1131,6 +1219,9 @@
   .turns-list{margin-top:10px}
   .turns-list :global(.reasoning){margin:0 0 10px}
   .turns-summary{margin:2px 0 0;font-size:12px;color:var(--faint)}
+  .queued{flex-shrink:0;border:1px dashed var(--line-strong);border-radius:10px;padding:8px 11px;margin-top:8px;font-size:11px;color:var(--muted)}
+  .queued>span{display:block;font-size:10px;color:var(--faint);margin-bottom:4px}
+  .queued p{margin:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .composer{flex-shrink:0;border:1px solid var(--line-strong);border-radius:15px;padding:15px 16px 13px;background:var(--paper);box-shadow:0 12px 32px var(--shadow);margin-top:10px;transition:border-color .15s ease,background .15s ease}
   /* A drop anywhere on the composer takes the file instead of the browser opening it. */
   .composer.dragging{border-color:var(--yellow-deep);background:#1d1c16}
@@ -1167,8 +1258,11 @@
   .picker-value.unset{color:var(--faint)}
   .picker-chevron{width:11px;height:11px;flex-shrink:0;transition:transform .15s ease}
   .picker-trigger[aria-expanded="true"] .picker-chevron{transform:rotate(180deg)}
-  /* Opens upward from the composer; fully themed, unlike the OS-drawn native popup. */
-  .picker-menu{position:absolute;left:0;bottom:calc(100% + 8px);z-index:40;min-width:290px;max-width:min(430px,90vw);max-height:min(370px,52vh);overflow-y:auto;background:var(--paper);border:1px solid var(--line-strong);border-radius:12px;padding:6px;box-shadow:0 18px 48px rgba(0,0,0,.55);scrollbar-gutter:stable}
+  /* Opens upward from the composer; the search stays pinned while the options scroll. */
+  .picker-menu{position:absolute;left:0;bottom:calc(100% + 8px);z-index:40;min-width:290px;max-width:min(430px,90vw);display:flex;flex-direction:column;background:var(--paper);border:1px solid var(--line-strong);border-radius:12px;padding:6px;box-shadow:0 18px 48px rgba(0,0,0,.55)}
+  .picker-search{display:block;width:100%;background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--text);font:inherit;font-size:12px;margin-bottom:4px}
+  .picker-list{max-height:min(330px,48vh);overflow-y:auto;scrollbar-gutter:stable}
+  .picker-empty{margin:2px;padding:8px 10px;font-size:12px;color:var(--faint)}
   .picker-group{font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);padding:9px 10px 5px}
   .picker-option{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:transparent;border:0;border-radius:8px;padding:8px 10px;font-size:12.5px;color:var(--text);cursor:pointer;line-height:1.4}
   .picker-option.active{background:#24241e}

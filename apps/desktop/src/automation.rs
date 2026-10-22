@@ -93,7 +93,7 @@ pub fn tick(h: &mut Host, app: &tauri::AppHandle) -> Result<(), String> {
         }
         return Ok(());
     }
-    if paused(h) || h.chat.any_active() {
+    if paused(h) || h.chat.any_active() || crate::delegation::has_pending(&h.db) {
         return Ok(());
     }
     let Some(claimed) = scheduler::claim(&mut h.db, now)? else {
@@ -146,10 +146,9 @@ pub fn tick(h: &mut Host, app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 pub fn stop_run(h: &mut Host, app: &tauri::AppHandle, generation: String) -> Result<(), String> {
+    // Cancellation is session-scoped. The worker may also own foreground chats and delegated
+    // children, so a scheduled stop must never terminate the whole Pi process.
     chat::chat_stop_inner(app, h, generation)?;
-    // A timed-out abort acknowledgement is not proof of stopped tool execution. Reap Pi's job tree.
-    h.supervisor.stop_pi()?;
-    h.chat.on_worker_intentionally_stopped(app);
     h.integrations.pending.clear();
     h.browser_approvals.clear();
     Ok(())

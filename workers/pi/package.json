@@ -1,1 +1,1 @@
-{"name":"@talo/pi","version":"0.1.0","private":true,"type":"module","dependencies":{"@earendil-works/pi-ai":"1.4.0","@earendil-works/pi-coding-agent":"1.4.0","@modelcontextprotocol/client":"2.3.1","ajv":"8.20.0","jiti":"2.7.0","pi-mcp-adapter":"5.4.0","typebox":"1.4.2"}}
+{"name":"@talo/pi","version":"0.1.0","private":true,"type":"module","dependencies":{"@earendil-works/pi-ai":"1.4.0","@earendil-works/pi-coding-agent":"1.4.0","@modelcontextprotocol/client":"2.3.1","ajv":"8.20.0","jiti":"2.7.0","jose":"6.2.13","pi-mcp-adapter":"5.4.0","typebox":"1.4.2"}}

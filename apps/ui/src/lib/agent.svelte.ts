@@ -1,33 +1,29 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { AgentState, Assignment, PendingAsk, WorkspaceBundle } from '../../../../packages/contracts/src/agent';
+import type { AgentState, Assignment, PendingAsk, Skill, WorkspaceBundle } from '../../../../packages/contracts/src/agent';
 
 /**
  * A single read model for everything the agent authored for the user: question cards,
- * assigned to-dos and proposed workspaces. The host is the only writer.
+ * assigned to-dos, proposed workspaces and proposed skills. The host is the only writer.
  */
 export const agent = $state({
   assignments: [] as Assignment[],
   asks: [] as PendingAsk[],
   drafts: [] as WorkspaceBundle[],
+  skills: [] as Skill[],
+  skillProposals: [] as Skill[],
   budget: { used: 0, limit: 5 },
   error: '',
   busy: false,
   loaded: false,
 });
 
-/** Derived read models. Call in components — `$derived` cannot be exported from a module. */
-export function openAssignments(): Assignment[] {
-  return agent.assignments.filter(item => item.status === 'open');
-}
-export function needsYou(): number {
-  return agent.asks.length + openAssignments().length + agent.drafts.length;
-}
-
 function apply(state: AgentState): void {
   agent.assignments = state.assignments ?? [];
   agent.asks = state.asks ?? [];
   agent.drafts = state.drafts ?? [];
+  agent.skills = state.skills ?? [];
+  agent.skillProposals = state.skillProposals ?? [];
   agent.budget = state.budget ?? { used: 0, limit: 5 };
   agent.loaded = true;
 }
@@ -60,7 +56,9 @@ export function initAgent(): () => void {
   return () => { active = false; stop?.(); clearInterval(timer); };
 }
 
-/** Question cards that belong to the visible conversation. */
+/** Question cards that belong to the visible main conversation, including child asks. */
 export function asksFor(conversationId: string | undefined): PendingAsk[] {
-  return conversationId ? agent.asks.filter(ask => ask.conversationId === conversationId) : [];
+  return conversationId
+    ? agent.asks.filter(ask => ask.conversationId === conversationId || ask.parentConversationId === conversationId)
+    : [];
 }

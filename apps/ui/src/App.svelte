@@ -13,16 +13,17 @@
   import ToolApprovals from './components/ToolApprovals.svelte';
   import TasksPanel from './components/TasksPanel.svelte';
   import InboxPanel from './components/InboxPanel.svelte';
+  import SkillsPanel from './components/SkillsPanel.svelte';
   import { agent, initAgent } from './lib/agent.svelte';
-  import { chat, disposeChat, initChat, createConversation } from './lib/chat.svelte';
+  import { chat, disposeChat, initChat, createConversation, routing } from './lib/chat.svelte';
   import { checkForUpdates } from './lib/updates.svelte';
   import { CUSTOM_BASE_URL_EXAMPLE, DEFAULT_PREFERENCE, PROVIDERS, parseProviderPreference, providerDescriptor } from '../../../packages/contracts/src/index';
   import type { Onboarding, RuntimeStatus, ServiceId } from '../../../packages/contracts/src/index';
-  const pages = ['Chat', 'Inbox', 'Workspaces', 'Tasks', 'Settings'] as const;
+  const pages = ['Chat', 'Inbox', 'Workspaces', 'Skills', 'Tasks', 'Settings'] as const;
   type Page = typeof pages[number];
   let page = $state<Page>('Chat');
   /** The rail shows a count only when something genuinely waits on a person. */
-  const inboxCount = $derived(agent.asks.length + agent.assignments.filter(item=>item.status==='open').length + agent.drafts.length);
+  const inboxCount = $derived(agent.asks.length + agent.assignments.filter(item=>item.status==='open').length + agent.drafts.length + agent.skillProposals.length);
   let taskFocus = $state('');
   function navigatePage(next: Page) { if (page !== next) closeBrowser(); page = next; }
   /* The rail keeps its icons on screen and opens over the page on hover, so the layout never jumps. */
@@ -45,7 +46,7 @@
   let busy = $state(false);
   let pending = $state<{id:string; action:string; resource:string; run:(id:string)=>Promise<void>} | null>(null);
   const descriptions:Record<Page,string> = {
-    Chat:'A little space to think things through.',Inbox:'What Talo has asked, proposed or left for you.',Workspaces:'Keep each project in its own place.',Tasks:'A home for the things you want to come back to.',Settings:'Make yourself at home.'
+    Chat:'A little space to think things through.',Inbox:'What Talo has asked, proposed or left for you.',Workspaces:'One Talo, with conversations and context organized by project.',Skills:'Ways of working Talo saved once they worked.',Tasks:'A home for the things you want to come back to.',Settings:'Make yourself at home.'
   };
   async function refresh() { if(isTauri()) status = await invoke<RuntimeStatus>('runtime_status'); }
   onMount(() => {
@@ -60,7 +61,7 @@
     void initChat();
     const stopAgent = initAgent();
     const stopBrowser = initBrowser();
-    (async()=>{try { if(isTauri()){const saved=await invoke<Onboarding|null>('load_settings');if(saved && active)settings={...settings,...saved,...parseProviderPreference(saved)};await refresh();} }catch(e){error=String(e);}finally{if(active)loaded=true;}})();
+    (async()=>{try { if(isTauri()){const saved=await invoke<Onboarding|null>('load_settings');if(saved && active){settings={...settings,...saved,...parseProviderPreference(saved)};routing.mode=saved.routing??'auto';routing.tier=saved.performance??'recommended';}await refresh();} }catch(e){error=String(e);}finally{if(active)loaded=true;}})();
     // The host pushes service transitions; polling would keep the hidden webview awake.
     if(isTauri())listen<RuntimeStatus>('runtime-status',event=>{if(active)status=event.payload;}).then(stop=>{if(active)unlisten=stop;else stop();});
     // Ask the release feed once the window has settled. A failed check stays silent; the
@@ -73,6 +74,8 @@
   async function saveSettings(next: Onboarding): Promise<void> {
     if(isTauri()) await invoke('save_settings', { settings: { ...next, complete: true } });
     settings = { ...next, complete: true };
+    routing.mode = next.routing ?? 'auto';
+    routing.tier = next.performance ?? 'recommended';
   }
   async function save() { try {busy=true;await saveSettings(settings);editing=false;void refreshLibrary();}catch(e){error=String(e);}finally{busy=false;} }
   /** One setting changes at a time; the row that changed reports its own failure. */
@@ -113,7 +116,7 @@
   function onKeydown(event:KeyboardEvent):void{
     if(!loaded||!settings.complete||editing)return;
     if(!event.ctrlKey||event.altKey||event.shiftKey||event.metaKey)return;
-    if(event.key>='1'&&event.key<='5'){
+    if(event.key>='1'&&event.key<='6'){
       const item=pages[Number(event.key)-1];
       if(item){event.preventDefault();navigatePage(item);}
       return;
@@ -141,9 +144,9 @@
         </button>
       </div>
       <nav>{#each pages as item (item)}
-        <button class:selected={page===item} class:thinking={item==='Chat' && (chat.active?.state==='generating'||chat.active?.state==='cancelling')} onclick={()=>navigatePage(item)} title={item} aria-current={page===item?'page':undefined}>
+        <button class:selected={page===item} class:thinking={item==='Chat' && (chat.active?.state==='generating'||chat.active?.state==='cancelling')} onclick={()=>navigatePage(item)} title={item === 'Workspaces' ? 'Projects' : item} aria-current={page===item?'page':undefined}>
           <span class="nav-icon"><NavIcon name={item} working={item==='Chat' && (chat.active?.state==='generating'||chat.active?.state==='cancelling')} /></span>
-          <span class="nav-label">{item}</span>
+          <span class="nav-label">{item === 'Workspaces' ? 'Projects' : item}</span>
           {#if item==='Inbox' && inboxCount}<span class="nav-badge" aria-label={`${inboxCount} waiting`}>{inboxCount}</span>{/if}
         </button>
       {/each}</nav>
@@ -151,10 +154,10 @@
     </div>
   </aside>
   <main>
-    <header><span class="crumbs">{page}</span></header>
+    <header><span class="crumbs">{page === 'Workspaces' ? 'Projects' : page}</span></header>
     {#if error}<div class="error" role="alert">{error}<button aria-label="Dismiss error" onclick={()=>error=''}>×</button></div>{/if}
     <div class="content" class:chat-mode={page==='Chat'}>
-      {#if page!=='Chat'}<div class="page-heading"><h1>{page}</h1><p>{descriptions[page]}</p></div>{/if}
+      {#if page!=='Chat'}<div class="page-heading"><h1>{page === 'Workspaces' ? 'Projects' : page}</h1><p>{descriptions[page]}</p></div>{/if}
       <BrowserPanel />
       {#if page==='Inbox'}
         <InboxPanel onOpenChat={()=>navigatePage('Chat')} />
@@ -175,6 +178,8 @@
           onOpenChat={()=>navigatePage('Chat')}
           onRerunSetup={()=>{editing=true;step=0;}}
         />
+      {:else if page==='Skills'}
+        <SkillsPanel />
       {:else if page==='Tasks'}
         <TasksPanel focusRun={taskFocus} onOpenChat={()=>navigatePage('Chat')} />
       {:else}

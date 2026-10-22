@@ -3,7 +3,8 @@
   import { isTauri } from '@tauri-apps/api/core';
   import ProviderSettings from './ProviderSettings.svelte';
   import ToolsSettings from './ToolsSettings.svelte';
-  import { chat, selectionLabel } from '../lib/chat.svelte';
+  import { chat, selectionLabel, routing } from '../lib/chat.svelte';
+  import { rolesFor } from '../../../../packages/contracts/src/index';
   import { library } from '../lib/library.svelte';
   import { tools, refreshTools, toolAction } from '../lib/tools.svelte';
   import { updates, checkForUpdates, installUpdate } from '../lib/updates.svelte';
@@ -46,6 +47,16 @@
     { value: 'Warm and encouraging', label: 'Warm' },
     { value: 'Brief and practical', label: 'Brief' },
   ];
+
+  /* Tier names follow the first connected curated provider: free providers read Fast/Smart, paid ones Economy/Recommended. */
+  const tierLabels = $derived.by(() => {
+    for (const connection of chat.connections) {
+      if (!connection.connected) continue;
+      const roles = rolesFor(connection.providerId);
+      if (roles) return roles.tierLabels;
+    }
+    return { economy: 'Economy', recommended: 'Recommended' };
+  });
 
   let editingName = $state(false);
   let draftName = $state('');
@@ -215,6 +226,24 @@
             <div class="how">
               <span class="value">{selection || 'Chosen when you send your first message'}</span>
               <button class="quiet" onclick={onOpenChat}>Choose in Chat</button>
+            </div>
+          </div>
+          <div class="row">
+            <div class="what"><strong>AI performance</strong><small>{tierLabels.economy} keeps costs down; {tierLabels.recommended} favors quality.</small></div>
+            <div class="how">
+              <div class="seg" role="group" aria-label="AI performance">
+                <button aria-pressed={settings.performance === 'economy'} onclick={() => void onPersist({ performance: 'economy' })}>{tierLabels.economy}</button>
+                <button aria-pressed={settings.performance !== 'economy'} onclick={() => void onPersist({ performance: 'recommended' })}>{tierLabels.recommended}</button>
+              </div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="what"><strong>Model selection</strong><small>Auto picks models and thinking for you; Manual keeps your picks.</small></div>
+            <div class="how">
+              <div class="seg" role="group" aria-label="Model selection">
+                <button aria-pressed={settings.routing !== 'manual'} onclick={() => void onPersist({ routing: 'auto' })}>Auto</button>
+                <button aria-pressed={settings.routing === 'manual'} onclick={() => void onPersist({ routing: 'manual' })}>Manual</button>
+              </div>
             </div>
           </div>
         </div>

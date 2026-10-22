@@ -227,7 +227,7 @@ impl Drop for Research {
     }
 }
 
-fn open_external(target: &str) -> Result<(), String> {
+pub(crate) fn open_external(target: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
         use windows_sys::Win32::UI::Shell::ShellExecuteW;

@@ -33,12 +33,12 @@
 </script>
 <div class="library-controls">
   <button type="button" class="controls-toggle" aria-expanded={open} onclick={()=>open=!open}>
-    <span>Workspace · {activeWorkspaceName}</span>
+    <span>Project · {activeWorkspaceName}</span>
     <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9.5 6 6 6-6" /></svg>
   </button>
   {#if open}
   <div class="library-body">
-  <label>Workspace<select aria-label="Current workspace" value={library.activeWorkspace} disabled={working || library.busy} onchange={e=>{query='';hits=[];searched=false;void switchWorkspace(e.currentTarget.value);}}>{#each library.workspaces.filter(w=>!w.archived) as w(w.id)}<option value={w.id}>{w.name}</option>{/each}</select></label>
+  <label>Project<select aria-label="Current project" value={library.activeWorkspace} disabled={working || library.busy} onchange={e=>{query='';hits=[];searched=false;void switchWorkspace(e.currentTarget.value);}}>{#each library.workspaces.filter(w=>!w.archived) as w(w.id)}<option value={w.id}>{w.name}</option>{/each}</select></label>
   <form onsubmit={e=>{e.preventDefault();void search();}}><input aria-label="Search conversations" placeholder="Search conversations" bind:value={query} maxlength="300"/><button disabled={searching || !query.trim()} aria-label="Search history">{searching?'…':'Find'}</button></form>
   {#if searched}<div class="search-results"><button class="clear" onclick={()=>{searched=false;query='';}}>Clear search</button>{#each hits as hit, i(`${hit.conversationId}-${i}`)}<button disabled={working} onclick={()=>{void openConversation(hit.conversationId);}}><strong>{hit.title}</strong><small>{hit.text}</small></button>{:else}<p>No conversations found.</p>{/each}</div>{/if}
   <label class="archive"><input type="checkbox" bind:checked={showArchived}/> Show archived chats</label>
