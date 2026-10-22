@@ -3,6 +3,7 @@ mod chat;
 mod credentials;
 #[cfg(windows)]
 mod job;
+mod library;
 mod permissions;
 #[path = "../../../services/scheduler/mod.rs"]
 mod scheduler;
@@ -218,6 +219,14 @@ async fn save_settings(app: tauri::AppHandle, settings: Value) -> Result<(), Str
         };
         let shared = app.state::<Shared>();
         let h = shared.lock().map_err(|e| e.to_string())?;
+        let previous_memory = library::setting(&h.db,"onboarding","{}");
+        let previous_memory = serde_json::from_str::<Value>(&previous_memory).unwrap_or(Value::Null);
+        if let Some(memory)=obj.get("memory").and_then(Value::as_str) {
+            if !["off","workspace","global"].contains(&memory) {return Err("Invalid memory preference".into());}
+            if previous_memory.get("memory").and_then(Value::as_str)!=Some(memory) {
+                h.db.execute("INSERT INTO settings(key,value) VALUES('memory_enabled',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[if memory=="off"{"false"}else{"true"}]).map_err(|e|e.to_string())?;
+            }
+        }
         h.db.execute("INSERT INTO settings(key,value) VALUES('onboarding',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[settings.to_string()]).map_err(|e|e.to_string())?;
         // Non-secret provider preferences are projected for the Pi worker, which owns models.json.
         let projection =
@@ -361,6 +370,12 @@ fn main() {
             service_control,
             set_autostart,
             chat::chat_bootstrap,
+            library::library_action,
+            library::memory_save,
+            library::memory_search,
+            library::memory_list,
+            library::memory_update,
+            library::memory_delete,
             chat::conversation_create,
             chat::conversation_open,
             chat::conversation_select_model,

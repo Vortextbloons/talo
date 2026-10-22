@@ -15,4 +15,3 @@ CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN INSERT I
 CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN INSERT INTO memory_fts(memory_fts,rowid,content) VALUES('delete',old.id,old.content); INSERT INTO memory_fts(rowid,content) VALUES(new.id,new.content); END;
 CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY, title TEXT NOT NULL, due_at INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'pending', payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS permission_audit(id TEXT PRIMARY KEY, action TEXT NOT NULL, resource TEXT NOT NULL, allowed INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-PRAGMA user_version=1;

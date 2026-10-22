@@ -224,6 +224,16 @@ impl ChatState {
                 emit_worker(app, WorkerState::Failed, Some(sanitize_error(&message)));
             }
             WorkerSignal::Chat(value) => {
+                if value.get("type").and_then(Value::as_str) == Some("context") {
+                    if let Some(id) = value.get("conversationId").and_then(Value::as_str) {
+                        let compacted = value
+                            .get("compacted")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        let _=db.execute("INSERT INTO context_usage(conversation_id,compactions,usage) VALUES(?1,?2,?3) ON CONFLICT(conversation_id) DO UPDATE SET compactions=compactions+excluded.compactions,usage=excluded.usage,updated_at=CURRENT_TIMESTAMP",rusqlite::params![id,if compacted{1}else{0},value.get("usage").unwrap_or(&Value::Null).to_string()]);
+                    }
+                    return;
+                }
                 if let Ok(event) = serde_json::from_value::<ChatEvent>(value) {
                     self.on_generation_event(db, app, event);
                 }
@@ -741,8 +751,17 @@ fn parse_models(result: Value) -> Result<Vec<ProviderModelInfo>, String> {
 fn chat_bootstrap_inner(host: &mut Host) -> Result<ChatBootstrap, String> {
     let conversations = storage::list_conversations(&host.db).map_err(storage_error)?;
     let connections = storage::list_connections(&host.db).map_err(storage_error)?;
-    let active = match conversations.first() {
-        Some(conversation) => Some(snapshot(&host.db, &host.chat, conversation.clone())?),
+    let selected = crate::library::setting(&host.db, "active_conversation", "");
+    let workspace = crate::library::setting(&host.db, "active_workspace", "general");
+    let active = match conversations
+        .iter()
+        .find(|c| c.id == selected && !c.archived && c.workspace_id == workspace)
+        .or_else(|| {
+            conversations
+                .iter()
+                .find(|c| !c.archived && c.workspace_id == workspace)
+        }) {
+        Some(conversation) => Some(conversation_open_inner(host, conversation.id.clone())?),
         None => None,
     };
     Ok(ChatBootstrap {
@@ -764,10 +783,17 @@ fn conversation_create_inner(
         storage::get_connection(&host.db, &selection.connection_id).map_err(storage_error)?;
     }
     let id = uuid::Uuid::new_v4().to_string();
-    let conversation =
+    let _conversation =
         storage::create_conversation(&host.db, &id, "New conversation", selection.as_ref())
             .map_err(storage_error)?;
-    snapshot(&host.db, &host.chat, conversation)
+    let workspace = crate::library::setting(&host.db, "active_workspace", "general");
+    host.db
+        .execute(
+            "UPDATE chat_conversations SET workspace_id=?2 WHERE id=?1",
+            rusqlite::params![id, workspace],
+        )
+        .map_err(|e| e.to_string())?;
+    conversation_open_inner(host, id)
 }
 
 fn conversation_open_inner(
@@ -776,6 +802,21 @@ fn conversation_open_inner(
 ) -> Result<ConversationSnapshot, String> {
     let conversation =
         storage::get_conversation(&host.db, &conversation_id).map_err(storage_error)?;
+    host.db.execute("INSERT INTO settings(key,value) VALUES('active_conversation',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[&conversation_id]).map_err(|e|e.to_string())?;
+    if !host.chat.has_active_for(&conversation_id) {
+        if let Some(path) = &conversation.session_path {
+            match crate::library::transcript(path) {
+                Ok(messages) => {
+                    crate::library::rebuild_projection(&mut host.db, &conversation_id, &messages)?;
+                }
+                Err(error) => {
+                    let mut result = snapshot(&host.db, &host.chat, conversation)?;
+                    result.error = Some(error);
+                    return Ok(result);
+                }
+            }
+        }
+    }
     snapshot(&host.db, &host.chat, conversation)
 }
 
@@ -892,6 +933,7 @@ fn chat_send_inner(
         "conversationId": conversation_id,
         "generationId": generation_id,
         "text": text,
+        "context": crate::library::context(db,&conversation,&text).unwrap_or_default(),
     });
     match supervisor.request("session.prompt", params, PROMPT_TIMEOUT) {
         Ok(_) => {}
@@ -977,13 +1019,16 @@ fn chat_retry_inner(
     }
     // A retry after the first prompt never reached Pi must replay the user turn. Once a
     // durable session exists, Pi's own retry keeps context without duplicating it here.
+    let reference_context =
+        crate::library::context(db, &conversation, &plan.user_text).unwrap_or_default();
     let params = if had_sqlite_session {
-        json!({"conversationId": conversation_id, "generationId": generation_id})
+        json!({"conversationId": conversation_id, "generationId": generation_id, "context":reference_context})
     } else {
         json!({
             "conversationId": conversation_id,
             "generationId": generation_id,
             "text": plan.user_text,
+            "context": reference_context,
         })
     };
     let method = if had_sqlite_session {

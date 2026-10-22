@@ -56,14 +56,43 @@ pub fn init(db: &Connection) -> Result<()> {
         db.execute_batch("ALTER TABLE chat_messages ADD COLUMN reasoning TEXT")?;
     }
     db.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")?;
-    let migrated: i64 = db.query_row("SELECT count(*) FROM schema_migrations WHERE version=3", [], |r| r.get(0))?;
+    let migrated: i64 = db.query_row(
+        "SELECT count(*) FROM schema_migrations WHERE version=3",
+        [],
+        |r| r.get(0),
+    )?;
     if migrated == 0 {
         db.execute_batch("BEGIN IMMEDIATE")?;
         if let Err(error) = db.execute_batch(include_str!("slice3.sql")) {
             let _ = db.execute_batch("ROLLBACK");
             return Err(error.into());
         }
-        db.execute_batch("INSERT INTO schema_migrations(version) VALUES(3); PRAGMA user_version=3; COMMIT")?;
+        // Preserve the existing user's opt-out when upgrading from Slice 2.
+        let preference: Option<String> = db
+            .query_row(
+                "SELECT value FROM settings WHERE key='onboarding'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if preference
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|s| {
+                s.get("memory")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .as_deref()
+            == Some("off")
+        {
+            db.execute(
+                "UPDATE settings SET value='false' WHERE key='memory_enabled'",
+                [],
+            )?;
+        }
+        db.execute_batch(
+            "INSERT INTO schema_migrations(version) VALUES(3); PRAGMA user_version=3; COMMIT",
+        )?;
     }
     Ok(())
 }
@@ -842,6 +871,9 @@ mod tests {
 
     fn database() -> Connection {
         let db = Connection::open_in_memory().unwrap();
+        // Production databases also carry the memory schema, which init migrates.
+        db.execute_batch(include_str!("../memory/schema.sql"))
+            .unwrap();
         init(&db).unwrap();
         db
     }
@@ -934,12 +966,13 @@ mod tests {
         .unwrap();
         assert_eq!(count_active_generations(&db).unwrap(), 2);
 
-        update_progress(&mut db, "g1", 4, "generating", "Hello there").unwrap();
+        update_progress(&mut db, "g1", 4, "generating", "Hello there", None).unwrap();
         let message = finalize_generation(
             &mut db,
             "g1",
             "completed",
             "Hello there",
+            None,
             "completed",
             None,
             5,
@@ -949,11 +982,18 @@ mod tests {
         assert_eq!(message.status, "completed");
         assert_eq!(message.text, "Hello there");
         // Terminal generations cannot be finalized twice.
-        assert!(
-            finalize_generation(&mut db, "g1", "failed", "late", "failed", Some("late"), 9)
-                .unwrap()
-                .is_none()
-        );
+        assert!(finalize_generation(
+            &mut db,
+            "g1",
+            "failed",
+            "late",
+            None,
+            "failed",
+            Some("late"),
+            9
+        )
+        .unwrap()
+        .is_none());
 
         let rows = list_messages(&db, "c1").unwrap();
         assert_eq!(rows.len(), 2);
@@ -1017,11 +1057,14 @@ mod tests {
                     connection_id: "conn".into(),
                     model_id: "model".into(),
                 }),
+                workspace_id: "general".into(),
+                archived: false,
             },
             messages: vec![ChatMessage {
                 id: "m1".into(),
                 role: "assistant".into(),
                 text: "partial".into(),
+                reasoning: None,
                 status: "generating".into(),
                 generation_id: Some("g1".into()),
                 error: None,

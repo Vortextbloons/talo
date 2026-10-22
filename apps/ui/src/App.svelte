@@ -4,6 +4,8 @@
   import { listen } from '@tauri-apps/api/event';
   import mascot from '../../../packages/design/mascot.svg';
   import NavIcon from './NavIcon.svelte';
+  import { library, refreshLibrary } from './lib/library.svelte';
+  import LibraryPanel from './components/LibraryPanel.svelte';
   import ChatView from './components/ChatView.svelte';
   import ProviderSettings from './components/ProviderSettings.svelte';
   import { chat, disposeChat, initChat, selectionLabel } from './lib/chat.svelte';
@@ -47,7 +49,7 @@
     window.addEventListener('focus',wake);
     return ()=>{active=false;unlisten?.();window.removeEventListener('focus',wake);disposeChat();};
   });
-  async function save() { try {busy=true;if(isTauri())await invoke('save_settings',{settings:{...settings,complete:true}});settings.complete=true;editing=false;}catch(e){error=String(e);}finally{busy=false;} }
+  async function save() { try {busy=true;if(isTauri())await invoke('save_settings',{settings:{...settings,complete:true}});settings.complete=true;editing=false;void refreshLibrary();}catch(e){error=String(e);}finally{busy=false;} }
   async function permission(action:string,resource:string,run:(id:string)=>Promise<void>) {
     if(!isTauri()){error='Open the desktop app to manage local services.';return;}
     try{const id=await invoke<string>('request_permission',{action,resource});pending={id,action,resource,run};}catch(e){error=String(e);}
@@ -90,13 +92,15 @@
       {#if page!=='Chat'}<div class="page-heading"><h1>{page}</h1><p>{descriptions[page]}</p></div>{/if}
       {#if page==='Chat'}
         <ChatView onOpenSettings={()=>{page='Settings';}} name={settings.name} tagline={descriptions.Chat} showReasoning={settings.showReasoning === true} />
+      {:else if page==='Memory' || page==='Workspaces'}
+        <LibraryPanel mode={page} />
       {:else if page==='Settings'}
         <div class="settings-grid">
           <div class="settings-col main">
             <ProviderSettings />
           </div>
           <div class="settings-col side">
-            <section class="card card--prefs"><h2>Your preferences</h2><dl><dt>Name</dt><dd>{settings.name||'Not set'}</dd><dt>Personality</dt><dd>{settings.personality}</dd><dt>Chat model</dt><dd>{connectedCount ? chatSelection : 'No provider connected yet'}</dd>{#if settings.provider==='custom'}<dt>Custom endpoint</dt><dd>{settings.baseUrl||'Not set'}</dd>{/if}<dt>Memory</dt><dd>{settings.memory}</dd></dl><label class="check preference-toggle"><input type="checkbox" bind:checked={settings.showReasoning} onchange={saveReasoning}/> <span>Show model reasoning in Chat</span></label><button class="primary" onclick={()=>{editing=true;step=0;}}>Edit setup</button></section>
+            <section class="card card--prefs"><h2>Your preferences</h2><dl><dt>Name</dt><dd>{settings.name||'Not set'}</dd><dt>Personality</dt><dd>{settings.personality}</dd><dt>Chat model</dt><dd>{connectedCount ? chatSelection : 'No provider connected yet'}</dd>{#if settings.provider==='custom'}<dt>Custom endpoint</dt><dd>{settings.baseUrl||'Not set'}</dd>{/if}<dt>Memory</dt><dd>{library.memoryEnabled ? 'Enabled' : 'Off'}</dd></dl><label class="check preference-toggle"><input type="checkbox" bind:checked={settings.showReasoning} onchange={saveReasoning}/> <span>Show model reasoning in Chat</span></label><button class="primary" onclick={()=>{editing=true;step=0;}}>Edit setup</button></section>
             <section class="card card--services"><h2>Local services</h2><p>Start or stop the bundled runtimes. Pi starts when you send a message and rests after two idle minutes.</p>{#each ['pi','browser'] as service (service)}<div class="service"><div><strong>{service==='pi'?'Pi worker':'Chromium'}</strong><small>{status?.services[service as ServiceId]??'Desktop app required'}</small></div><button disabled={busy||!isTauri()} onclick={()=>status?.services[service as ServiceId]==='running'?control(service as ServiceId,false):service==='browser'?browserStart():control('pi',true)}>{status?.services[service as ServiceId]==='running'?'Stop':'Start'}</button></div>{/each}<p class="detail">SQLite: {status?.database??'Desktop app required'}</p>{#if status}<div class="dependencies">{#each Object.entries(status.dependencies) as [name,ready] (name)}<span>{ready?'✓':'○'} {name}</span>{/each}</div>{/if}</section>
             <section class="card card--windows"><h2>Windows</h2><p>Closing the window keeps Talo in the tray. Use Quit Talo to exit.</p><button disabled={busy||!isTauri()} onclick={()=>permission('autostart.change','enable',async grant=>{await invoke('set_autostart',{enabled:true,grant});})}>Enable launch at sign-in</button> <button disabled={busy||!isTauri()} onclick={()=>permission('autostart.change','disable',async grant=>{await invoke('set_autostart',{enabled:false,grant});})}>Disable launch at sign-in</button></section>
           </div>
@@ -104,7 +108,7 @@
       {:else if page==='Browser'}
         <section class="empty"><span class="empty-badge"><span class="empty-icon">◎</span></span><h2>A separate space for the web.</h2><p>Talo uses its own Chromium profile. Your everyday browser stays yours.</p><button class="primary" disabled={busy||!isTauri()} onclick={browserStart}>Open Talo browser</button><small>Intelligent browser actions will be added in a later phase.</small></section>
       {:else}
-        <section class="empty"><span class="empty-badge"><span class="empty-icon">{page==='Workspaces'?'▦':page==='Tasks'?'☑':'◇'}</span></span><h2>{page==='Workspaces'?'Every project starts somewhere.':page==='Tasks'?'A clear slate.': 'A little continuity.'}</h2><p>{page==='Workspaces'?'Workspace organization is ready for its next chapter.':page==='Tasks'?'Your scheduled tasks will live here. Automatic execution is not enabled.':'Global and workspace memory have a local home. Memory capture and search controls are coming next.'}</p><span class="coming">Foundation in place · Feature coming next</span></section>
+        <section class="empty"><span class="empty-badge"><span class="empty-icon">&#9745;</span></span><h2>A clear slate.</h2><p>Your scheduled tasks will live here. Automatic execution is not enabled.</p><span class="coming">Foundation in place</span></section>
       {/if}
       {#if page!=='Chat'}<footer><span>Made for your everyday.</span><span>Talo / 0.1.0</span></footer>{/if}
     </div>

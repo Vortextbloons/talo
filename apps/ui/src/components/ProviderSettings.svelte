@@ -272,22 +272,21 @@
   .settings-message.error{background:var(--error-bg);border:1px solid var(--error-line);color:var(--error-text)}
   .settings-message.notice{background:#211f16;border:1px solid #4e4324;color:#e8d59e}
   .settings-message button{background:transparent;border:0;color:inherit;padding:0 4px;font-size:16px;line-height:1}
-  .connected{margin-top:18px}
-  h3{font-size:13px;font-weight:600;margin:0 0 4px}
-  .connection{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 0;border-bottom:1px solid var(--line)}
-  .connection:last-child{border-bottom:0}
+  .connected{margin-top:18px;display:grid;gap:10px}
+  h3{font-size:13px;font-weight:600;margin:0}
+  .connection{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:13px 16px;border:1px solid var(--line);border-radius:12px;background:var(--soft)}
   .connection-main{min-width:0}
   .connection-title{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
   .connection-title strong{font-size:13.5px;font-weight:550}
   .connection small{display:block;font-size:11px;color:var(--muted);margin-top:4px;line-height:1.5}
-  .connection small.model-summary{color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:520px;margin-top:3px}
+  .connection small.model-summary{color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:520px}
   .connection small.discovery-error{color:var(--error-text)}
   .connection-actions{display:flex;gap:8px;flex-shrink:0}
   .connection-actions button{font-size:11px;padding:7px 11px}
   .quiet-danger{color:var(--muted)}
   .quiet-danger:hover:not(:disabled){color:var(--error-text);border-color:var(--error-line)}
   .tag.connected{font-size:9.5px;color:var(--yellow);border:1px solid #5c4b22;background:#282416;border-radius:20px;padding:3px 8px;white-space:nowrap}
-  .empty-line{font-size:12px;color:var(--muted);margin:18px 0 0;padding:15px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .empty-line{font-size:12px;color:var(--muted);margin:0;padding:13px 16px;border:1px solid var(--line);border-radius:12px;background:var(--soft)}
   .connect-form{border-top:1px solid var(--line);margin-top:22px;padding-top:24px}
   .field-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   .field-row label:only-child{grid-column:1 / -1;max-width:50%}

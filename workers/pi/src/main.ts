@@ -1,4 +1,4 @@
-import { mkdir, stat } from 'node:fs/promises';
+import { mkdir, stat, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type {
@@ -140,6 +140,7 @@ interface SessionRecord {
   lastTurn: LastTurn | undefined;
   unsubscribe: (() => void) | undefined;
   closing: boolean;
+  setContext: (context: string) => void;
 }
 
 const sessions = new Map<string, SessionRecord>();
@@ -275,6 +276,8 @@ function cloneMessages(messages: ChatMessage[]): ChatMessage[] {
 function conversationResult(record: SessionRecord): Record<string, unknown> {
   return {
     sessionId: record.sessionId,
+    autoCompactionEnabled: record.session.autoCompactionEnabled,
+    contextUsage: record.session.getContextUsage() ?? null,
     path: record.path,
     provider: record.provider,
     model: record.model,
@@ -351,6 +354,9 @@ function updateLiveAssistant(record: SessionRecord, generation: Generation): voi
 }
 
 function handleSessionEvent(record: SessionRecord, event: AgentSessionEvent): void {
+  if (event.type === 'compaction_end' && event.result && !event.aborted) {
+    send({ type: 'chat', event: { type: 'context', conversationId: record.conversationId, compacted: true, usage: record.session.getContextUsage() ?? null } });
+  }
   const generation = record.generation;
   if (!generation || generation.finalized || record.closing) return;
   lastActivity = Date.now();
@@ -497,6 +503,7 @@ async function runGeneration(record: SessionRecord, generation: Generation): Pro
     const run = record.session.prompt(generation.userText, { expandPromptTemplates: false });
     generation.started.resolve(undefined);
     await run;
+    send({ type: 'chat', event: { type: 'context', conversationId: record.conversationId, compacted: false, usage: record.session.getContextUsage() ?? null } });
   } catch (error) {
     generation.error = sanitizeError(error);
   } finally {
@@ -709,7 +716,9 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
     : normalizeReasoning(params.reasoning);
   const name = typeof params.name === 'string' ? params.name.trim().slice(0, 120) : undefined;
 
-  return withSessionLock(conversationId, async () => {
+  const pathKey = requestedPath ? path.resolve(requestedPath) : conversationId;
+  const lockKey = process.platform === 'win32' ? pathKey.toLowerCase() : pathKey;
+  return withSessionLock(`path:${lockKey}`, () => withSessionLock(conversationId, async () => {
     let existing = sessions.get(conversationId);
     if (existing) {
       const differentPath = requestedPath !== undefined && existing.path !== null &&
@@ -751,6 +760,14 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
       catch { throw new Error('The saved session is missing or unavailable. Your conversation metadata has been preserved.'); }
       if (!info.isFile() || info.size === 0) {
         throw new Error('The saved session is empty or damaged. It has not been replaced.');
+      }
+      const lines = (await readFile(requestedPath, 'utf8')).split(/\r?\n/u).filter(line => line.trim());
+      let entries: Array<Record<string, unknown>>;
+      try { entries = lines.map(line => JSON.parse(line) as Record<string, unknown>); }
+      catch { throw new Error('The saved session is damaged. The original file has been preserved.'); }
+      if (entries[0]?.type !== 'session') throw new Error('The saved session header is damaged.');
+      if ([...sessions.values()].some(record => record.path && (process.platform === 'win32' ? path.resolve(record.path).toLowerCase() === path.resolve(requestedPath!).toLowerCase() : path.resolve(record.path) === path.resolve(requestedPath!)))) {
+        throw new Error('This session is already open in another conversation');
       }
       manager = SessionManager.open(requestedPath, sessionDir, cwd);
     }
@@ -796,6 +813,8 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
       systemPrompt: TALO_SYSTEM_PROMPT,
     });
     await loader.reload();
+    let referenceContext = '';
+    loader.getSystemPrompt = () => TALO_SYSTEM_PROMPT + referenceContext;
 
     const { session } = await createAgentSession({
       cwd,
@@ -809,6 +828,7 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
       customTools: [],
       ...(selectedModel ? { model: selectedModel } : {}),
     });
+    session.setAutoCompactionEnabled(true);
     session.setActiveToolsByName([]);
 
     const record: SessionRecord = {
@@ -826,12 +846,17 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
       lastTurn: restoreRetryableTurn(session),
       unsubscribe: undefined,
       closing: false,
+      setContext: context => {
+        if (context === referenceContext) return;
+        referenceContext = context;
+        session.setActiveToolsByName([]);
+      },
     };
     record.unsubscribe = session.subscribe(event => handleSessionEvent(record, event));
     sessions.set(conversationId, record);
     await evictSessions(conversationId);
     return conversationResult(record);
-  });
+  }));
 }
 
 async function abortGeneration(generationId: string): Promise<boolean> {
@@ -884,6 +909,9 @@ async function startSessionPrompt(params: Record<string, unknown>): Promise<{ re
   if ((record.state === 'generating' || record.state === 'cancelling') && record.generation) {
     await abortGeneration(record.generation.id);
   }
+  const context = typeof params.context === 'string' ? params.context : '';
+  if (Buffer.byteLength(context, 'utf8') > 4096) throw new Error('Reference context exceeds budget');
+  record.setContext(context);
   const generation = beginGeneration(record, generationId, text, false);
   return { record, generation };
 }
@@ -979,6 +1007,9 @@ async function handle(request: WorkerRequest): Promise<void> {
         if (!turn || (turn.state !== 'failed' && turn.state !== 'cancelled')) {
           throw new Error('Nothing to retry');
         }
+        const context = typeof params.context === 'string' ? params.context : '';
+        if (Buffer.byteLength(context, 'utf8') > 4096) throw new Error('Reference context exceeds budget');
+        record.setContext(context);
         const generation = beginGeneration(record, generationId, turn.userText, true);
         send({ type: 'response', id: request.id, result: { accepted: true, generationId, retry: true } });
         launchGeneration(record, generation);

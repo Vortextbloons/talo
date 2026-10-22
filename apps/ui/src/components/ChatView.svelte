@@ -1,4 +1,6 @@
 <script lang="ts">
+  import LibrarySidebar from './LibrarySidebar.svelte';
+  import { library } from '../lib/library.svelte';
   import { tick } from 'svelte';
   import mascot from '../../../../packages/design/mascot.svg';
   import type { ChatMessage } from '../../../../packages/contracts/src/chat';
@@ -28,6 +30,7 @@
   function initialThreadsOpen(): boolean {
     try { return localStorage.getItem(THREADS_KEY) !== '0'; } catch { return true; }
   }
+  let showArchived = $state(false);
   let text = $state('');
   let threadsOpen = $state(initialThreadsOpen());
   function toggleThreads(): void {
@@ -278,24 +281,25 @@
   <aside class="threads" aria-label="Conversations" inert={!threadsOpen} aria-hidden={!threadsOpen}>
     <div class="rail-inner">
       <div class="rail-greeting">
-        <div>
-          <strong>{greeting}</strong>
-          <span>{tagline}</span>
-        </div>
-        <button class="rail-toggle" title="Hide threads" aria-label="Hide thread list" aria-expanded={threadsOpen} onclick={toggleThreads}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="3.5"/><path d="M9.5 4.5v15"/></svg></button>
+        <strong>{greeting}</strong>
+        <span>{tagline}</span>
       </div>
+      <LibrarySidebar bind:showArchived />
       <div class="threads-head">
         <span>Threads</span>
-        <button
-          class="new-thread"
-          disabled={working || chat.creating || chat.preview}
-          title={working ? 'Stop the current reply before starting another conversation' : 'Start a new conversation'}
-          onclick={() => { void createConversation(); }}
-        >New</button>
+        <div class="threads-actions">
+          <button
+            class="new-thread"
+            disabled={working || chat.creating || chat.preview}
+            title={working ? 'Stop the current reply before starting another conversation' : 'Start a new conversation'}
+            onclick={() => { void createConversation(); }}
+          >New</button>
+          <button class="rail-toggle" title="Hide threads" aria-label="Hide thread list" aria-expanded={threadsOpen} onclick={toggleThreads}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="3.5"/><path d="M9.5 4.5v15"/></svg></button>
+        </div>
       </div>
       {#if chat.conversations.length}
         <ul class="thread-list">
-          {#each chat.conversations as conversation (conversation.id)}
+          {#each chat.conversations.filter(c => (c.workspaceId ?? 'general') === library.activeWorkspace && Boolean(c.archived) === showArchived) as conversation (conversation.id)}
             <li>
               <button
                 class:active={chat.active?.conversation.id === conversation.id}
@@ -340,6 +344,7 @@
       </span>
     </div>
 
+    {#if active?.error && active.error !== chat.error}<div class="chat-message error" role="alert">{active.error}</div>{/if}
     {#if chat.error}
       <div class="chat-message error" role="alert">
         <span>{chat.error}</span>
@@ -541,13 +546,14 @@
   .rail-collapsed .threads{border-right-color:transparent}
   .rail-inner{width:var(--rail-w);height:100%;padding:2px 20px 8px 0;overflow-y:auto;display:flex;flex-direction:column;scrollbar-gutter:stable;transition:opacity .16s ease}
   .rail-collapsed .rail-inner{opacity:0;visibility:hidden}
-  .rail-greeting{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:6px 2px 20px}
+  .rail-greeting{padding:6px 2px 20px}
   .rail-greeting strong{display:block;font-size:21px;letter-spacing:-.8px;font-weight:560}
   .rail-greeting span{display:block;margin-top:6px;font-size:12px;color:var(--muted);line-height:1.55}
   .rail-toggle,.threads-reopen{display:inline-flex;align-items:center;justify-content:center;gap:7px;flex-shrink:0;background:transparent;border:1px solid transparent;border-radius:7px;color:var(--faint);padding:5px;line-height:1;transition:color .15s ease,border-color .15s ease,background .15s ease}
   .rail-toggle svg{width:15px;height:15px}
   .rail-toggle:hover,.threads-reopen:hover{color:var(--text);border-color:var(--line-strong);background:var(--soft)}
-  .threads-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .threads-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
+  .threads-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
   .threads-head>span{font-size:10.5px;color:var(--faint);letter-spacing:.1em;text-transform:uppercase}
   .new-thread{background:transparent;border:1px solid var(--line);color:var(--text);padding:5px 10px;font-size:11px;border-radius:7px}
   .new-thread:hover:not(:disabled){border-color:var(--yellow-deep);color:var(--yellow)}

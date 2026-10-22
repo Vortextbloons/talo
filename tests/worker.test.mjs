@@ -32,6 +32,10 @@ test('explicit session restore rejects missing and empty files without replacing
       conversationId: 'empty', sessionPath: empty,
     }), /session.*(?:empty|damaged)/i);
     assert.equal(await readFile(empty, 'utf8'), '', 'a damaged session must not be overwritten');
+    const corrupt = path.join(data, 'sessions', 'corrupt.jsonl');
+    await writeFile(corrupt, '{private damaged history');
+    await assert.rejects(worker.request('corrupt', 'session.open', {conversationId:'corrupt',sessionPath:corrupt}), /damaged/i);
+    assert.equal(await readFile(corrupt,'utf8'),'{private damaged history');
     assert.ok(await worker.request('health', 'ping'));
   } finally {
     await worker.kill();
@@ -465,4 +469,60 @@ test('concurrent conversations keep separate provider credentials and endpoints'
     await secondMock.close();
     await rm(data, { recursive: true, force: true });
   }
+});
+
+test('bounded memory context reaches Pi without duplicate injections and is refreshed after wake', { timeout: 40000 }, async () => {
+  const data = await mkdtemp(path.join(os.tmpdir(), 'talo-memory-context-'));
+  const mock = await startMockProvider();
+  let worker = startWorker(data);
+  const selection = { conversationId:'memory-chat',provider:'custom',model:'mock-model',baseUrl:mock.url,apiKey:mock.state.key };
+  const context = '\n# USER.md\n- Approved preference: use concise examples\n# MEMORY.md\n- Project decision: use SQLite\n';
+  try {
+    await worker.waitReady();
+    const opened=await worker.request('open','session.open',selection);
+    for(let i=0;i<2;i++) {
+      const mark=worker.mark();
+      await worker.request(`prompt-${i}`,'session.prompt',{conversationId:'memory-chat',generationId:`memory-${i}`,text:`Question ${i}`,context});
+      const done=await worker.waitGeneration('memory-chat',`memory-${i}`,['completed','failed'],mark);
+      assert.equal(done.event.state,'completed',done.event.error);
+      const body=mock.state.requests.filter(r=>r.url.endsWith('/chat/completions')).at(-1).body;
+      const system=body.messages.filter(m=>m.role==='system').map(m=>JSON.stringify(m.content)).join('\n');
+      assert.equal(system.split('Approved preference: use concise examples').length-1,1,'memory should be injected exactly once');
+      assert.match(system,/Project decision: use SQLite/);
+    }
+    await assert.rejects(worker.request('budget','session.prompt',{conversationId:'memory-chat',generationId:'too-big',text:'No',context:'x'.repeat(4097)}),/budget/);
+    await worker.close();
+    worker=startWorker(data);await worker.waitReady();
+    const resumed=await worker.request('resume','session.open',{...selection,sessionPath:opened.path});
+    assert.equal(resumed.sessionId,opened.sessionId);
+    assert.ok(resumed.messages.some(m=>m.text==='Question 0'));
+    const mark=worker.mark();
+    await worker.request('fresh-context','session.prompt',{conversationId:'memory-chat',generationId:'after-wake',text:'After wake',context:'\n# MEMORY.md\n- Updated project decision: use Rust\n'});
+    assert.equal((await worker.waitGeneration('memory-chat','after-wake',['completed','failed'],mark)).event.state,'completed');
+    const body=mock.state.requests.filter(r=>r.url.endsWith('/chat/completions')).at(-1).body;
+    const system=body.messages.filter(m=>m.role==='system').map(m=>JSON.stringify(m.content)).join('\n');
+    assert.match(system,/Updated project decision: use Rust/);
+    assert.ok(!system.includes('Approved preference: use concise examples'),'superseded context must not remain in current system prompt');
+  } finally {await worker.close();await mock.close();await rm(data,{recursive:true,force:true});}
+});
+
+test('concurrent opens cannot share one authoritative session file', { timeout:40000 }, async()=>{
+  const data=await mkdtemp(path.join(os.tmpdir(),'talo-session-owner-'));
+  const mock=await startMockProvider();let worker=startWorker(data);
+  const selection={provider:'custom',model:'mock-model',baseUrl:mock.url,apiKey:mock.state.key};
+  try {
+    await worker.waitReady();
+    const opened=await worker.request('seed','session.open',{...selection,conversationId:'seed'});
+    assert.equal(opened.autoCompactionEnabled,true);
+    const mark=worker.mark();await worker.request('seed-prompt','session.prompt',{conversationId:'seed',generationId:'seed-generation',text:'Original history'});
+    await worker.waitGeneration('seed','seed-generation',['completed'],mark);
+    await worker.close();worker=startWorker(data);await worker.waitReady();
+    const result=await Promise.allSettled([
+      worker.request('owner-a','session.open',{...selection,conversationId:'owner-a',sessionPath:opened.path}),
+      worker.request('owner-b','session.open',{...selection,conversationId:'owner-b',sessionPath:opened.path}),
+    ]);
+    assert.equal(result.filter(r=>r.status==='fulfilled').length,1);
+    assert.match(result.find(r=>r.status==='rejected').reason.message,/already open/);
+    assert.ok((await readFile(opened.path,'utf8')).includes('Original history'));
+  }finally{await worker.close();await mock.close();await rm(data,{recursive:true,force:true});}
 });

@@ -3,13 +3,15 @@
 
   // Thinking streams open; the reply pulls focus back unless the reader pinned the panel.
   // The initial props are deliberately captured once: this component mounts per message.
-  // svelte-ignore state_referenced_locally
   let touched = $state(false);
   // svelte-ignore state_referenced_locally
   let open = $state(thinking && !hasReply);
 
   $effect(() => {
-    if (!touched && hasReply) open = false;
+    if (touched) return;
+    // Follow the turn: open while thinking streams, close once the reply takes over.
+    if (thinking && !hasReply) open = true;
+    else if (hasReply) open = false;
   });
 
   function toggle(): void {

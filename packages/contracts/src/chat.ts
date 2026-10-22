@@ -5,6 +5,7 @@ export interface ConnectionInfo { id: string; providerId: string; name: string; 
 export interface ConversationInfo {
   id: string; title: string; sessionId: string | null; sessionPath: string | null;
   createdAt: string; updatedAt: string; selection: ModelSelection | null;
+  workspaceId?: string; archived?: boolean;
 }
 export interface ChatMessage {
   id: string; role: 'user' | 'assistant'; text: string;
@@ -33,7 +34,7 @@ export interface WorkerRequest { id: string; method: WorkerMethod; params?: Reco
 export type WorkerEvent =
   | { type: 'ready' | 'sleeping' | 'error'; message?: string }
   | { type: 'response'; id: string; result?: unknown; error?: string }
-  | { type: 'chat'; event: ChatEvent };
+  | { type: 'chat'; event: ChatEvent | { type: 'context'; conversationId: string; compacted: boolean; usage: unknown } };
 
 /**
  * Tauri API (camelCase arguments; all failures reject with sanitized errors):
@@ -59,4 +60,16 @@ export type WorkerEvent =
  * A generation event's text is the COMPLETE accumulated assistant text (not a delta).
  * reasoning, when present, is the COMPLETE accumulated thinking text (not a delta).
  * Event sequence numbers increase within a generation, including across its retries.
+ */
+
+/** Slice 3 host API:
+ * library_action({operation,payload?}) coordinates all workspace/chat metadata writes.
+ * Operations: state, workspace_save/switch/archive/delete, conversation_update/delete,
+ * history_search, index_rebuild, memory_enable, context_usage.
+ * memory_save/update({payload:{content,scope,workspaceId?,source?,personal?,consent?,id?}})
+ * memory_list/search({payload:{workspaceId?,scope?,query?,history?}})
+ * memory_delete({payload:{id}}) erases the selected version and its superseded ancestors.
+ * Personal information defaults to true and requires consent=true on every save/update.
+ * session.prompt/retry private params also accept bounded `context` reference snapshots.
+ * Session references survive sleep; Pi's native JSONL is authoritative, SQLite is a rebuildable projection.
  */
