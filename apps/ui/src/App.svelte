@@ -13,7 +13,7 @@
   import ToolsSettings from './components/ToolsSettings.svelte';
   import ToolApprovals from './components/ToolApprovals.svelte';
   import TasksPanel from './components/TasksPanel.svelte';
-  import { chat, disposeChat, initChat, selectionLabel } from './lib/chat.svelte';
+  import { chat, disposeChat, initChat, selectionLabel, createConversation } from './lib/chat.svelte';
   import { CUSTOM_BASE_URL_EXAMPLE, DEFAULT_PREFERENCE, PROVIDERS, parseProviderPreference, providerDescriptor } from '../../../packages/contracts/src/index';
   import type { Onboarding, RuntimeStatus, ServiceId } from '../../../packages/contracts/src/index';
   const pages = ['Chat', 'Workspaces', 'Tasks', 'Browser', 'Memory', 'Settings'] as const;
@@ -87,6 +87,27 @@
     try{await invoke('save_settings',{settings:{...settings,complete:true}});}
     catch(e){error=String(e);settings.showReasoning=!value;}
   }
+  /* Setup may be skipped entirely; saved preferences stay untouched and onboarding never blocks first use. */
+  async function skipSetup(){
+    if(busy)return;
+    try{if(isTauri())await invoke('save_settings',{settings:{...settings,complete:true}});}
+    catch(e){error=String(e);return;}
+    settings.complete=true;editing=false;void refreshLibrary();
+  }
+  /* Keyboard map: Ctrl+1..6 switch pages, Ctrl+N starts a conversation. */
+  function onKeydown(event:KeyboardEvent):void{
+    if(!loaded||!settings.complete||editing)return;
+    if(!event.ctrlKey||event.altKey||event.shiftKey||event.metaKey)return;
+    if(event.key>='1'&&event.key<='6'){
+      const item=pages[Number(event.key)-1];
+      if(item){event.preventDefault();navigatePage(item);}
+      return;
+    }
+    if(event.key.toLowerCase()==='n'){
+      event.preventDefault();
+      if(page==='Chat'&&!busy&&!chat.creating&&!chat.sending&&!chat.preview&&chat.active?.state!=='generating'&&chat.active?.state!=='cancelling')void createConversation();
+    }
+  }
 </script>
 
 <div class="shell" class:nav-collapsed={navCollapsed} class:ai-working={aiWorking}>
@@ -139,12 +160,13 @@
     </div>
   </main>
 </div>
+<svelte:window onkeydown={onKeydown} />
 {#if loaded && (!settings.complete || editing)}
   <div class="overlay"><dialog open class="onboarding" aria-modal="true" aria-labelledby="setup-title"><img src={mascot} alt="Talo"/><div class="steps">Getting acquainted · {step+1} of 3</div><h2 id="setup-title">{step===0?'A little introduction.':step===1?'Choose your intelligence.':'Remember what matters.'}</h2>
     {#if step===0}<label>Your name <span>(optional)</span><input bind:value={settings.name} maxlength="80" placeholder="What should Talo call you?"/></label><label>Assistant personality<select bind:value={settings.personality}><option>Thoughtful and direct</option><option>Warm and encouraging</option><option>Brief and practical</option></select></label>
     {:else if step===1}<label>Starting provider<select bind:value={settings.provider}>{#each PROVIDERS as item (item)}<option value={item.id}>{item.name}</option>{/each}</select></label>{#if settings.provider==='custom'}<label>Base URL<input bind:value={settings.baseUrl} maxlength="2048" placeholder={CUSTOM_BASE_URL_EXAMPLE}/></label><label>Model ID<input bind:value={settings.model} maxlength="200" placeholder="llama3.3"/></label><label class="check"><input type="checkbox" bind:checked={settings.reasoning}/> <span>This endpoint supports reasoning</span></label><p class="setup-note">Talo writes this endpoint to Pi's models.json. Reasoning adds Pi's thinking levels to the model. Local servers need no key. Secure key connection for hosted custom endpoints is coming next.</p>{:else}<p class="setup-note">{provider.tagline} Choose a starting provider now. You will connect its key and choose a chat model in Settings before your first message.</p>{/if}
     {:else}<label>Memory preference<select bind:value={settings.memory}><option value="workspace">Keep memory within each workspace</option><option value="global">Allow memory across workspaces</option><option value="off">Keep memory off</option></select></label><p class="setup-note">Memories stay on this device. Automatic capture is not enabled yet. You can change this preference in Settings.</p>{/if}
-    <div class="setup-actions">{#if step>0}<button onclick={()=>step--}>Back</button>{:else}<span></span>{/if}{#if step<2}<button class="primary" onclick={()=>step++}>Continue</button>{:else}<button class="primary" disabled={busy} onclick={save}>Make yourself at home</button>{/if}</div>
+    <div class="setup-actions">{#if step>0}<button onclick={()=>step--}>Back</button>{:else}<button onclick={()=>{void skipSetup();}}>Skip for now</button>{/if}{#if step<2}<button class="primary" onclick={()=>step++}>Continue</button>{:else}<button class="primary" disabled={busy} onclick={save}>Make yourself at home</button>{/if}</div>
   </dialog></div>
 {/if}
 {#if pending}<div class="overlay"><dialog open class="onboarding" aria-modal="true" aria-labelledby="permission-title"><h2 id="permission-title">Allow this action?</h2><p>{pending.action==='browser.start'?'Open Chromium with Talo’s dedicated persistent profile?':'Change whether Talo starts when you sign in to Windows?'}</p><p class="detail">{pending.resource} · This action only</p><div class="setup-actions"><button onclick={()=>resolve(false)}>Deny</button><button class="primary" onclick={()=>resolve(true)}>Allow once</button></div></dialog></div>{/if}

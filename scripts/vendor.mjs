@@ -18,6 +18,13 @@ if(!await exists(path.join(runtime,'bun/bun.exe'))){
   execFileSync('powershell.exe',['-NoProfile','-Command',`Expand-Archive -LiteralPath 'vendor/downloads/${name}' -DestinationPath 'vendor/downloads/bun' -Force`],{stdio:'inherit',windowsHide:true});
   await cp('vendor/downloads/bun/bun-windows-x64',path.join(runtime,'bun'),{recursive:true});
 }
+// Redistributing bun.exe requires shipping its license text; the release archive has none.
+const bunLicense=path.join(runtime,'bun/LICENSE.md');
+if(!await exists(bunLicense)){
+  const bytes=await download(`https://raw.githubusercontent.com/oven-sh/bun/bun-v${bunVersion}/LICENSE.md`);
+  if(createHash('sha256').update(bytes).digest('hex')!=='056696884250b0d682365260cf1487a6501b1665a343ec60e23a1e647043c572')throw new Error('Bun license checksum mismatch');
+  await writeFile(bunLicense,bytes);
+}
 const browserInfo=JSON.parse(await readFile('node_modules/playwright-core/browsers.json','utf8')).browsers.find(b=>b.name==='chromium');
 if(!await exists(path.join(runtime,'chromium/chrome-win64/chrome.exe'))){
   // Playwright owns the revision and download URLs; package-lock pins the installer.
