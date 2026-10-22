@@ -4,7 +4,7 @@ const root = process.env.TALO_VENDOR_DIR;
 const data = process.env.TALO_DATA_DIR;
 if (!root || !data) throw new Error('Host runtime paths required');
 const send = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');
-const manager = new BrowserManager(root, data, state => send({ type: 'browser_state', state }));
+const manager = new BrowserManager(root, data, state => send({ type: 'browser_state', state }), frame => send({ type: 'browser_frame', frame }));
 const requests = new Map<string, AbortController>();
 let stopping = false;
 async function stop() {
@@ -21,17 +21,20 @@ input.on('line', line => {
   let value: any; try { value = JSON.parse(line); } catch { return; }
   if (value.method === 'shutdown') { void stop(); return; }
   if (value.method === 'cancel') { requests.get(String(value.params?.requestId))?.abort(); return; }
-  const id = String(value.id ?? ''); if (!id || requests.has(id) || requests.size >= 8) return;
+  const id = String(value.id ?? ''); if (!id || requests.has(id)) return;
+  if (requests.size >= 32) { send({ id, error: { message: 'Browser is busy. Try again shortly.' } }); return; }
   const controller = new AbortController(); requests.set(id, controller);
   void (async () => {
     try {
       let result;
       if (value.method === 'state') result = await manager.state();
+      else if (value.method === 'view') { await manager.viewing(value.params?.enabled === true, String(value.params?.leaseId)); result = await manager.state(); }
+      else if (value.method === 'input') { await manager.input(value.params); result = true; }
       else if (value.method === 'control') {
         const action = value.params?.action;
         if (action === 'stop') { await manager.stop(); result = await manager.state(); }
-        else if (action === 'watch') result = await manager.execute({ name: 'browser_handoff', arguments: { action: 'watch' } });
-        else if (['open', 'take_over', 'return', 'pause'].includes(action)) result = await manager.handoff(action === 'return' ? 'agent' : action === 'pause' ? 'paused' : 'human');
+        else if (action === 'watch' || action === 'open') result = await manager.execute({ name: 'browser_handoff', arguments: { action: 'watch' } });
+        else if (['take_over', 'return', 'pause'].includes(action)) result = await manager.handoff(action === 'return' ? 'agent' : action === 'pause' ? 'paused' : 'human');
         else throw new Error('Unknown browser control.');
       } else if (value.method === 'tools/call') result = await manager.execute(value.params, controller.signal);
       else throw new Error('Unknown browser request.');

@@ -7,6 +7,7 @@ mod credentials;
 mod job;
 mod library;
 mod permissions;
+mod integrations;
 #[path = "../../../services/scheduler/mod.rs"]
 mod scheduler;
 #[path = "../../../services/storage/store.rs"]
@@ -28,6 +29,7 @@ use tauri::{
 };
 
 struct Host {
+    integrations: integrations::Integrations,
     db: Connection,
     supervisor: Supervisor,
     permissions: Permissions,
@@ -92,6 +94,10 @@ impl Host {
         // Model-supplied flags can never authorize a browser operation.
         if let Some(params) = message["params"].as_object_mut() { params.remove("approved"); }
         if ["browser_interact","browser_ai","browser_download"].contains(&name.as_str()) {
+            let attended=app.get_webview_window("main").is_some_and(|w|w.is_visible().unwrap_or(false));
+            if permissions::policy("browser.action","",&Value::Null,attended)==permissions::Decision::Deny {
+                self.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Unapproved browser actions cannot run unattended."}}));return;
+            }
             if self.browser_approvals.len() >= 8 { self.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Too many pending browser approvals"}})); return; }
             if let Ok(browser) = self.supervisor.ensure_browser() {
                 if let Ok(state) = browser.state.lock() {
@@ -108,10 +114,13 @@ impl Host {
         } else { self.supervisor.browser_request(message); }
     }
     fn pump(&mut self, app: &tauri::AppHandle) {
+        if let Some(frame) = self.supervisor.take_browser_frame() { let _ = app.emit_to("main", "browser-frame", frame); }
         for signal in self.supervisor.drain_signals() {
-            if let supervisor::WorkerSignal::Browser(message) = signal { self.browser_message(app, message); }
+            if let supervisor::WorkerSignal::Tools(message) = signal { integrations::message(self, app, message); }
+            else if let supervisor::WorkerSignal::Browser(message) = signal { self.browser_message(app, message); }
             else { self.chat.on_worker_signal(&mut self.db, app, signal); }
         }
+        if integrations::expire(self){let _=app.emit("tool-approvals-changed",());}
         let epoch = self.supervisor.worker_epoch();
         let expired: Vec<_> = self.browser_approvals.iter().filter(|(_, (_, at, owner))| *owner != epoch || at.elapsed() > Duration::from_secs(90)).map(|(id, _)| id.clone()).collect();
         for id in expired {
@@ -225,6 +234,7 @@ async fn save_settings(app: tauri::AppHandle, settings: Value) -> Result<(), Str
         // No credentials are accepted or persisted in settings.
         let allowed = [
             "name",
+            "agentName",
             "personality",
             "provider",
             "model",
@@ -237,6 +247,12 @@ async fn save_settings(app: tauri::AppHandle, settings: Value) -> Result<(), Str
         let obj = settings.as_object().ok_or("Expected settings object")?;
         if obj.keys().any(|k| !allowed.contains(&k.as_str())) || settings.to_string().len() > 8192 {
             return Err("Invalid settings".into());
+        }
+        if let Some(name) = obj.get("agentName") {
+            let name = name.as_str().ok_or("Invalid agent name")?;
+            if name.trim().is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
+                return Err("Choose an agent name between 1 and 80 characters".into());
+            }
         }
         let provider = match obj.get("provider") {
             Some(Value::String(value)) if value.len() <= 64 => value.as_str(),
@@ -407,7 +423,6 @@ async fn set_autostart(app: tauri::AppHandle, enabled: bool, grant: String) -> R
 }
 
 fn main() {
-    if browser::window_helper() { return; }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             open_main(app);
@@ -419,8 +434,11 @@ fn main() {
         )
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
+            integrations::tools_action,
             runtime_status,
             browser::browser_control,
+            browser::browser_view,
+            browser::browser_input,
             research::research_source_open,
             research::research_artifact_open,
             load_settings,
@@ -476,6 +494,7 @@ fn main() {
             }));
             app.manage(status_cache.clone());
             app.manage(Arc::new(Mutex::new(Host {
+                integrations: integrations::Integrations::default(),
                 db,
                 supervisor: Supervisor::new(root, data),
                 permissions: Permissions::default(),
@@ -604,6 +623,7 @@ mod dispatch_regression {
             .unwrap();
         storage::init(&db).unwrap();
         Host {
+            integrations: integrations::Integrations::default(),
             db,
             supervisor: Supervisor::new(
                 std::path::PathBuf::from("missing-vendor"),

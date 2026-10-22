@@ -3,6 +3,9 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { createWebTools, WEB_TOOLS, WebTransport } from './web.js';
 import { createBrowserTools, BROWSER_TOOLS } from './browser.js';
+import { McpManager } from './mcp.js';
+import { ToolRegistry } from './registry.js';
+import { fileTools } from './files.js';
 import type {
   AgentSession,
   AgentSessionEvent,
@@ -54,7 +57,16 @@ if (!dataDir) throw new Error('TALO_DATA_DIR is required');
 const data: string = dataDir;
 const webTransport = new WebTransport(value => process.stdout.write(`${JSON.stringify(value)}\n`));
 const browserTransport = new WebTransport((value: any) => process.stdout.write(`${JSON.stringify({ ...value, type: 'browser' })}\n`));
-const ACTIVE_TOOLS = [...WEB_TOOLS, ...BROWSER_TOOLS];
+const ACTIVE_TOOLS = [...WEB_TOOLS, ...BROWSER_TOOLS, 'mcp', 'read', 'write', 'edit'];
+const permissionTransport = new WebTransport((value:any) => process.stdout.write(`${JSON.stringify({...value,type:'tools'})}\n`));
+let disabledTools = new Set<string>();
+const authorize = async(action:string,scope:string,summary:string,signal?:AbortSignal) => {
+  if(action==='tool.use')return ACTIVE_TOOLS.includes(scope as any)&&!disabledTools.has(scope);
+  const result=await permissionTransport.request('permission',{action,scope,summary},signal,90_000);
+  return result?.allowed===true;
+};
+const registry = new ToolRegistry(authorize);
+const mcp = new McpManager(authorize,()=>process.stdout.write(`${JSON.stringify({type:'tools',message:{method:'status',params:mcp.status()}})}\n`));
 const cwd = path.join(data, 'agent-workspace');
 const agentDir = path.join(data, 'pi');
 const sessionDir = path.join(data, 'sessions');
@@ -65,7 +77,7 @@ const MAX_OPEN_SESSIONS = 6;
 const MAX_CACHED_RUNTIMES = 8;
 const DEFAULT_IDLE_MS = 120_000;
 const SHUTDOWN_GRACE_MS = 2_000;
-const TALO_SYSTEM_PROMPT = 'You are Talo, a friendly, capable personal assistant. '
+const TALO_SYSTEM_PROMPT = 'You are a friendly, capable personal assistant in Talo. Your default name is Talo; use the assistant name supplied in Talo agent identity when present. '
   + 'Help the user think clearly and get useful work done. Be warm, direct, and practical. '
   + 'Explain uncertainty honestly, ask focused questions when needed, and keep answers concise unless detail helps. '
   + 'Use web_search to find sources, web_fetch to read a page, web_crawl for documentation, and web_screenshot for visual evidence. Cite real source URLs. '
@@ -84,6 +96,7 @@ const WORKER_METHODS = new Set<WorkerMethod>([
   'session.abort',
   'session.snapshot',
   'session.thinking',
+  'tools.configure', 'tools.status', 'tools.test', 'tools.cancel',
 ]);
 
 // Pi's session thinking levels. 'off' appears in model registries whose thinking can be
@@ -903,7 +916,8 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
       settingsManager: settings,
       noTools: 'builtin',
       tools: [...ACTIVE_TOOLS],
-      customTools: [
+      customTools: registry.wrap([
+        mcp.tool(), ...fileTools(cwd,authorize),
         ...createWebTools(webTransport, path.join(data, 'artifacts', 'web'), activity => {
           const record = sessions.get(conversationId);
           if (!record?.generation || record.generation.finalized) return;
@@ -914,7 +928,7 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
           if (!record?.generation || record.generation.finalized) return;
           process.stdout.write(`${JSON.stringify({ type: 'chat', event: { type: 'research', conversationId, generationId: record.generation.id, activity } })}\n`);
         }),
-      ],
+      ]),
       ...(selectedModel ? { model: selectedModel } : {}),
     });
     session.setAutoCompactionEnabled(true);
@@ -1018,6 +1032,20 @@ async function handle(request: WorkerRequest): Promise<void> {
   const params = request.params ?? {};
   try {
     switch (request.method) {
+      case 'tools.configure': {
+        await mcp.configure(params.servers ?? []);
+        disabledTools=new Set(Array.isArray(params.disabled)?params.disabled.filter((v):v is string=>typeof v==='string'):[]);
+        send({type:'response',id:request.id,result:true}); return;
+      }
+      case 'tools.status': {
+        send({type:'response',id:request.id,result:{...mcp.status(),tools:registry.list()}});return;
+      }
+      case 'tools.test': {
+        send({type:'response',id:request.id,result:mcp.test(String(params.server))});return;
+      }
+      case 'tools.cancel': {
+        await mcp.cancel(String(params.server));send({type:'response',id:request.id,result:true});return;
+      }
       case 'ping': {
         const first = sessions.values().next().value as SessionRecord | undefined;
         send({
@@ -1164,6 +1192,7 @@ async function shutdown(code: number): Promise<void> {
   stopping = true;
   clearInterval(idleTimer);
   await Promise.all([...sessions.values()].map(record => closeSession(record)));
+  await mcp.close();
   exitAfterFlush(code);
 }
 
@@ -1199,6 +1228,7 @@ function acceptLine(line: string): void {
     const value = JSON.parse(line);
     if (value.type === 'web_response') { webTransport.receive(value.message); return; }
     if (value.type === 'browser_response') { browserTransport.receive(value.message); return; }
+    if (value.type === 'tools_response') { permissionTransport.receive(value.message); return; }
   } catch { /* normal parser reports invalid frames */ }
   if (line.length > MAX_LINE_BYTES) {
     send({ type: 'error', message: 'Request exceeds 1 MiB' });

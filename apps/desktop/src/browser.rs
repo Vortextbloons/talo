@@ -8,6 +8,7 @@ pub struct Browser {
     incoming: Receiver<Value>,
     ui: Arc<Mutex<HashMap<String, SyncSender<Result<Value, String>>>>>,
     pub state: Arc<Mutex<Value>>,
+    frame: Arc<Mutex<Option<Value>>>,
     pending: HashMap<String, (Instant, u64)>,
     #[cfg(windows)]
     job: Option<crate::job::Job>,
@@ -16,7 +17,7 @@ impl Browser {
     pub fn spawn(root: &Path, data: &Path) -> Result<Self, String> {
         let mut command = Command::new(root.join("runtime/node/node.exe"));
         command.arg(root.join("bundle/services/browser/src/main.js")).current_dir(root.join("bundle"))
-            .env("TALO_DATA_DIR", data).env("TALO_VENDOR_DIR", root).env("TALO_HOST_EXE", std::env::current_exe().map_err(|e| e.to_string())?)
+            .env("TALO_DATA_DIR", data).env("TALO_VENDOR_DIR", root)
             .env_remove("NODE_OPTIONS").env_remove("NODE_PATH").env_remove("DEBUG")
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
         #[cfg(windows)] { use std::os::windows::process::CommandExt; command.creation_flags(0x08000000); }
@@ -30,15 +31,19 @@ impl Browser {
         let (tx, incoming) = mpsc::channel();
         let ui: Arc<Mutex<HashMap<String, SyncSender<Result<Value, String>>>>> = Arc::new(Mutex::new(HashMap::new()));
         let state = Arc::new(Mutex::new(json!({"state":"starting","owner":"agent","tabs":[],"busy":false})));
+        let frame = Arc::new(Mutex::new(None));
+        let latest_frame = frame.clone();
         let replies = ui.clone(); let cached = state.clone();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             loop {
                 let mut bytes = Vec::new();
-                let mut limited = std::io::Read::take(&mut reader, 256 * 1024 + 1);
-                match limited.read_until(b'\n', &mut bytes) { Ok(0) | Err(_) => break, _ if bytes.len() > 256 * 1024 => break, _ => {} }
+                let mut limited = std::io::Read::take(&mut reader, 1024 * 1024 + 1);
+                match limited.read_until(b'\n', &mut bytes) { Ok(0) | Err(_) => break, _ if bytes.len() > 1024 * 1024 => break, _ => {} }
                 let Ok(value) = serde_json::from_slice::<Value>(&bytes) else { continue };
                 if value["type"] == "browser_state" { if let Ok(mut state) = cached.lock() { *state = value["state"].clone(); } continue; }
+                // Keep only the newest frame. Never log frames or forward them to Pi.
+                if value["type"] == "browser_frame" { if let Ok(mut frame) = latest_frame.lock() { *frame = Some(value["frame"].clone()); } continue; }
                 let id = value["id"].as_str().unwrap_or("");
                 if let Some(sender) = replies.lock().ok().and_then(|mut p| p.remove(id)) {
                     let result = if value.get("error").is_some() { Err(value["error"]["message"].as_str().unwrap_or("Browser request failed").to_string()) } else { Ok(value["result"].clone()) };
@@ -48,15 +53,20 @@ impl Browser {
             if let Ok(mut state) = cached.lock() { *state = json!({"state":"crashed","owner":"paused","tabs":[],"busy":false,"error":"Browser service disconnected. Open Browser to recover."}); }
             if let Ok(mut pending) = replies.lock() { for (_, sender) in pending.drain() { let _ = sender.send(Err("Browser service stopped".into())); } }
         });
-        Ok(Self { child, stdin, incoming, ui, state, pending: HashMap::new(), #[cfg(windows)] job })
+        Ok(Self { child, stdin, incoming, ui, state, frame, pending: HashMap::new(), #[cfg(windows)] job })
     }
     pub fn write(&mut self, value: &Value) -> Result<(), String> {
         writeln!(self.stdin, "{value}").and_then(|_| self.stdin.flush()).map_err(|_| "Browser connection unavailable".into())
     }
     pub fn request_ui(&mut self, action: &str) -> Result<Receiver<Result<Value,String>>, String> {
+        self.request_view("control", json!({"action":action}))
+    }
+    pub fn take_frame(&self) -> Option<Value> { self.frame.lock().ok().and_then(|mut frame| frame.take()) }
+    pub fn request_view(&mut self, method: &str, params: Value) -> Result<Receiver<Result<Value,String>>, String> {
+        if params.to_string().len() > 48 * 1024 { return Err("Browser input is too large".into()); }
         let id = format!("ui-{}", uuid::Uuid::new_v4()); let (tx, rx) = mpsc::sync_channel(1);
         self.ui.lock().map_err(|_| "Browser state unavailable")?.insert(id.clone(), tx);
-        if let Err(error) = self.write(&json!({"id":id,"method":"control","params":{"action":action}})) { self.ui.lock().unwrap().remove(&id); return Err(error); }
+        if let Err(error) = self.write(&json!({"id":id,"method":method,"params":params})) { self.ui.lock().unwrap().remove(&id); return Err(error); }
         Ok(rx)
     }
     pub fn send(&mut self, message: Value, epoch: u64) -> Result<(), String> {
@@ -88,30 +98,6 @@ impl Drop for Browser {
     }
 }
 
-/// Windows disables hardware input to all Chromium windows during agent ownership;
-/// CDP remains usable. No overlay that page content could remove or bypass.
-pub fn window_helper() -> bool {
-    let args: Vec<_> = std::env::args().collect();
-    if args.get(1).map(String::as_str) != Some("--browser-window") { return false; }
-    #[cfg(windows)] {
-        use windows_sys::Win32::{Foundation::{HWND, LPARAM}, UI::WindowsAndMessaging::*};
-        #[link(name="user32")] unsafe extern "system" { fn EnableWindow(hwnd: HWND, enable: i32) -> i32; }
-        struct Options { pid: u32, enable: bool, focus: bool, count: u32 }
-        unsafe extern "system" fn each(hwnd: HWND, value: LPARAM) -> i32 {
-            let options = &mut *(value as *mut Options); let mut pid = 0; GetWindowThreadProcessId(hwnd, &mut pid);
-            if pid == options.pid && IsWindowVisible(hwnd) != 0 {
-                EnableWindow(hwnd, options.enable as i32); options.count += 1;
-                if options.focus { ShowWindow(hwnd, SW_RESTORE); SetForegroundWindow(hwnd); }
-            } 1
-        }
-        let mut options = Options { pid: args.get(2).and_then(|v| v.parse().ok()).unwrap_or(0), enable: args.get(3).map(String::as_str) == Some("enable"), focus: args.get(4).map(String::as_str) == Some("focus"), count: 0 };
-        if options.pid == 0 { std::process::exit(2); }
-        unsafe { EnumWindows(Some(each), &mut options as *mut _ as isize); }
-        std::process::exit(if options.count > 0 { 0 } else { 3 });
-    }
-    #[cfg(not(windows))] { true }
-}
-
 #[tauri::command]
 pub async fn browser_control(app: tauri::AppHandle, action: String) -> Result<Value, String> {
     if !["open","watch","take_over","return","pause","stop"].contains(&action.as_str()) { return Err("Unknown browser control".into()); }
@@ -119,7 +105,7 @@ pub async fn browser_control(app: tauri::AppHandle, action: String) -> Result<Va
         use tauri::Manager;
         let receiver = {
             let shared = app.state::<crate::Shared>(); let mut host = shared.lock().map_err(|e| e.to_string())?;
-            if ["open","take_over","pause","stop"].contains(&action.as_str()) {
+            if ["take_over","pause","stop"].contains(&action.as_str()) {
                 let pending = std::mem::take(&mut host.browser_approvals);
                 for (id, (message, _, _)) in pending {
                     let crate::Host { db, permissions, .. } = &mut *host;
@@ -131,5 +117,31 @@ pub async fn browser_control(app: tauri::AppHandle, action: String) -> Result<Va
             host.supervisor.ensure_browser()?.request_ui(&action)?
         };
         receiver.recv_timeout(Duration::from_secs(55)).map_err(|_| "Browser control timed out. Check the browser status.".to_string())?
+    }).await
+}
+
+#[tauri::command]
+pub async fn browser_view(app: tauri::AppHandle, enabled: bool, lease_id: String) -> Result<Value, String> {
+    crate::run_blocking(app, move |app| {
+        use tauri::Manager;
+        let receiver = {
+            let shared = app.state::<crate::Shared>(); let mut host = shared.lock().map_err(|e| e.to_string())?;
+            if !enabled && !host.supervisor.browser_running() { return Ok(Value::Null); }
+            host.supervisor.ensure_browser()?.request_view("view", json!({"enabled":enabled,"leaseId":lease_id}))?
+        };
+        receiver.recv_timeout(Duration::from_secs(35)).map_err(|_| "Browser view did not respond. Retry opening it.".to_string())?
+    }).await
+}
+
+#[tauri::command]
+pub async fn browser_input(app: tauri::AppHandle, input: Value) -> Result<Value, String> {
+    crate::run_blocking(app, move |app| {
+        use tauri::Manager;
+        let receiver = {
+            let shared = app.state::<crate::Shared>(); let mut host = shared.lock().map_err(|e| e.to_string())?;
+            if !host.supervisor.browser_running() { return Err("Open the browser before interacting".into()); }
+            host.supervisor.ensure_browser()?.request_view("input", input)?
+        };
+        receiver.recv_timeout(Duration::from_secs(35)).map_err(|_| "Browser input timed out. Reopen the browser view.".to_string())?
     }).await
 }

@@ -8,6 +8,8 @@
   import MessageBody from './MessageBody.svelte';
   import Reasoning from './Reasoning.svelte';
   import WebResearch from './WebResearch.svelte';
+  import AgentCompanion from './AgentCompanion.svelte';
+  import { browser, openBrowser, closeBrowser } from '../lib/browser.svelte';
   import {
     chat,
     chooseModel,
@@ -27,11 +29,11 @@
     setThinkingLevel,
   } from '../lib/chat.svelte';
 
-  let { onOpenSettings, name, tagline, showReasoning }: { onOpenSettings: () => void; name: string; tagline: string; showReasoning?: boolean } = $props();
+  let { onOpenSettings, name, tagline, showReasoning, agentName = 'Talo', onRenameAgent }: { onOpenSettings: () => void; name: string; tagline: string; showReasoning?: boolean; agentName?: string; onRenameAgent: (name: string) => Promise<void> } = $props();
 
   const THREADS_KEY = 'talo.threads.open';
   function initialThreadsOpen(): boolean {
-    try { return localStorage.getItem(THREADS_KEY) !== '0'; } catch { return true; }
+    try { return localStorage.getItem(THREADS_KEY) === '1'; } catch { return false; }
   }
   let showArchived = $state(false);
   let confirmingDelete = $state<string | null>(null);
@@ -459,7 +461,7 @@
   function modelName(message: ChatMessage): string {
     return message.status === 'failed' ? 'Reply failed'
       : message.status === 'cancelled' ? 'Reply stopped'
-        : 'Talo';
+        : agentName;
   }
 
   function canRetry(index: number, message: ChatMessage): boolean {
@@ -478,6 +480,7 @@
 
 <svelte:window onpointerdown={onWindowPointerDown} onkeydown={(event) => { if (event.key === 'Escape' && (confirmingDelete || viewingImage)) { confirmingDelete = null; viewingImage = null; } }} />
 
+<div class="chat-workspace">
 <div class="chat-layout" class:rail-collapsed={!threadsOpen}>
   <aside class="threads" aria-label="Conversations" inert={!threadsOpen} aria-hidden={!threadsOpen}>
     <div class="rail-inner">
@@ -628,11 +631,11 @@
             {/if}
             <div class="message-body">
               <div class="message-role">
-                <span>{message.role === 'user' ? 'You' : modelName(message)}</span>
+                <span title={message.role === 'assistant' ? modelName(message) : undefined}>{message.role === 'user' ? 'You' : agentName}</span>
                 {#if message.status === 'cancelled'}<span class="status-tag">Stopped</span>{/if}
                 {#if message.status === 'failed'}<span class="status-tag failed">Failed</span>{/if}
               </div>
-              {#if message.generationId && chat.research[message.generationId]?.length}
+              {#if message.role === 'assistant' && message.generationId && chat.research[message.generationId]?.length && !messages.slice(0,index).some(previous => previous.role === 'assistant' && previous.generationId === message.generationId)}
                 <WebResearch items={chat.research[message.generationId]} working={message.status === 'generating'} onCancel={() => void stopGeneration()} />
               {/if}
               {#if message.attachments?.length}
@@ -775,6 +778,9 @@
           {#if chat.selectingModel}<span class="picker-status" role="status">Saving…</span>{/if}
         </div>
         <div class="send-area">
+          <button type="button" class="browser-chip" class:browser-active={browser.status.state === 'connected'} aria-label="Open browser preview" aria-expanded={browser.view !== 'closed'} disabled={chat.preview} onclick={() => browser.view === 'side' ? closeBrowser() : void openBrowser('side')} title="Watch the browser without interrupting Pi">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></svg><span>Browser</span>{#if browser.status.busy}<span class="browser-dot"></span>{/if}
+          </button>
           {#if composerHint}<span class="composer-hint">{composerHint}</span>{/if}
           {#if thinkingOptions.length}
             <div class="thinking-wrap" bind:this={thinkingWrapEl}>
@@ -861,6 +867,8 @@
     {/if}
   </section>
 </div>
+<AgentCompanion name={agentName} onRename={onRenameAgent} />
+</div>
 
 {#if viewingImage}
   <div class="lightbox" role="dialog" aria-modal="true" aria-label="Image preview">
@@ -872,7 +880,9 @@
 
 <style>
   /* One full-height surface: the rail holds threads, the column holds the conversation. */
-  .chat-layout{--rail-w:clamp(210px,17vw,246px);flex:1;min-height:0;display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);transition:grid-template-columns .24s cubic-bezier(.2,.7,.3,1)}
+  .chat-workspace{flex:1;min-height:0;min-width:0;display:flex;position:relative}
+  .browser-chip{display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 9px;color:var(--muted);font-size:10px;white-space:nowrap}.browser-chip svg{width:14px;height:14px}.browser-chip:hover:not(:disabled),.browser-chip.browser-active{color:var(--yellow);border-color:var(--line-strong)}.browser-dot{width:4px;height:4px;background:var(--yellow);border-radius:50%}
+  .chat-layout{--rail-w:clamp(180px,15vw,220px);flex:1;min-width:0;min-height:0;display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);transition:grid-template-columns .24s cubic-bezier(.2,.7,.3,1)}
   .chat-layout>*{min-width:0}
   .chat-layout.rail-collapsed{grid-template-columns:0 minmax(0,1fr)}
   .threads{border-right:1px solid var(--line);min-height:0;overflow:hidden;transition:border-color .2s ease}
@@ -915,7 +925,7 @@
   .thread-loading{display:block;margin-top:4px;font-size:10px;color:var(--yellow-deep)}
   .threads-empty{font-size:11.5px;line-height:1.6;color:var(--faint);margin:10px 2px}
   .threads-note{font-size:10.5px;line-height:1.5;color:var(--faint);margin:14px 2px 0;border-top:1px solid var(--line);padding-top:12px}
-  .conversation{width:100%;max-width:1180px;margin:0 auto;min-height:0;display:flex;flex-direction:column;padding-left:18px;transition:padding-left .24s cubic-bezier(.2,.7,.3,1)}
+  .conversation{width:100%;max-width:none;margin:0;min-height:0;display:flex;flex-direction:column;padding-left:18px;transition:padding-left .24s cubic-bezier(.2,.7,.3,1)}
   .rail-collapsed .conversation{padding-left:0}
   .conversation-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding-bottom:13px;border-bottom:1px solid var(--line);margin-bottom:14px}
   .conversation-lead{display:flex;align-items:flex-start;gap:12px;min-width:0}
@@ -1063,6 +1073,7 @@
     .threads-note{margin-top:8px;border-top:0;padding-top:2px}
     .conversation{max-width:none;padding-left:0}
   }
+  @media(max-width:560px){.chat-workspace{flex-direction:column}.chat-workspace :global(.companion){order:-1}}
   @media(max-width:700px){
     .suggestions{grid-template-columns:1fr;gap:6px}
     .composer-hint{display:none}

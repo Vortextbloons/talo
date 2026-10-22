@@ -1,5 +1,17 @@
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
+use serde_json::Value;
+
+#[derive(Debug,PartialEq)]
+pub enum Decision { Allow, Prompt, Deny }
+/// Shared native/browser/MCP policy. Server annotations and model flags never
+/// authorize an operation. Persistent grants are exact and host-protected.
+pub fn policy(action:&str,scope:&str,grants:&Value,attended:bool)->Decision{
+    if action=="web.public" {return Decision::Allow;}
+    if !["mcp.call","files.read","files.write","files.edit","browser.action"].contains(&action){return Decision::Deny;}
+    if grants.as_array().is_some_and(|items|items.iter().any(|g|g["action"]==action&&g["scope"]==scope)){return Decision::Allow;}
+    if attended{Decision::Prompt}else{Decision::Deny}
+}
 
 #[derive(Default)]
 pub struct Permissions {
@@ -38,6 +50,17 @@ impl Permissions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scoped_policy_is_exact_revocable_and_fails_closed_unattended(){
+        let grants=serde_json::json!([{"action":"mcp.call","scope":"server/tool/exact-arguments"}]);
+        assert_eq!(policy("web.public","url",&Value::Null,false),Decision::Allow);
+        assert_eq!(policy("mcp.call","server/tool/exact-arguments",&grants,false),Decision::Allow);
+        assert_eq!(policy("mcp.call","server/tool/other-arguments",&grants,false),Decision::Deny);
+        assert_eq!(policy("mcp.call","server/tool/exact-arguments",&Value::Null,false),Decision::Deny);
+        assert_eq!(policy("files.read","approved-file",&Value::Null,true),Decision::Prompt);
+        assert_eq!(policy("browser.action","page-revision",&Value::Null,false),Decision::Deny);
+        assert_eq!(policy("shell.execute","command",&grants,true),Decision::Deny);
+    }
     #[test]
     fn approval_is_bound_one_use_and_audited() {
         let db = Connection::open_in_memory().unwrap();

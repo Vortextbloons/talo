@@ -1,5 +1,6 @@
 <script lang="ts">
   import BrowserPanel from './components/BrowserPanel.svelte';
+  import { initBrowser, closeBrowser } from './lib/browser.svelte';
   import { onMount } from 'svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
@@ -9,12 +10,15 @@
   import LibraryPanel from './components/LibraryPanel.svelte';
   import ChatView from './components/ChatView.svelte';
   import ProviderSettings from './components/ProviderSettings.svelte';
+  import ToolsSettings from './components/ToolsSettings.svelte';
+  import ToolApprovals from './components/ToolApprovals.svelte';
   import { chat, disposeChat, initChat, selectionLabel } from './lib/chat.svelte';
   import { CUSTOM_BASE_URL_EXAMPLE, DEFAULT_PREFERENCE, PROVIDERS, parseProviderPreference, providerDescriptor } from '../../../packages/contracts/src/index';
   import type { Onboarding, RuntimeStatus, ServiceId } from '../../../packages/contracts/src/index';
   const pages = ['Chat', 'Workspaces', 'Tasks', 'Browser', 'Memory', 'Settings'] as const;
   type Page = typeof pages[number];
   let page = $state<Page>('Chat');
+  function navigatePage(next: Page) { if (page !== next) closeBrowser(); page = next; }
   const NAV_KEY = 'talo.nav.collapsed';
   function initialNavCollapsed(): boolean {
     try { return localStorage.getItem(NAV_KEY) === '1'; } catch { return false; }
@@ -43,12 +47,13 @@
     let active=true;
     let unlisten:(()=>void)|undefined;
     void initChat();
+    const stopBrowser = initBrowser();
     (async()=>{try { if(isTauri()){const saved=await invoke<Onboarding|null>('load_settings');if(saved && active)settings={...settings,...saved,...parseProviderPreference(saved)};await refresh();} }catch(e){error=String(e);}finally{if(active)loaded=true;}})();
     // The host pushes service transitions; polling would keep the hidden webview awake.
     if(isTauri())listen<RuntimeStatus>('runtime-status',event=>{if(active)status=event.payload;}).then(stop=>{if(active)unlisten=stop;else stop();});
     const wake=()=>{if(active)refresh().catch(()=>{});};
     window.addEventListener('focus',wake);
-    return ()=>{active=false;unlisten?.();window.removeEventListener('focus',wake);disposeChat();};
+    return ()=>{active=false;unlisten?.();window.removeEventListener('focus',wake);disposeChat();stopBrowser();};
   });
   async function save() { try {busy=true;if(isTauri())await invoke('save_settings',{settings:{...settings,complete:true}});settings.complete=true;editing=false;void refreshLibrary();}catch(e){error=String(e);}finally{busy=false;} }
   async function permission(action:string,resource:string,run:(id:string)=>Promise<void>) {
@@ -61,6 +66,12 @@
     try{busy=true;status=await invoke<RuntimeStatus>('service_control',{service,start,grant:grant??null});}catch(e){error=String(e);}finally{busy=false;}
   }
   function browserStart(){return permission('browser.start','persistent-profile',id=>control('browser',true,id));}
+  async function renameAgent(name: string) {
+    if (!isTauri()) throw new Error('Open the desktop app to save your agent name.');
+    const next = {...settings, agentName: name};
+    await invoke('save_settings', {settings: next});
+    settings = next;
+  }
   async function saveReasoning(){
     const value = settings.showReasoning;
     if(!isTauri())return;
@@ -73,11 +84,11 @@
   <aside inert={navCollapsed} aria-hidden={navCollapsed}>
     <div class="nav-inner">
       <div class="aside-head">
-        <a class="brand" href="#chat" onclick={()=>page='Chat'}><img src={mascot} alt=""/><span>talo<span class="dot">.</span></span></a>
+        <a class="brand" href="#chat" onclick={()=>navigatePage('Chat')}><img src={mascot} alt=""/><span>talo<span class="dot">.</span></span></a>
         <button class="rail-toggle" onclick={toggleNav} aria-expanded={!navCollapsed} aria-label="Collapse navigation" title="Collapse navigation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="3.5"/><path d="M9.5 4.5v15"/></svg></button>
       </div>
       <div class="nav-caption">Your everyday companion</div>
-      <nav aria-label="Main navigation">{#each pages as item (item)}<button class={{selected:page===item}} onclick={()=>page=item} title={item}><span class="nav-icon"><NavIcon name={item} /></span><span class="nav-label">{item}</span>{#if page===item}<span class="nav-dot"></span>{/if}</button>{/each}</nav>
+      <nav aria-label="Main navigation">{#each pages as item (item)}<button class={{selected:page===item}} onclick={()=>navigatePage(item)} title={item}><span class="nav-icon"><NavIcon name={item} /></span><span class="nav-label">{item}</span>{#if page===item}<span class="nav-dot"></span>{/if}</button>{/each}</nav>
       <div class="sidebar-bottom"><span class="presence"></span><div>Talo is here<small>{isTauri()?'Running quietly in your tray':'Interface preview'}</small></div></div>
     </div>
   </aside>
@@ -91,15 +102,16 @@
     {#if error}<div class="error" role="alert">{error}<button aria-label="Dismiss error" onclick={()=>error=''}>×</button></div>{/if}
     <div class="content" class:chat-mode={page==='Chat'}>
       {#if page!=='Chat'}<div class="page-heading"><h1>{page}</h1><p>{descriptions[page]}</p></div>{/if}
-      <BrowserPanel visible={page === 'Browser' || page === 'Chat'} compact={page === 'Chat'} />
+      <BrowserPanel pageView={page === 'Browser'} />
       {#if page==='Chat'}
-        <ChatView onOpenSettings={()=>{page='Settings';}} name={settings.name} tagline={descriptions.Chat} showReasoning={settings.showReasoning === true} />
+        <ChatView onOpenSettings={()=>{navigatePage('Settings');}} name={settings.name} tagline={descriptions.Chat} showReasoning={settings.showReasoning === true} agentName={settings.agentName || 'Talo'} onRenameAgent={renameAgent} />
       {:else if page==='Memory' || page==='Workspaces'}
         <LibraryPanel mode={page} />
       {:else if page==='Settings'}
         <div class="settings-grid">
           <div class="settings-col main">
             <ProviderSettings />
+            <ToolsSettings />
           </div>
           <div class="settings-col side">
             <section class="card card--prefs"><h2>Your preferences</h2><dl><dt>Name</dt><dd>{settings.name||'Not set'}</dd><dt>Personality</dt><dd>{settings.personality}</dd><dt>Chat model</dt><dd>{connectedCount ? chatSelection : 'No provider connected yet'}</dd>{#if settings.provider==='custom'}<dt>Custom endpoint</dt><dd>{settings.baseUrl||'Not set'}</dd>{/if}<dt>Memory</dt><dd>{library.memoryEnabled ? 'Enabled' : 'Off'}</dd></dl><label class="check preference-toggle"><input type="checkbox" bind:checked={settings.showReasoning} onchange={saveReasoning}/> <span>Show model reasoning in Chat</span></label><button class="primary" onclick={()=>{editing=true;step=0;}}>Edit setup</button></section>
@@ -126,6 +138,7 @@
 {/if}
 {#if pending}<div class="overlay"><dialog open class="onboarding" aria-modal="true" aria-labelledby="permission-title"><h2 id="permission-title">Allow this action?</h2><p>{pending.action==='browser.start'?'Open Chromium with Talo’s dedicated persistent profile?':'Change whether Talo starts when you sign in to Windows?'}</p><p class="detail">{pending.resource} · This action only</p><div class="setup-actions"><button onclick={()=>resolve(false)}>Deny</button><button class="primary" onclick={()=>resolve(true)}>Allow once</button></div></dialog></div>{/if}
 
+<ToolApprovals />
 <style>
   /* The window is the page: a fixed app frame, each region scrolls itself. */
   .shell{display:flex;height:100vh;height:100dvh;overflow:hidden;background:var(--bg);--nav-w:226px}
@@ -163,7 +176,7 @@
   .error button{padding:2px 8px;background:transparent;border:0}
   /* Scrolling pages flow; chat keeps everything on one surface. */
   .content{flex:1;min-height:0;display:flex;flex-direction:column;padding:26px 28px 22px;overflow-y:auto;scrollbar-gutter:stable}
-  .content.chat-mode{overflow:hidden;padding:14px 28px 20px}
+  .content.chat-mode{overflow:hidden;padding:14px 24px 20px 18px}
   .page-heading h1{font-size:30px;letter-spacing:-1.2px;font-weight:560;margin:0 0 8px}
   .page-heading p,.empty p,.card>p{color:var(--muted);font-size:13.5px;line-height:1.7;margin:0}
   .page-heading p{max-width:62ch}

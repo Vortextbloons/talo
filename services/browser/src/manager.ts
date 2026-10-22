@@ -1,23 +1,21 @@
-import { chromium, type BrowserContext, type Page } from 'playwright';
+import { chromium, type BrowserContext, type Page, type CDPSession } from 'playwright';
 import { mkdir, readFile, writeFile, open, unlink, realpath, rename, access } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import path from 'node:path';
 import { startEgressProxy, downloadPublic } from './network.js';
 import { validateWebUrl } from '../../../workers/pi/src/web.js';
 import { intelligentBrowser, extractionSchema, type BrowserModel } from './stagehand.js';
-import type { BrowserStatus, BrowserOwner } from '../../../packages/contracts/src/browser.js';
+import type { BrowserStatus, BrowserOwner, BrowserFrame, BrowserInput } from '../../../packages/contracts/src/browser.js';
 
 type Owner = BrowserOwner;
 export type BrowserState = BrowserStatus;
 export interface BrowserCommand { name: string; arguments?: Record<string, any>; model?: BrowserModel; approved?: boolean; target?: { tabId: string; revision: string } }
-const run = promisify(execFile);
 class SafeBrowserError extends Error {}
 
-/** One primary session today; opaque session IDs leave room for isolated profiles later. */
+/** Per-thread tabs and ownership; one runtime owns the shared persistent login profile. */
 export class BrowserManager {
+  private readonly sessions = new Set<BrowserManager>();
   private context?: BrowserContext;
   private launch?: Promise<void>;
   private proxy?: Awaited<ReturnType<typeof startEgressProxy>>;
@@ -28,17 +26,25 @@ export class BrowserManager {
   private phase: BrowserState['state'] = 'stopped';
   private error?: string;
   private cdpUrl = '';
-  private pid = 0;
+  private view?: CDPSession;
+  private viewTab?: string;
+  private viewLease?: string;
+  private viewDeadline = 0;
+  private viewQueue: Promise<void> = Promise.resolve();
+  private inputQueue: Promise<void> = Promise.resolve();
+  private readonly leaseTimer = setInterval(() => {
+    if (this.viewLease && Date.now() > this.viewDeadline) void this.viewing(false, this.viewLease).catch(() => {});
+  }, 2000).unref();
   private operation?: { controller: AbortController; settled: Promise<void> };
   private ai?: Awaited<ReturnType<typeof intelligentBrowser>>;
   private download?: { id: string; url: string; filename: string };
   private lockOwned = false;
   constructor(readonly root: string, readonly data: string, private publish: (state: BrowserState) => void,
-    private windows: (pid: number, enabled: boolean, focus: boolean) => Promise<void> = async (pid, enabled, focus) => {
-      if (process.platform !== 'win32') return;
-      if (!process.env.TALO_HOST_EXE) throw new Error('Native browser ownership helper is unavailable.');
-      await run(process.env.TALO_HOST_EXE, ['--browser-window', String(pid), enabled ? 'enable' : 'disable', focus ? 'focus' : 'quiet'], { windowsHide: true, timeout: 5000 });
-    }) {}
+    private publishFrame: (frame: BrowserFrame | null) => void = () => {},
+    readonly sessionId = 'primary', private readonly runtime?: BrowserManager) {
+    if (!/^[a-zA-Z0-9-]{1,80}$/u.test(sessionId)) throw new Error('Invalid browser session.');
+    (runtime ?? this).sessions.add(this);
+  }
 
   private get profile() { return path.join(this.data, 'browser', 'profiles', 'primary'); }
   private get lock() { return path.join(this.data, 'browser', 'manager.lock'); }
@@ -65,10 +71,13 @@ export class BrowserManager {
     throw new Error('Browser session lock unavailable.');
   }
   async state(): Promise<BrowserState> {
-    return { state: this.phase, owner: this.owner, activeTab: this.active, busy: !!this.operation, error: this.error,
+    return { sessionId: this.sessionId, state: this.phase, owner: this.owner, activeTab: this.active, busy: !!this.operation, error: this.error,
       tabs: await Promise.all([...this.pages].filter(([, p]) => !p.isClosed()).map(async ([id, p]) => ({ id, revision: this.revisions.get(id)!, url: safeUrl(p.url()), title: (await p.title().catch(() => '')).slice(0, 150) }))) };
   }
-  private async emit() { this.publish(await this.state()); }
+  private async emit() {
+    this.publish(await this.state());
+    if (this.viewLease && this.viewTab !== this.active) void this.syncView().catch(() => {});
+  }
   private track(page: Page) {
     if ([...this.pages.values()].includes(page)) return;
     const id = randomUUID(); this.pages.set(id, page); this.revisions.set(id, randomUUID()); this.active ??= id;
@@ -79,10 +88,15 @@ export class BrowserManager {
     page.on('filechooser', () => { this.error = 'File uploads require manual takeover.'; void this.cancel(); void this.emit(); });
     // Browser downloads are always denied. Approved downloads use the bounded host path.
     page.on('download', item => { this.download = { id: randomUUID(), url: item.url(), filename: item.suggestedFilename() }; void item.cancel(); void this.emit(); });
-    void this.windows(this.pid, this.owner === 'human', false).catch(() => this.cancel());
     void this.emit();
   }
   async start() {
+    if (this.runtime) {
+      await this.runtime.start();
+      this.context = this.runtime.context; this.cdpUrl = this.runtime.cdpUrl;
+      if (this.phase !== 'connected') { this.phase = 'connected'; this.error = undefined; await this.emit(); }
+      return;
+    }
     if (this.context) return;
     if (this.launch) return this.launch;
     this.launch = this.launchBrowser();
@@ -93,7 +107,7 @@ export class BrowserManager {
     try {
       this.proxy = await startEgressProxy();
       this.context = await chromium.launchPersistentContext(this.profile, {
-        executablePath: path.join(this.root, 'runtime/chromium/chrome-win64/chrome.exe'), headless: false, viewport: null,
+        executablePath: path.join(this.root, 'runtime/chromium/chrome-win64/chrome.exe'), headless: true, viewport: { width: 1280, height: 800 },
         chromiumSandbox: true, acceptDownloads: false, serviceWorkers: 'block',
         ignoreDefaultArgs: ['--disable-extensions'],
         // The Stagehand extension needs loopback CDP. Page requests to loopback remain
@@ -108,7 +122,6 @@ export class BrowserManager {
       const [port, endpoint] = (await readFile(path.join(this.profile, 'DevToolsActivePort'), 'utf8')).trim().split(/\r?\n/u);
       this.cdpUrl = `ws://127.0.0.1:${port}${endpoint}`;
       const cdp = await this.context.browser()!.newBrowserCDPSession();
-      const info = await cdp.send('SystemInfo.getProcessInfo'); this.pid = info.processInfo.find((p: any) => p.type === 'browser')!.id;
       await cdp.send('Browser.setDownloadBehavior', { behavior: 'deny' }); await cdp.detach();
       await this.context.route('**/*', async route => {
         const url = route.request().url();
@@ -118,20 +131,30 @@ export class BrowserManager {
       await this.context.routeWebSocket('**/*', socket => {
         if (socket.url() === this.cdpUrl) socket.connectToServer(); else socket.close();
       });
-      this.context.on('page', page => this.track(page));
+      // Explicit tabs are registered by newPage(). Popups inherit their opener's thread.
+      this.context.on('page', page => { void page.opener().then(opener => {
+        if (!opener) return;
+        const owner = [...this.sessions].find(session => [...session.pages.values()].includes(opener));
+        owner?.track(page);
+      }).catch(() => {}); });
       this.context.on('close', () => {
-        this.context = undefined; this.pages.clear(); this.revisions.clear(); this.active = undefined; this.ai = undefined;
         this.proxy?.close(); this.proxy = undefined;
-        if (this.phase !== 'stopped') { this.phase = 'crashed'; this.error = 'Chromium disconnected. Open Browser to recover your saved profile.'; }
-        void this.cancel(); void this.emit();
+        for (const session of this.sessions) {
+          session.view = undefined; session.viewTab = undefined; session.publishFrame(null);
+          session.context = undefined; session.pages.clear(); session.revisions.clear(); session.active = undefined; session.ai = undefined;
+          if (session.phase !== 'stopped') { session.phase = 'crashed'; session.error = 'Chromium disconnected. Open Browser to recover your saved logins.'; }
+          void session.cancel(); void session.emit();
+        }
       });
       for (const page of this.context.pages()) this.track(page);
-      await this.windows(this.pid, this.owner === 'human', false);
       this.phase = 'connected'; await this.emit();
     } catch {
       await this.context?.close().catch(() => {}); this.context = undefined; this.proxy?.close(); this.proxy = undefined;
       this.phase = 'crashed'; this.error = 'Chromium could not start. Check the bundled runtime and retry Open Browser.'; await this.emit(); throw new Error(this.error);
     }
+  }
+  private async newPage() {
+    const page = await this.context!.newPage(); this.track(page); return page;
   }
   private page() { const page = this.active && this.pages.get(this.active); if (!page || page.isClosed()) throw new Error('Open or select a browser tab first.'); return page; }
   async cancel() {
@@ -146,31 +169,112 @@ export class BrowserManager {
     await operation.settled;
   }
   async handoff(owner: Owner) {
-    this.owner = 'paused'; await this.cancel();
+    this.owner = 'paused'; await this.inputQueue.catch(() => {}); await this.cancel();
     await this.start();
     this.owner = owner;
-    await this.windows(this.pid, owner === 'human', true);
     await this.emit(); return this.state();
   }
   async stop() {
-    this.owner = 'paused'; await this.cancel(); this.phase = 'stopped';
+    this.owner = 'paused'; this.viewLease = undefined;
+    await this.inputQueue.catch(() => {}); await this.cancel(); await this.viewQueue.catch(() => {}); await this.endView(); this.phase = 'stopped';
     await this.ai?.close().catch(() => {}); this.ai = undefined;
-    await this.context?.close(); this.context = undefined; this.proxy?.close(); this.proxy = undefined; await this.emit();
+    if (this.runtime) {
+      await Promise.all([...this.pages.values()].map(page => page.close({ runBeforeUnload: false }).catch(() => {})));
+      this.context = undefined; this.active = undefined;
+    } else { await this.context?.close(); this.context = undefined; this.proxy?.close(); this.proxy = undefined; }
+    await this.emit();
   }
-  async dispose() { await this.stop(); if (this.lockOwned) { await unlink(this.lock).catch(() => {}); this.lockOwned = false; } }
+  async dispose() { clearInterval(this.leaseTimer); await this.stop(); (this.runtime ?? this).sessions.delete(this); if (this.lockOwned) { await unlink(this.lock).catch(() => {}); this.lockOwned = false; } }
+
+  /** Viewer leases expire when the WebView closes. Chromium itself keeps running. */
+  async viewing(enabled: boolean, leaseId: string) {
+    if (!/^[a-zA-Z0-9-]{16,80}$/u.test(leaseId)) throw new Error('Invalid browser view.');
+    if (!enabled) {
+      if (leaseId !== this.viewLease) return;
+      this.viewLease = undefined;
+      if (this.owner === 'human') { this.owner = 'paused'; await this.inputQueue.catch(() => {}); await this.emit(); }
+      await this.viewQueue.catch(() => {}); await this.endView(); return;
+    }
+    // Talo has one main WebView. A rebuilt WebView replaces the old viewer's lease;
+    // queued events from the destroyed view must not retain manual control.
+    if (this.viewLease && this.viewLease !== leaseId && this.owner === 'human') {
+      this.owner = 'paused'; await this.inputQueue.catch(() => {}); await this.emit();
+    }
+    this.viewLease = leaseId; this.viewDeadline = Date.now() + 8000;
+    await this.start();
+    if (!this.active) await this.newPage();
+    await this.syncView();
+  }
+  private syncView() {
+    this.viewQueue = this.viewQueue.catch(() => {}).then(async () => {
+      if (!this.viewLease || this.viewTab === this.active && this.view) return;
+      await this.endView();
+      if (!this.active || !this.context || !this.viewLease) return;
+      const tabId = this.active;
+      const session = await this.context.newCDPSession(this.page());
+      if (!this.viewLease || tabId !== this.active) { await session.detach(); return; }
+      this.view = session; this.viewTab = tabId;
+      let sentAt = 0;
+      session.on('Page.screencastFrame', frame => {
+        void session.send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {});
+        if (!this.viewLease || session !== this.view || Date.now() - sentAt < 100 || frame.data.length > 600_000) return;
+        sentAt = Date.now();
+        this.publishFrame({ tabId, data: frame.data, width: 1280, height: 800 });
+      });
+      await session.send('Page.startScreencast', { format: 'jpeg', quality: 75, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 });
+    });
+    return this.viewQueue;
+  }
+  private async endView() {
+    const view = this.view; this.view = undefined; this.viewTab = undefined; this.publishFrame(null);
+    if (view) { await view.send('Page.stopScreencast').catch(() => {}); await view.detach().catch(() => {}); }
+  }
+  /** Only the authenticated host UI reaches this method. Pi has no input-forwarding tool. */
+  input(value: BrowserInput) {
+    const task = this.inputQueue.catch(() => {}).then(async () => {
+      if (this.owner !== 'human' || value.leaseId !== this.viewLease || Date.now() > this.viewDeadline || value.tabId !== this.active) throw new Error('Take Over before interacting with this page.');
+      const page = this.page();
+      if (value.type === 'navigate') { await page.goto(await validateWebUrl(String(value.url)), { waitUntil: 'domcontentloaded', timeout: 25_000 }); return; }
+      if (value.type === 'back') { await page.goBack({ timeout: 15_000, waitUntil: 'domcontentloaded' }); return; }
+      if (value.type === 'forward') { await page.goForward({ timeout: 15_000, waitUntil: 'domcontentloaded' }); return; }
+      if (value.type === 'reload') { await page.reload({ timeout: 15_000, waitUntil: 'domcontentloaded' }); return; }
+      const session = this.view;
+      if (!session || this.viewTab !== value.tabId) throw new Error('Browser view changed. Click the page again.');
+      const modifiers = Number(value.modifiers ?? 0) & 15;
+      if (['mousePressed','mouseReleased','mouseMoved','mouseWheel'].includes(value.type)) {
+        const x = Number(value.x), y = Number(value.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1280 || y < 0 || y > 800) throw new Error('Pointer is outside the page.');
+        await session.send('Input.dispatchMouseEvent', { type: value.type as 'mousePressed', x, y, modifiers,
+          button: ['left','right','middle'].includes(value.button ?? '') ? value.button : 'none', buttons: Number(value.buttons ?? 0) & 7,
+          clickCount: Math.max(0, Math.min(3, Number(value.clickCount ?? 0))),
+          ...(value.type === 'mouseWheel' ? { deltaX: Math.max(-2000, Math.min(2000, Number(value.deltaX ?? 0))), deltaY: Math.max(-2000, Math.min(2000, Number(value.deltaY ?? 0))) } : {}),
+        });
+      } else if (value.type === 'text') {
+        if (typeof value.text !== 'string' || value.text.length > 16000) throw new Error('Text exceeds input limit.');
+        await session.send('Input.insertText', { text: value.text });
+      } else if (value.type === 'keyDown' || value.type === 'keyUp') {
+        const key = String(value.key ?? '').slice(0,80), code = String(value.code ?? '').slice(0,80);
+        await session.send('Input.dispatchKeyEvent', { type: value.type, key, code, modifiers, windowsVirtualKeyCode: Number(value.keyCode ?? 0) & 255,
+          ...(value.type === 'keyDown' && key.length === 1 && !(modifiers & 6) ? { text: key } : {}),
+        });
+      } else throw new Error('Unsupported browser input.');
+    });
+    this.inputQueue = task;
+    return task;
+  }
 
   async execute(command: BrowserCommand, signal?: AbortSignal): Promise<any> {
     const input = command.arguments ?? {};
-    if (input.sessionId && input.sessionId !== 'primary') throw new Error('Only the primary session is available. Isolated sessions are reserved for future sub-agents.');
+    if (input.sessionId && input.sessionId !== this.sessionId) throw new Error('Browser session mismatch.');
     if (command.name === 'browser_handoff') {
-      if (input.action === 'watch') { await this.start(); await this.windows(this.pid, this.owner === 'human', true); return this.state(); }
+      if (input.action === 'watch') { await this.start(); return this.state(); }
       if (input.action === 'stop') { await this.stop(); return this.state(); }
       // An agent cannot seize a human-owned browser. Only the host UI invokes handoff().
       if (input.action === 'return') throw new Error('Use Return Control in Talo to resume automation.');
       return this.handoff(input.action === 'take_over' ? 'human' : 'paused');
     }
     if (this.owner !== 'agent') throw new Error('Browser automation is paused. Use Return Control in Talo.');
-    if (this.operation) throw new Error('The primary browser session is busy.');
+    if (this.operation) throw new Error('This chat browser is busy.');
     if ((command.name === 'browser_interact' || command.name === 'browser_download' || command.name === 'browser_ai') && !command.approved) throw new Error('One-use browser approval required.');
     await this.start();
     signal?.throwIfAborted();
@@ -182,7 +286,7 @@ export class BrowserManager {
     signal?.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(abort, 45_000);
     try {
-      await this.windows(this.pid, false, false); controller.signal.throwIfAborted(); await this.emit();
+      controller.signal.throwIfAborted(); await this.emit();
       const result = await this.perform(command, controller.signal);
       controller.signal.throwIfAborted();
       return result;
@@ -198,17 +302,17 @@ export class BrowserManager {
   private async perform(command: BrowserCommand, signal: AbortSignal): Promise<any> {
     const a = command.arguments ?? {};
     signal.throwIfAborted();
-    if (['browser_interact','browser_ai'].includes(command.name) && (!command.target || command.target.tabId !== this.active || command.target.revision !== this.revisions.get(this.active!))) {
+    if (['browser_interact','browser_ai'].includes(command.name) && command.target && (command.target.tabId !== this.active || command.target.revision !== this.revisions.get(this.active!))) {
       throw new SafeBrowserError('The page changed since approval. Inspect it and request a new approval.');
     }
     switch (command.name) {
       case 'browser_open': {
         const url = await validateWebUrl(String(a.url), signal);
-        const page = this.active ? this.page() : await this.context!.newPage();
+        const page = this.active ? this.page() : await this.newPage();
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25_000 }); return this.state();
       }
       case 'browser_tabs': {
-        if (a.action === 'create') { const page = await this.context!.newPage(); this.active = [...this.pages].find(([, p]) => p === page)![0]; if (a.url) await page.goto(await validateWebUrl(a.url, signal)); }
+        if (a.action === 'create') { const page = await this.newPage(); this.active = [...this.pages].find(([, p]) => p === page)![0]; if (a.url) await page.goto(await validateWebUrl(a.url, signal)); }
         else if (a.action === 'close' || a.action === 'switch') {
           const page = this.pages.get(String(a.tabId)); if (!page) throw new Error('Unknown browser tab.');
           if (a.action === 'close') await page.close(); else { this.active = a.tabId; await page.bringToFront(); }

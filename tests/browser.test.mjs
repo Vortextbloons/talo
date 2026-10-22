@@ -43,8 +43,8 @@ test('network proxy blocks loopback and custom ports before opening a socket', a
 
 test('bundled sandboxed Chromium: profile, ownership, deterministic actions, tabs, cancellation and restart', { timeout: 60000 }, async () => {
   const data = await mkdtemp(path.join(os.tmpdir(), 'talo-browser-'));
-  const locks = []; const states = [];
-  const manager = new BrowserManager(root, data, state => states.push(state), async (_pid, enabled) => { locks.push(enabled); });
+  const states = [];
+  const manager = new BrowserManager(root, data, state => states.push(state));
   await manager.acquire();
   try {
     const duplicate = new BrowserManager(root, data, () => {}, async () => {});
@@ -52,7 +52,7 @@ test('bundled sandboxed Chromium: profile, ownership, deterministic actions, tab
     await manager.start();
     await access(path.join(data, 'browser/profiles/primary/Default'));
     assert.equal((await manager.state()).state, 'connected');
-    assert.equal(locks.at(-1), false);
+    assert.equal((await manager.state()).owner, 'agent');
     await assert.rejects(manager.execute({ name: 'browser_interact', arguments: { action: 'click', selector: 'button' } }), /approval/iu);
     const page = manager.context.pages()[0]; await page.setContent(fixture);
     const snap = await manager.execute({ name: 'browser_snapshot' }); assert.match(snap.snapshot, /Browser fixture/u);
@@ -63,10 +63,10 @@ test('bundled sandboxed Chromium: profile, ownership, deterministic actions, tab
     await assert.rejects(manager.execute({ name: 'browser_interact', approved: true, target: { tabId: 'stale', revision: 'stale' }, arguments: { action: 'click', selector: 'button' } }), /page changed/iu);
     const shot = await manager.execute({ name: 'browser_screenshot' }); assert.equal((await readFile(path.join(data, 'artifacts/browser', shot.artifact))).subarray(1,4).toString(), 'PNG');
     await manager.context.addCookies([{ name: 'talo-session-test', value: 'persistent', domain: 'example.com', path: '/', expires: Math.floor(Date.now()/1000)+86400, secure: true }]);
-    await manager.handoff('human'); assert.equal(locks.at(-1), true);
+    await manager.handoff('human'); assert.equal((await manager.state()).owner, 'human');
     await assert.rejects(manager.execute({ name: 'browser_snapshot' }), /paused/iu);
     await assert.rejects(manager.execute({ name: 'browser_handoff', arguments: { action: 'return' } }), /Return Control/u);
-    await manager.handoff('agent'); assert.equal(locks.at(-1), false);
+    await manager.handoff('agent'); assert.equal((await manager.state()).owner, 'agent');
     const tabs = await manager.execute({ name: 'browser_tabs', arguments: { action: 'create' } }); assert.equal(tabs.tabs.length, 2);
     const controller = new AbortController();
     const running = manager.execute({ name: 'browser_interact', approved: true, target: await target(manager), arguments: { action: 'click', selector: '#does-not-exist' } }, controller.signal);
@@ -118,12 +118,10 @@ test('local Stagehand v4 extracts using a configured compatible provider, withou
 });
 
 
-test('shipped service uses native input ownership and survives a Pi hibernation cycle', { timeout: 60000, skip: !process.env.TALO_BROWSER_TEST_HOST }, async () => {
+test('shipped headless service survives a Pi hibernation cycle', { timeout: 60000 }, async () => {
   const data = await mkdtemp(path.join(os.tmpdir(), 'talo-service-'));
-  const host = path.resolve(process.env.TALO_BROWSER_TEST_HOST);
-  await access(host);
   const child = spawn(path.join(root, 'runtime/node/node.exe'), [path.join(root, 'bundle/services/browser/src/main.js')], {
-    env: { ...process.env, NODE_OPTIONS: '', NODE_PATH: '', TALO_DATA_DIR: data, TALO_VENDOR_DIR: root, TALO_HOST_EXE: host }, windowsHide: true,
+    env: { ...process.env, NODE_OPTIONS: '', NODE_PATH: '', TALO_DATA_DIR: data, TALO_VENDOR_DIR: root }, windowsHide: true,
   });
   child.stderr.resume();
   const exited = new Promise(resolve => child.once('exit', resolve));
@@ -140,7 +138,7 @@ test('shipped service uses native input ownership and survives a Pi hibernation 
   });
   let pi;
   try {
-    let state = await request('control', { action: 'open' }); assert.equal(state.owner, 'human'); assert.equal(state.state, 'connected');
+    let state = await request('control', { action: 'open' }); assert.equal(state.owner, 'agent'); assert.equal(state.state, 'connected');
     state = await request('control', { action: 'return' }); assert.equal(state.owner, 'agent');
     assert.ok((await request('tools/call', { name: 'browser_snapshot', arguments: {} })).snapshot !== undefined);
     pi = startWorker(data, { idleMs: 200 }); await pi.waitReady(); await pi.exited;

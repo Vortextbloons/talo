@@ -53,6 +53,7 @@ impl std::error::Error for Error {}
 
 #[derive(Debug)]
 pub enum WorkerSignal {
+    Tools(Value),
     Web(Value),
     Browser(Value),
     Ready,
@@ -79,6 +80,8 @@ enum Reply {
 }
 
 struct Worker {
+    #[cfg(windows)]
+    _job: crate::job::Job,
     child: Child,
     stdin: ChildStdin,
     ready: Arc<AtomicBool>,
@@ -306,12 +309,18 @@ impl Supervisor {
         if self.job.is_none() {
             return Err("Unable to create worker process containment job".into());
         }
+        #[cfg(windows)]
+        let worker_job = crate::job::Job::new().map_err(|_| "Unable to contain Pi process tree")?;
         let mut child = command.spawn().map_err(|error| error.to_string())?;
         #[cfg(windows)]
         if let Err(error) = self.job.as_ref().unwrap().assign(&child) {
             let _ = child.kill();
             let _ = child.wait();
             return Err(error.to_string());
+        }
+        #[cfg(windows)]
+        if let Err(error) = worker_job.assign(&child) {
+            let _ = child.kill();let _ = child.wait();return Err(error.to_string());
         }
         let stdout = child
             .stdout
@@ -334,6 +343,8 @@ impl Supervisor {
             read_worker(stdout, log, reader_ready, reader_signals, reader_pending);
         });
         self.pi = Some(Worker {
+            #[cfg(windows)]
+            _job: worker_job,
             child,
             stdin,
             ready,
@@ -342,17 +353,23 @@ impl Supervisor {
             last_activity: Instant::now(),
             eof_at: None,
         });
+        let config = crate::integrations::load(&self.data)?;
+        self.request("tools.configure", json!({"servers":config["servers"],"disabled":config["disabled"]}), Duration::from_secs(15)).map_err(|e|e.to_string())?;
         self.lifecycle.push_back(Lifecycle::Started);
         Ok(())
     }
 
     pub fn browser_running(&mut self) -> bool { self.browser.as_mut().is_some_and(|b| b.running()) }
+    pub fn take_browser_frame(&self) -> Option<Value> { self.browser.as_ref().and_then(|browser| browser.take_frame()) }
     pub fn ensure_browser(&mut self) -> Result<&mut crate::browser::Browser, String> {
         if !self.browser_running() || self.browser.as_ref().is_some_and(|b| b.state.lock().ok().is_some_and(|s| s["state"] == "crashed")) { self.browser = None; self.browser = Some(crate::browser::Browser::spawn(&self.root, &self.data)?); }
         Ok(self.browser.as_mut().unwrap())
     }
     pub fn relay_browser(&mut self, message: Value) {
         if let Some(pi) = self.pi.as_mut() { let _ = writeln!(pi.stdin, "{}", json!({"type":"browser_response","message":message})); let _ = pi.stdin.flush(); }
+    }
+    pub fn relay_tools(&mut self, message: Value) {
+        if let Some(pi) = self.pi.as_mut() { let _ = writeln!(pi.stdin, "{}", json!({"type":"tools_response","message":message})); let _ = pi.stdin.flush(); }
     }
     pub fn browser_request(&mut self, message: Value) {
         if message["method"] == "cancel" && self.browser.is_none() { return; }
@@ -574,6 +591,9 @@ fn read_worker(
         let _ = writeln!(log, "{}", describe(&value));
         let _ = log.flush();
         match value.get("type").and_then(Value::as_str) {
+            Some("tools") => {
+                if let Some(message) = value.get("message") { push(WorkerSignal::Tools(message.clone())); }
+            }
             Some("browser") => {
                 if let Some(message) = value.get("message") { push(WorkerSignal::Browser(message.clone())); }
             }
@@ -656,7 +676,7 @@ fn wipe_line(line: &mut String) {
 
 fn wipe_param_secrets(params: &mut Value) {
     if let Value::Object(map) = params {
-        for key in ["apiKey", "api_key", "token", "authorization"] {
+        for key in ["apiKey", "api_key", "token", "authorization", "credential"] {
             if let Some(Value::String(secret)) = map.get_mut(key) {
                 unsafe {
                     secret.as_bytes_mut().fill(0);
@@ -664,6 +684,9 @@ fn wipe_param_secrets(params: &mut Value) {
                 secret.clear();
             }
         }
+        for value in map.values_mut(){wipe_param_secrets(value);}
+    }else if let Value::Array(items)=params{
+        for item in items{wipe_param_secrets(item);}
     }
 }
 
@@ -713,5 +736,39 @@ mod tests {
     fn idle_stop_never_interrupts_generating_work() {
         let mut supervisor = Supervisor::new(PathBuf::new(), PathBuf::new());
         assert!(!supervisor.idle_stop(true));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pi_shutdown_and_crash_remove_mcp_descendants() {
+        use windows_sys::Win32::System::Threading::{OpenProcess,GetExitCodeProcess,PROCESS_QUERY_LIMITED_INFORMATION};
+        let root=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vendor");
+        let fixture=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/integration-mcp.mjs");
+        let data=std::env::temp_dir().join(format!("talo-mcp-job-{}",uuid::Uuid::new_v4()));
+        fs::create_dir_all(&data).unwrap();
+        for crash in [false,true]{
+            let pid_file=data.join(if crash{"crash.pid"}else{"stop.pid"});
+            let mut supervisor=Supervisor::new(root.clone(),data.clone());
+            supervisor.ensure_worker().unwrap();
+            supervisor.request("tools.configure",json!({"servers":[{"id":"fixture","transport":"stdio","command":root.join("runtime/node/node.exe"),"args":[fixture.to_string_lossy(),"--spawn-child",pid_file.to_string_lossy()],"enabled":true,"trusted":true}]}),Duration::from_secs(10)).unwrap();
+            supervisor.request("tools.test",json!({"server":"fixture"}),Duration::from_secs(10)).unwrap();
+            let until=Instant::now()+Duration::from_secs(15);
+            while !pid_file.exists(){assert!(Instant::now()<until,"MCP child did not start");std::thread::sleep(Duration::from_millis(30));}
+            let pid=fs::read_to_string(&pid_file).unwrap().parse::<u32>().unwrap();
+            let process=unsafe{OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,0,pid)};
+            assert!(!process.is_null());
+            if crash {
+                supervisor.pi.as_mut().unwrap().child.kill().unwrap();
+                while supervisor.pi.is_some(){supervisor.refresh();std::thread::sleep(Duration::from_millis(20));}
+            }else{supervisor.stop_pi().unwrap();}
+            let until=Instant::now()+Duration::from_secs(5);
+            loop{
+                let mut code=0;unsafe{GetExitCodeProcess(process,&mut code);}
+                if code!=259{break;}
+                assert!(Instant::now()<until,"MCP descendant survived Pi shutdown");std::thread::sleep(Duration::from_millis(30));
+            }
+            unsafe{windows_sys::Win32::Foundation::CloseHandle(process);}
+        }
+        fs::remove_dir_all(data).unwrap();
     }
 }

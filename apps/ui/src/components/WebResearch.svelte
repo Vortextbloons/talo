@@ -4,7 +4,10 @@
   import { sendMessage } from '../lib/chat.svelte';
   let { items, onCancel, working }: { items: ResearchActivity[]; onCancel: () => void; working: boolean } = $props();
   let openError = $state('');
-  const label = (tool: string) => tool.startsWith('browser_') ? 'Browser ? ' + tool.slice(8).replaceAll('_', ' ') : tool === 'web_search' ? 'Searching' : tool === 'web_crawl' ? 'Exploring website' : tool === 'web_screenshot' ? 'Capturing page' : 'Reading';
+  const label = (tool: string) => tool.startsWith('browser_') ? 'Browser · ' + tool.slice(8).replaceAll('_', ' ') : tool === 'web_search' ? 'Searching' : tool === 'web_crawl' ? 'Exploring website' : tool === 'web_screenshot' ? 'Capturing page' : tool === 'web_fetch' ? 'Reading' : tool.replaceAll('_', ' ');
+  const running = $derived(working && items.some(item => item.state === 'running'));
+  const pages = $derived(new Set(items.filter(item => ['browser_open','web_fetch','web_crawl'].includes(item.tool)).map(item => item.input)).size);
+  const failed = $derived(items.filter(item => item.state === 'failed').length);
   async function openArtifact(name: string) {
     try { await invoke('research_artifact_open', { name, browser: items.some(item => item.tool.startsWith('browser_') && item.artifact === name) }); }
     catch (error) { openError = String(error); }
@@ -16,7 +19,9 @@
   }
 </script>
 
-<section class="research" aria-label="Web and browser activity">
+<details class="research" class:active={running} aria-label="Turn activity">
+  <summary class="bundle-summary"><span class="bundle-marker" aria-hidden="true">↗</span><span>{running ? 'Working' : pages ? `Browsed ${pages} ${pages === 1 ? 'page' : 'pages'}` : `${items.length} ${items.length === 1 ? 'action' : 'actions'}`}</span><span class="bundle-meta">{failed ? `${failed} failed` : `${items.length} steps`}</span></summary>
+  <div class="bundle-body">
   {#each items as item (item.id)}
     <details class:running={item.state === 'running' && working}>
       <summary>
@@ -43,10 +48,12 @@
     </details>
   {/each}
   {#if openError}<p class="error">{openError}</p>{/if}
-</section>
+  </div>
+</details>
 
 <style>
-  .research { margin: 12px 0; border-left: 3px solid var(--yellow); font-size: 12px; }
+  .research { margin: 10px 0; border:1px solid var(--line);border-radius:9px;overflow:hidden;font-size: 12px; }
+  .bundle-summary{padding:9px 11px;color:var(--muted);font-size:11px;gap:7px;list-style:none}.bundle-summary::after{content:'⌄';color:var(--faint);margin-left:2px}.research[open]>.bundle-summary::after{transform:rotate(180deg)}.bundle-marker{font-size:13px;color:var(--faint)}.active>.bundle-summary .bundle-marker{color:var(--yellow)}.bundle-meta{margin-left:auto;font-size:10px;color:var(--faint)}.bundle-body{border-top:1px solid var(--line)}
   details { background: var(--paper); color: var(--text); border-bottom: 1px solid var(--line); }
   summary { cursor: pointer; display: flex; align-items: baseline; gap: 8px; padding: 10px 12px; }
   summary:focus-visible, a:focus-visible, button:focus-visible { outline: 2px solid var(--yellow); outline-offset: 3px; }

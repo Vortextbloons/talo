@@ -44,7 +44,7 @@ export interface ResearchActivity {
 /** Private host/worker operations. apiKey is ephemeral and must never be echoed or logged. */
 export type WorkerMethod = 'ping' | 'shutdown' | 'models.list' | 'provider.validate' |
   'session.open' | 'session.prompt' | 'session.retry' | 'session.abort' | 'session.snapshot' |
-  'session.thinking';
+  'session.thinking' | 'tools.configure' | 'tools.status' | 'tools.test' | 'tools.cancel';
 export interface WorkerRequest { id: string; method: WorkerMethod; params?: Record<string, unknown> }
 export type WorkerEvent =
   | { type: 'ready' | 'sleeping' | 'error'; message?: string }

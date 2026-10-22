@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { WebTransport, createWebTools, boundWebResult, validateWebUrl, publicAddress, WEB_TOOLS } from '../dist/workers/pi/src/web.js';
-import { loadMcpAdapter } from '../dist/workers/pi/src/mcp.js';
+import { validateServers } from '../dist/workers/pi/src/mcp.js';
 import { startWorker } from './helpers/worker.mjs';
 import { startMockProvider } from './helpers/mock-provider.mjs';
 
@@ -71,7 +71,8 @@ test('real Pi invokes native web tool and consumes a bounded host MCP reply', {t
     const completed = await worker.wait(value => value.type === 'chat' && value.event?.type === 'research' && value.event.activity.state === 'completed');
     assert.equal(completed.event.activity.sources[0], 'https://doc.rust-lang.org/');
     const tools = provider.state.requests.find(value => value.body.tools)?.body.tools;
-    assert.equal(new Set(tools.map(tool => tool.function.name)).size, 4);
+    assert.equal(new Set(tools.map(tool => tool.function.name)).size, tools.length);
+    assert.deepEqual(tools.map(tool=>tool.function.name).filter(name=>name.startsWith('web_')).sort(),[...WEB_TOOLS].sort());
     await worker.request('open-cancel-web','session.open',{conversationId:'web-cancel',provider:'custom',model:'mock-model',baseUrl:provider.url,apiKey:provider.state.key});
     const mark = worker.mark();
     await worker.request('prompt-cancel-web','session.prompt',{conversationId:'web-cancel',generationId:'cancel-web-generation',text:'Search now'});
@@ -105,6 +106,6 @@ test('four native tools are lazy, keep budgets, expose structured evidence and r
     await assert.rejects(tools[1].execute('fetch-private', {url:'http://127.0.0.1'}), /blocked/);
     assert.equal(activity.at(-1).state, 'failed');
     assert.equal((await readdir(directory)).length, 0);
-    await assert.rejects(loadMcpAdapter({request:async()=>true}, 'donsetch'), /already registered/);
+    assert.throws(()=>validateServers([{id:'donsetch',transport:'stdio',command:'donsetch',args:[],enabled:true,trusted:true}]), /already registered/);
   } finally { await rm(directory, {recursive:true,force:true}); }
 });
