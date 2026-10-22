@@ -98,6 +98,7 @@ pub fn message(h: &mut crate::Host, app: &tauri::AppHandle, message: Value) {
             "browser_handoff",
             "mcp",
             "tools",
+            "agent",
             "read",
             "write",
             "edit",
@@ -299,7 +300,7 @@ fn catalog(config: &Value) -> Value {
         ),
         (
             "Integrations",
-            vec!["tools"],
+            vec!["tools", "agent"],
             "tool.use",
             "Managed Pi extension / discovery and routing",
         ),

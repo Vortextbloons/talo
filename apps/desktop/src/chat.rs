@@ -228,7 +228,7 @@ impl ChatState {
         signal: WorkerSignal,
     ) {
         match signal {
-            WorkerSignal::Web(_) | WorkerSignal::Browser(_) | WorkerSignal::Tools(_) => {}, // handled before chat projection
+            WorkerSignal::Web(_) | WorkerSignal::Browser(_) | WorkerSignal::Tools(_) | WorkerSignal::Agent(_) => {}, // handled before chat projection
             WorkerSignal::Ready => emit_worker(app, WorkerState::Ready, None),
             WorkerSignal::Sleeping => {
                 self.sessions.clear();
@@ -1118,6 +1118,7 @@ pub(crate) fn chat_send_inner(
         "generationId": generation_id,
         "text": text,
         "context": agent_context(db, &conversation, &text),
+        "capabilities": crate::agent::capabilities_for(db, &conversation.workspace_id),
         "images": stored
             .iter()
             .map(|image| json!({
@@ -1218,14 +1219,16 @@ fn chat_retry_inner(
     // durable session exists, Pi's own retry keeps context without duplicating it here.
     let reference_context =
         agent_context(db, &conversation, &plan.user_text);
+    let capabilities = json!(crate::agent::capabilities_for(db, &conversation.workspace_id));
     let params = if had_sqlite_session {
-        json!({"conversationId": conversation_id, "generationId": generation_id, "context":reference_context, "images": images_for_generation(db, &conversation_id, &generation_id)})
+        json!({"conversationId": conversation_id, "generationId": generation_id, "context":reference_context, "capabilities":capabilities, "images": images_for_generation(db, &conversation_id, &generation_id)})
     } else {
         json!({
             "conversationId": conversation_id,
             "generationId": generation_id,
             "text": plan.user_text,
             "context": reference_context,
+            "capabilities": capabilities,
             "images": images_for_generation(db, &conversation_id, &generation_id),
         })
     };
@@ -1687,6 +1690,7 @@ mod tests {
             chat: ChatState::default(),
             last_maintenance: std::time::Instant::now(),
             browser_approvals: std::collections::HashMap::new(),
+            agent_asks: Default::default(),
         };
         host.chat.active.insert(
             "g1".into(),

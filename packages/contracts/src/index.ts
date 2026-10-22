@@ -1,5 +1,6 @@
 export * from './providers.js';
 export * from './chat.js';
+export * from './agent.js';
 export * from './browser.js';
 export * from './tools.js';
 export type ServiceId = 'pi' | 'browser' | 'web';

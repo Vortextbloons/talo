@@ -167,8 +167,10 @@
     <p class="empty-line">No providers are connected yet. Add a key to start your first conversation.</p>
   {/if}
 
+  <!-- The form stays out of the way once a provider works; the empty state opens it. -->
+  <details class="connect-details" open={connected.length === 0}>
+    <summary>{connected.length ? 'Add another provider' : 'Add a provider'}</summary>
   <form class="connect-form" onsubmit={connect} aria-busy={pending}>
-    <h3>Add a provider</h3>
     {#if localError}
       <div class="settings-message error form-error" role="alert">{localError}</div>
     {/if}
@@ -241,6 +243,7 @@
       </div>
     {/if}
   </form>
+  </details>
 
   <details class="catalog">
     <summary>What Talo supports</summary>
@@ -261,6 +264,7 @@
   .providers{padding:24px 26px}
   .providers h2{font-size:17px;letter-spacing:-.4px;font-weight:550;margin:0 0 6px}
   .providers .intro{max-width:58ch}
+  .providers h3{font-size:13px}
   .form-error{margin:12px 0 2px}
   .pending{display:flex;align-items:flex-start;gap:11px;padding:12px 14px;margin:14px 0 4px;border:1px solid #4e4324;border-radius:9px;background:#211f16;color:#e8d59e}
   .pending strong{display:block;font-size:12px;font-weight:600;line-height:1.5}
@@ -287,7 +291,13 @@
   .quiet-danger:hover:not(:disabled){color:var(--error-text);border-color:var(--error-line)}
   .tag.connected{font-size:9.5px;color:var(--yellow);border:1px solid #5c4b22;background:#282416;border-radius:20px;padding:3px 8px;white-space:nowrap}
   .empty-line{font-size:12px;color:var(--muted);margin:0;padding:13px 16px;border:1px solid var(--line);border-radius:12px;background:var(--soft)}
-  .connect-form{border-top:1px solid var(--line);margin-top:22px;padding-top:24px}
+  .connect-details{border-top:1px solid var(--line);margin-top:18px;padding-top:14px}
+  .connect-details>summary{cursor:pointer;font-size:12.5px;color:var(--muted);list-style:none;display:flex;align-items:center;gap:8px}
+  .connect-details>summary::-webkit-details-marker{display:none}
+  .connect-details>summary:hover{color:var(--text)}
+  .connect-details>summary::before{content:"";width:0;height:0;border-left:4px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s ease}
+  .connect-details[open]>summary::before{transform:rotate(90deg)}
+  .connect-form{margin-top:16px}
   .field-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   .field-row label:only-child{grid-column:1 / -1;max-width:50%}
   label{display:block;font-size:12px;font-weight:550;margin:16px 0}

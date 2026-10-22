@@ -9,6 +9,8 @@
   import Reasoning from './Reasoning.svelte';
   import WebResearch from './WebResearch.svelte';
   import AgentCompanion from './AgentCompanion.svelte';
+  import AskCard from './AskCard.svelte';
+  import { asksFor } from '../lib/agent.svelte';
   import { browser, openBrowser, closeBrowser, selectBrowserSession, setBrowserWorkspaceVisible } from '../lib/browser.svelte';
   import {
     chat,
@@ -53,6 +55,14 @@
   function toggleThreads(): void {
     threadsOpen = !threadsOpen;
     try { localStorage.setItem(THREADS_KEY, threadsOpen ? '1' : '0'); } catch { /* storage can be unavailable */ }
+  }
+  /* The strip keeps a handful of conversations one click away; hovering opens the full list over the chat. */
+  const railThreads = $derived(chat.conversations
+    .filter(c => (c.workspaceId ?? 'general') === library.activeWorkspace && Boolean(c.archived) === showArchived)
+    .slice(0, 8));
+  function threadInitial(title: string): string {
+    const words = title.trim().split(/\s+/u).filter(Boolean);
+    return (words[0]?.[0] ?? '·').toUpperCase();
   }
   let logEl = $state<HTMLDivElement>();
   let composerEl = $state<HTMLTextAreaElement>();
@@ -476,8 +486,22 @@
 <svelte:window onpointerdown={onWindowPointerDown} onkeydown={(event) => { if (event.key === 'Escape' && (confirmingDelete || viewingImage)) { confirmingDelete = null; viewingImage = null; } }} />
 
 <div class="chat-workspace">
-<div class="chat-layout" class:rail-collapsed={!threadsOpen}>
-  <aside class="threads" aria-label="Conversations" inert={!threadsOpen} aria-hidden={!threadsOpen}>
+<div class="chat-layout" class:rail-open={threadsOpen}>
+  <aside class="threads" aria-label="Conversations">
+    <div class="rail-mini">
+      <button class="mini-new" disabled={working || chat.creating || chat.preview} title="New conversation" aria-label="New conversation" onclick={() => { void createConversation(); }}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 5.5v13M5.5 12h13"/></svg>
+      </button>
+      {#each railThreads as conversation (conversation.id)}
+        <button class="mini-thread" class:active={chat.active?.conversation.id === conversation.id} disabled={working || chat.creating} title={conversation.title || 'New conversation'} aria-label={conversation.title || 'New conversation'} onclick={() => { confirmingDelete = null; void openConversation(conversation.id); }}>
+          <span>{threadInitial(conversation.title || '')}</span>
+        </button>
+      {/each}
+      <button class="mini-open" title="All threads" aria-label="Show all threads" aria-expanded={threadsOpen} onclick={toggleThreads}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9.5 5.5 6.5 6.5-6.5 6.5"/></svg>
+      </button>
+    </div>
+    <div class="rail-full">
     <div class="rail-inner">
       <div class="rail-greeting">
         <strong>{greeting}</strong>
@@ -539,17 +563,12 @@
       {/if}
       {#if working}<p class="threads-note">Stop the reply before switching threads.</p>{/if}
     </div>
+    </div>
   </aside>
 
   <section class="conversation" aria-label="Conversation">
     <div class="conversation-head">
       <div class="conversation-lead">
-        {#if !threadsOpen}
-          <button class="threads-reopen" title="Show threads" aria-label="Show thread list" aria-expanded={threadsOpen} onclick={toggleThreads}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="3.5"/><path d="M9.5 4.5v15"/></svg>
-            <span>Threads</span>
-          </button>
-        {/if}
         <div class="conversation-title">
           <strong>{active?.conversation.title || 'A new conversation'}</strong>
           <span>{selection ? selectionLabel(selection) : 'No model chosen yet'}</span>
@@ -675,6 +694,9 @@
     {/if}
 
     {#if chat.phase === 'ready'}
+    {#each asksFor(active?.conversation.id) as ask (ask.id)}
+      <AskCard {ask} />
+    {/each}
     <form
       class="composer"
       class:dragging={dragOver}
@@ -876,17 +898,33 @@
   /* One full-height surface: the rail holds threads, the column holds the conversation. */
   .chat-workspace{flex:1;min-height:0;min-width:0;display:flex;position:relative}
   .browser-chip{display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 9px;color:var(--muted);font-size:10px;white-space:nowrap}.browser-chip svg{width:14px;height:14px}.browser-chip:hover:not(:disabled),.browser-chip.browser-active{color:var(--yellow);border-color:var(--line-strong)}.browser-dot{width:4px;height:4px;background:var(--yellow);border-radius:50%;animation:pulse 1.5s ease-in-out infinite}
-  .chat-layout{--rail-w:clamp(180px,15vw,220px);flex:1;min-width:0;min-height:0;display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);transition:grid-template-columns .24s cubic-bezier(.2,.7,.3,1)}
+  .chat-layout{--rail-mini:56px;--rail-w:240px;flex:1;min-width:0;min-height:0;display:grid;grid-template-columns:var(--rail-mini) minmax(0,1fr);transition:grid-template-columns .18s cubic-bezier(.2,.7,.3,1)}
   .chat-layout>*{min-width:0}
-  .chat-layout.rail-collapsed{grid-template-columns:0 minmax(0,1fr)}
-  .threads{border-right:1px solid var(--line);min-height:0;overflow:hidden;transition:border-color .2s ease}
-  .rail-collapsed .threads{border-right-color:transparent}
-  .rail-inner{width:var(--rail-w);height:100%;padding:2px 20px 8px 0;overflow-y:auto;display:flex;flex-direction:column;scrollbar-gutter:stable;transition:opacity .16s ease}
-  .rail-collapsed .rail-inner{opacity:0;visibility:hidden}
+  .chat-layout.rail-open{grid-template-columns:var(--rail-w) minmax(0,1fr)}
+  .threads{position:relative;z-index:2;border-right:1px solid var(--line);min-height:0;overflow:visible;transition:border-color .2s ease}
+  /* A narrow strip keeps new-chat and recent conversations visible; the full list floats over
+     the conversation on hover, or stays put when the pin is on. */
+  .rail-mini{width:var(--rail-mini);height:100%;display:flex;flex-direction:column;align-items:center;gap:6px;padding:2px 0 8px;overflow:hidden}
+  .mini-new{width:34px;height:34px;flex-shrink:0;display:grid;place-items:center;padding:0;border:1px solid var(--line-strong);border-radius:9px;background:transparent;color:var(--muted)}
+  .mini-new svg{width:15px;height:15px}
+  .mini-new:hover:not(:disabled){color:var(--yellow);border-color:var(--yellow-deep)}
+  .mini-thread{position:relative;width:34px;height:34px;flex-shrink:0;display:grid;place-items:center;padding:0;border:1px solid transparent;border-radius:50%;background:var(--soft);color:var(--muted);font-size:12.5px;font-weight:550}
+  .mini-thread:hover:not(:disabled){color:var(--text);border-color:var(--line-strong)}
+  .mini-thread.active{color:var(--text);background:rgba(255,212,92,.1);border-color:rgba(255,212,92,.45)}
+  .mini-thread.active::before{content:"";position:absolute;left:-11px;top:10px;bottom:10px;width:2px;border-radius:2px;background:var(--yellow)}
+  .mini-open{margin-top:auto;width:30px;height:30px;flex-shrink:0;display:grid;place-items:center;padding:0;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--muted)}
+  .mini-open svg{width:13px;height:13px}
+  .mini-open:hover{color:var(--text);border-color:var(--line-strong);background:var(--soft)}
+  .rail-full{position:absolute;inset:0 auto 0 0;width:var(--rail-w);background:var(--bg);border-right:1px solid var(--line);box-shadow:20px 0 44px rgba(0,0,0,.45);opacity:0;pointer-events:none;transform:translateX(-8px);transition:opacity .16s ease,transform .16s ease}
+  .threads:hover .rail-full,.threads:focus-within .rail-full,.rail-open .rail-full{opacity:1;pointer-events:auto;transform:none}
+  .rail-open .rail-full{position:static;width:100%;box-shadow:none;border-right:0}
+  .rail-open .rail-mini{display:none}
+  .rail-inner{width:100%;height:100%;padding:2px 20px 8px 0;overflow-y:auto;display:flex;flex-direction:column;scrollbar-gutter:stable}
   .rail-greeting{padding:6px 2px 20px}
   .rail-greeting strong{display:block;font-size:21px;letter-spacing:-.8px;font-weight:560}
   .rail-greeting span{display:block;margin-top:6px;font-size:12px;color:var(--muted);line-height:1.55}
-  .rail-toggle,.threads-reopen{display:inline-flex;align-items:center;justify-content:center;gap:7px;flex-shrink:0;background:transparent;border:1px solid transparent;border-radius:7px;color:var(--faint);padding:5px;line-height:1;transition:color .15s ease,border-color .15s ease,background .15s ease}
+  .threads-reopen{display:inline-flex;align-items:center;justify-content:center;gap:7px;flex-shrink:0;background:transparent;border:1px solid transparent;border-radius:7px;color:var(--faint);padding:5px;line-height:1;transition:color .15s ease,border-color .15s ease,background .15s ease}
+  .rail-toggle{display:inline-flex;align-items:center;justify-content:center;gap:7px;flex-shrink:0;background:transparent;border:1px solid transparent;border-radius:7px;color:var(--faint);padding:5px;line-height:1;transition:color .15s ease,border-color .15s ease,background .15s ease}
   .rail-toggle svg{width:15px;height:15px}
   .rail-toggle:hover,.threads-reopen:hover{color:var(--text);border-color:var(--line-strong);background:var(--soft)}
   .threads-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
@@ -919,12 +957,10 @@
   .thread-loading{display:block;margin-top:4px;font-size:10px;color:var(--yellow-deep)}
   .threads-empty{font-size:11.5px;line-height:1.6;color:var(--faint);margin:10px 2px}
   .threads-note{font-size:10.5px;line-height:1.5;color:var(--faint);margin:14px 2px 0;border-top:1px solid var(--line);padding-top:12px}
-  .conversation{width:100%;max-width:none;margin:0;min-height:0;display:flex;flex-direction:column;padding-left:18px;transition:padding-left .24s cubic-bezier(.2,.7,.3,1)}
-  .rail-collapsed .conversation{padding-left:0}
+  .conversation{width:100%;max-width:none;margin:0;min-height:0;display:flex;flex-direction:column;padding-left:18px}
   .conversation-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding-bottom:13px;border-bottom:1px solid var(--line);margin-bottom:14px}
   .conversation-lead{display:flex;align-items:flex-start;gap:12px;min-width:0}
   .threads-reopen{align-self:center;padding:6px 10px;font-size:11px;color:var(--muted);gap:8px}
-  .threads-reopen svg{width:14px;height:14px;opacity:.75}
   .conversation-title{min-width:0}
   .conversation-title strong{display:block;font-size:15px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .conversation-title span{display:block;font-size:11px;color:var(--muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -991,7 +1027,7 @@
   .composer textarea{display:block;border:0;resize:none;background:transparent;color:var(--text);width:100%;height:54px;min-height:54px;max-height:220px;font-size:15px;line-height:1.65;padding:2px 2px 8px;overflow-y:auto}
   .composer-note{font-size:11px;color:var(--error-text);margin:0 2px 9px;padding-bottom:9px;border-bottom:1px solid var(--line)}
   .composer-note button{background:transparent;border:0;color:var(--yellow);padding:0;margin-left:5px;text-decoration:underline;font-size:11px}
-  .composer-foot{display:flex;align-items:center;justify-content:space-between;gap:14px;border-top:1px solid var(--line);padding-top:10px}
+  .composer-foot{display:flex;align-items:center;justify-content:space-between;gap:14px;row-gap:8px;border-top:1px solid var(--line);padding-top:10px;flex-wrap:wrap}
   .model-picker{display:flex;align-items:center;gap:8px;min-width:0}
   .model-picker .picker-label{font-size:10px;color:var(--faint);flex-shrink:0}
   .picker{position:relative;min-width:0}
@@ -1033,8 +1069,8 @@
   .thinking-option.selected{font-weight:600}
   @media(prefers-reduced-motion:reduce){
     .typing i,.cursor,.send[aria-busy="true"] svg,.loading-dot{animation:none}.thinking-chevron{transition:none}}
-  .send-area{display:flex;align-items:center;gap:11px;flex-shrink:0}
-  .composer-hint{font-size:10px;color:var(--faint);white-space:nowrap}
+  .send-area{display:flex;align-items:center;gap:11px;flex-wrap:wrap;justify-content:flex-end;min-width:0}
+  .composer-hint{font-size:10px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
   .send{background:var(--yellow);color:var(--black);border:0;border-radius:9px;width:34px;height:32px;padding:0;display:grid;place-items:center;flex-shrink:0;line-height:0;transition:background .15s ease}
   .attach{background:transparent;border:1px solid transparent;border-radius:9px;width:30px;height:32px;padding:0;display:grid;place-items:center;color:var(--faint);flex-shrink:0;transition:color .15s ease,border-color .15s ease,background .15s ease}
   .attach svg{width:16px;height:16px}
@@ -1058,24 +1094,16 @@
   @keyframes mascot-bob{0%,100%{transform:translateY(1px) rotate(-1.5deg)}50%{transform:translateY(-3px) rotate(1.5deg)}}
   @keyframes stop-pulse{50%{border-color:var(--yellow-deep);box-shadow:0 0 0 3px rgba(255,212,92,.08)}}
   @media(max-width:980px){
-    .chat-layout{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
-    .chat-layout.rail-collapsed{grid-template-columns:1fr;grid-template-rows:0 minmax(0,1fr)}
-    .threads{border-right:0;border-bottom:1px solid var(--line)}
-    .rail-collapsed .threads{border-bottom-color:transparent}
-    .rail-inner{width:auto;padding:0 0 14px;overflow:visible}
-    .rail-greeting{padding:0 2px 12px}
-    .thread-list{display:flex;overflow-x:auto;gap:5px;padding-bottom:2px}
-    .thread-list li{flex:0 0 auto;max-width:190px}
-    .thread-open{min-width:150px;border-color:var(--line)}
-    .thread-list li.active .thread-open::before{display:none}
-    .threads-empty{margin:4px 2px}
-    .threads-note{margin-top:8px;border-top:0;padding-top:2px}
-    .conversation{max-width:none;padding-left:0}
+    .chat-layout{--rail-mini:50px;--rail-w:216px}
+    .conversation{padding-left:12px}
+    .rail-inner{padding:0 16px 8px 0}
   }
   @media(max-width:560px){.chat-workspace{flex-direction:column}.chat-workspace :global(.companion){order:-1}}
+  @media(max-width:1120px){
+    .composer-hint{display:none}
+  }
   @media(max-width:700px){
     .suggestions{grid-template-columns:1fr;gap:6px}
-    .composer-hint{display:none}
     .picker-trigger{max-width:190px}
     .thinking-name{display:none}
     .message.user .message-body{max-width:88%}
@@ -1083,7 +1111,7 @@
   }
   @media(prefers-reduced-motion:reduce){
     .typing i,.cursor,.send[aria-busy="true"] svg,.loading-dot{animation:none}
-    .picker-chevron,.chat-layout,.threads,.rail-inner,.conversation{transition:none}
+    .picker-chevron,.chat-layout,.threads,.rail-inner,.conversation,.rail-full,.mini-thread{transition:none}
   }
   @media(prefers-reduced-motion:reduce){
     .avatar.busy,.welcome img,.stop,.browser-dot,.message{animation:none}

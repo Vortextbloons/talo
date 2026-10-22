@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod chat;
+mod agent;
 mod automation;
 mod diagnostics;
 mod power;
@@ -40,6 +41,8 @@ struct Host {
     chat: chat::ChatState,
     last_maintenance: Instant,
     browser_approvals: std::collections::HashMap<String, (Value, Instant, u64)>,
+    /// Blocking question cards owned by live Pi tool calls. Never persisted.
+    agent_asks: std::collections::HashMap<String, agent::PendingAsk>,
 }
 type Shared = Arc<Mutex<Host>>;
 
@@ -129,10 +132,12 @@ impl Host {
         if let Some(frame) = self.supervisor.take_browser_frame() { let _ = app.emit_to("main", "browser-frame", frame); }
         for signal in self.supervisor.drain_signals() {
             if let supervisor::WorkerSignal::Tools(message) = signal { integrations::message(self, app, message); }
+            else if let supervisor::WorkerSignal::Agent(message) = signal { agent::message(self, app, message); }
             else if let supervisor::WorkerSignal::Browser(message) = signal { self.browser_message(app, message); }
             else { self.chat.on_worker_signal(&mut self.db, app, signal); }
         }
         if integrations::expire(self){let _=app.emit("tool-approvals-changed",());}
+        agent::expire(self, app);
         let epoch = self.supervisor.worker_epoch();
         let expired: Vec<_> = self.browser_approvals.iter().filter(|(_, (_, at, owner))| *owner != epoch || at.elapsed() > Duration::from_secs(90)).map(|(id, _)| id.clone()).collect();
         for id in expired {
@@ -455,6 +460,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             automation::automation_action,
             integrations::tools_action,
+            agent::agent_action,
             runtime_status,
             browser::browser_control,
             browser::browser_view,
@@ -499,6 +505,7 @@ fn main() {
             // idempotent so existing v1 databases upgrade in place.
             storage::init(&db)?;
             scheduler::init(&db)?;
+            agent::init(&db)?;
             scheduler::recover(&db)?;
             // Interrupted executions require approval again after restart.
             db.execute(
@@ -526,6 +533,7 @@ fn main() {
                 chat: chat::ChatState::default(),
                 last_maintenance: Instant::now(),
             browser_approvals: Default::default(),
+            agent_asks: Default::default(),
             })));
             diagnostics::start(app.handle().clone());
             #[cfg(windows)]
@@ -711,6 +719,7 @@ mod dispatch_regression {
             chat: chat::ChatState::default(),
             last_maintenance: Instant::now(),
             browser_approvals: Default::default(),
+            agent_asks: Default::default(),
         }
     }
 

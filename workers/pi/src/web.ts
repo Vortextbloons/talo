@@ -13,7 +13,7 @@ type Reply = { id?: string; result?: any; error?: { message?: string } };
 /** The host owns the process. This transport never spawns programs or loads user MCP config. */
 export class WebTransport {
   private pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
-  constructor(private send: (value: unknown) => void) {}
+  constructor(private send: (value: unknown) => void, private label = 'Research') {}
   receive(value: Reply) {
     if (!value.id) return;
     const call = this.pending.get(value.id);
@@ -33,8 +33,8 @@ export class WebTransport {
         this.send({ type: 'web', message: { jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: id, reason: error.message } } });
         reject(error);
       };
-      const abort = () => finish(new Error('Research cancelled'));
-      const timer = setTimeout(() => finish(new Error('Web request timed out. Retry or narrow the request.')), timeout);
+      const abort = () => finish(new Error(`${this.label} cancelled`));
+      const timer = setTimeout(() => finish(new Error(`${this.label} request timed out. Retry or narrow the request.`)), timeout);
       this.pending.set(id, { resolve: value => { signal?.removeEventListener('abort', abort); resolve(value); }, reject: error => { signal?.removeEventListener('abort', abort); reject(error); }, timer });
       signal?.addEventListener('abort', abort, { once: true });
       if (signal?.aborted) { abort(); return; }

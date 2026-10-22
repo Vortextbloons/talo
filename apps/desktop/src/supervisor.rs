@@ -54,6 +54,7 @@ impl std::error::Error for Error {}
 #[derive(Debug)]
 pub enum WorkerSignal {
     Tools(Value),
+    Agent(Value),
     Web(Value),
     Browser(Value),
     Ready,
@@ -368,6 +369,9 @@ impl Supervisor {
     pub fn relay_tools(&mut self, message: Value) {
         if let Some(pi) = self.pi.as_mut() { let _ = writeln!(pi.stdin, "{}", json!({"type":"tools_response","message":message})); let _ = pi.stdin.flush(); }
     }
+    pub fn relay_agent(&mut self, message: Value) {
+        if let Some(pi) = self.pi.as_mut() { let _ = writeln!(pi.stdin, "{}", json!({"type":"agent_response","message":message})); let _ = pi.stdin.flush(); }
+    }
     pub fn browser_request(&mut self, message: Value) {
         if message["method"] == "cancel" && self.browser.is_none() { return; }
         let id = message["id"].clone(); let epoch = self.worker_epoch;
@@ -592,6 +596,9 @@ fn read_worker(
         match value.get("type").and_then(Value::as_str) {
             Some("tools") => {
                 if let Some(message) = value.get("message") { push(WorkerSignal::Tools(message.clone())); }
+            }
+            Some("agent") => {
+                if let Some(message) = value.get("message") { push(WorkerSignal::Agent(message.clone())); }
             }
             Some("browser") => {
                 if let Some(message) = value.get("message") { push(WorkerSignal::Browser(message.clone())); }
