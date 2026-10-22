@@ -9,9 +9,17 @@ import type {
   ConversationSnapshot,
   GenerationState,
   ModelSelection,
+  ResearchActivity,
 } from '../../../../packages/contracts/src/chat';
-import type { ProviderModelInfo } from '../../../../packages/contracts/src/index';
+import type { ProviderModelInfo, ThinkingLevelName } from '../../../../packages/contracts/src/index';
 import { providerName } from './connection-providers';
+
+const THINKING_LEVEL_NAMES: ThinkingLevelName[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+function parseThinkingLevel(value: string | undefined | null): ThinkingLevelName | null {
+  if (value && THINKING_LEVEL_NAMES.includes(value as ThinkingLevelName)) return value as ThinkingLevelName;
+  return null;
+}
 
 export type WorkerState = 'starting' | 'ready' | 'stopped' | 'failed';
 
@@ -21,6 +29,7 @@ export interface DiscoveryState {
 }
 
 export interface ChatStore {
+  research: Record<string, ResearchActivity[]>;
   initialized: boolean;
   preview: boolean;
   phase: 'idle' | 'loading' | 'ready' | 'error';
@@ -40,9 +49,12 @@ export interface ChatStore {
   connectingProvider: string;
   connectingName: string;
   selectingModel: boolean;
+  thinkingLevel: ThinkingLevelName | null;
+  thinkingBusy: boolean;
 }
 
 export const chat: ChatStore = $state({
+  research: {},
   initialized: false,
   preview: false,
   phase: 'idle',
@@ -62,6 +74,8 @@ export const chat: ChatStore = $state({
   connectingProvider: '',
   connectingName: '',
   selectingModel: false,
+  thinkingLevel: null,
+  thinkingBusy: false,
 });
 
 const EVENT_NAME = 'talo://chat';
@@ -161,6 +175,7 @@ function applySnapshot(snapshot: ConversationSnapshot): void {
     sequenceByGeneration.set(snapshot.generationId, Math.max(sequenceByGeneration.get(snapshot.generationId) ?? -1, snapshot.sequence));
   }
   chat.active.error = snapshot.error ?? '';
+  chat.thinkingLevel = parseThinkingLevel(snapshot.thinkingLevel);
 
   upsertConversation(snapshot.conversation);
   if (snapshot.conversation.selection) chat.draftSelection = snapshot.conversation.selection;
@@ -303,6 +318,16 @@ function handleGenerationEvent(event: Extract<ChatEvent, { type: 'generation' }>
 }
 
 function handleEvent(event: ChatEvent): void {
+  if (event.type === 'research') {
+    const items = chat.research[event.generationId] ?? [];
+    const previous = items.findIndex(item => item.id === event.activity.id);
+    if (previous >= 0) items[previous] = event.activity;
+    else items.push(event.activity);
+    chat.research[event.generationId] = items.slice(-24);
+    const keys = Object.keys(chat.research);
+    if (keys.length > 100) delete chat.research[keys[0]];
+    return;
+  }
   if (event.type === 'worker') {
     chat.worker = { state: event.state, error: event.error ? errorMessage(event.error) : '' };
     if (event.state === 'ready') {
@@ -567,6 +592,32 @@ export async function chooseModel(selection: ModelSelection | null): Promise<voi
   }
 }
 
+/** Apply a thinking level to the conversation's Pi session ('minimal'..'max'). */
+export async function setThinkingLevel(level: ThinkingLevelName): Promise<void> {
+  const conversation = chat.active;
+  if (!conversation) return;
+  if (isWorking()) {
+    chat.error = 'Stop the current reply before changing thinking.';
+    return;
+  }
+  if (!isTauri()) {
+    chat.thinkingLevel = level;
+    return;
+  }
+  chat.thinkingBusy = true;
+  chat.error = '';
+  try {
+    chat.thinkingLevel = parseThinkingLevel(await invoke<string>('conversation_thinking', {
+      conversationId: conversation.conversation.id,
+      level,
+    }));
+  } catch (value) {
+    chat.error = errorMessage(value);
+  } finally {
+    chat.thinkingBusy = false;
+  }
+}
+
 function noteFirstMessage(conversationId: string, text: string): void {
   const conversation = chat.active;
   if (!conversation || conversation.conversation.id !== conversationId) return;
@@ -828,6 +879,8 @@ export function resetChatForPreview(): void {
   chat.conversations = [];
   chat.active = null;
   chat.draftSelection = null;
+  chat.thinkingLevel = null;
+  chat.thinkingBusy = false;
   sequenceByGeneration = new Map();
   finishedGenerations = new Set();
 }

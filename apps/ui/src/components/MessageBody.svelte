@@ -1,15 +1,27 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import { invoke, isTauri } from '@tauri-apps/api/core';
+  import katex from 'katex';
   import { parseMarkdown } from '../lib/markdown';
   import type { Align, Block, Inline, ListItem } from '../lib/markdown';
 
   let { text }: { text: string } = $props();
 
   // Markdown arrives as tokens and is rendered as real Svelte elements, so model output can never
-  // inject markup into the desktop webview.
+  // inject markup into the desktop webview. Math is the one exception: KaTeX turns TeX into its
+  // own DOM with trust disabled, which escapes anything that is not a rendering instruction.
+
   const tree = $derived(parseMarkdown(text));
 
-  /* The webview has no link opener, so a link copies its address instead of navigating away. */
+  function renderMath(tex: string, display: boolean): string {
+    try {
+      return katex.renderToString(tex, { displayMode: display, throwOnError: false, strict: 'ignore', trust: false });
+    } catch {
+      return `<code>${tex.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code>`;
+    }
+  }
+
+  /* Open HTTP(S) sources in the system browser; copying remains the fallback. */
   let copied = $state('');
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -35,6 +47,10 @@
 
   async function copyLink(event: MouseEvent, href: string): Promise<void> {
     event.preventDefault();
+    if (isTauri() && /^https?:\/\//iu.test(href)) {
+      try { await invoke('research_source_open', { url: href }); return; }
+      catch { /* copy remains available if the system cannot open a browser */ }
+    }
     let ok = false;
     try {
       if (navigator.clipboard?.writeText) {
@@ -52,13 +68,18 @@
   }
 
   function linkTitle(href: string, title: string): string {
-    return `${title ? `${title} · ` : ''}${href} · click to copy`;
+    return `${title ? `${title} · ` : ''}${href} · ${isTauri() && /^https?:\/\//iu.test(href) ? 'open source' : 'click to copy'}`;
   }
 
   function alignOf(align: Align[] | undefined, index: number): string {
     return `align-${align?.[index] ?? 'left'}`;
   }
 </script>
+
+{#snippet mathHtml(tex: string, display: boolean)}
+  <!-- The only {@html} in the app: KaTeX output with trust disabled. -->
+  {@html renderMath(tex, display)}
+{/snippet}
 
 {#snippet inline(nodes: Inline[])}
   {#each nodes as node, index (index)}
@@ -67,6 +88,9 @@
     {:else if node.kind === 'em'}<em>{@render inline(node.children)}</em>
     {:else if node.kind === 'del'}<del>{@render inline(node.children)}</del>
     {:else if node.kind === 'code'}<code class="md-code">{node.text}</code>
+    {:else if node.kind === 'math'}
+      {#if node.display}<span class="md-math display">{@render mathHtml(node.tex, true)}</span>
+      {:else}<span class="md-math">{@render mathHtml(node.tex, false)}</span>{/if}
     {:else if node.kind === 'break'}<br />
     {:else if node.kind === 'link'}
       <a
@@ -99,6 +123,8 @@
         {#if node.language}<span class="md-code-language">{node.language}</span>{/if}
         <pre class="md-pre"><code>{node.text}</code></pre>
       </div>
+    {:else if node.kind === 'math'}
+      <div class="md-math display">{@render mathHtml(node.tex, true)}</div>
     {:else if node.kind === 'quote'}
       <blockquote>{@render blocks(node.blocks)}</blockquote>
     {:else if node.kind === 'list'}
@@ -145,14 +171,14 @@
 <div class="markdown">{@render blocks(tree)}</div>
 
 <style>
-  .markdown{display:flex;flex-direction:column;gap:10px;min-width:0;font-size:14px;line-height:1.75;overflow-wrap:anywhere}
+  .markdown{display:flex;flex-direction:column;gap:11px;min-width:0;font-size:15px;line-height:1.75;overflow-wrap:anywhere}
   .markdown p{margin:0}
   .md-heading{font-weight:600;line-height:1.4;letter-spacing:-.01em;margin-top:2px}
-  .md-heading.h1{font-size:17px;letter-spacing:-.02em}
-  .md-heading.h2{font-size:15.5px}
-  .md-heading.h3{font-size:14.5px}
-  .md-heading.h4,.md-heading.h5,.md-heading.h6{font-size:13.5px;color:var(--muted)}
-  .md-heading.h5,.md-heading.h6{font-size:13px;text-transform:none}
+  .md-heading.h1{font-size:18px;letter-spacing:-.02em}
+  .md-heading.h2{font-size:16.5px}
+  .md-heading.h3{font-size:15.5px}
+  .md-heading.h4,.md-heading.h5,.md-heading.h6{font-size:14.5px;color:var(--muted)}
+  .md-heading.h5,.md-heading.h6{font-size:14px;text-transform:none}
   .md-link{color:var(--yellow);text-decoration:underline;text-decoration-color:rgba(255,212,92,.4);text-underline-offset:2px;cursor:copy}
   .md-link:hover{text-decoration-color:var(--yellow)}
   .md-link.copied{text-decoration-color:var(--yellow)}
@@ -161,11 +187,11 @@
   .md-image:hover{text-decoration-color:var(--yellow)}
   .md-image-mark{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
   .md-image.copied::after{content:' · copied';color:var(--faint);font-size:11px;text-decoration:none}
-  .md-code{background:var(--soft);border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-family:ui-monospace,'Cascadia Code',Consolas,monospace;font-size:12.5px;color:#e6e4dc;white-space:break-spaces}
+  .md-code{background:var(--soft);border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-family:ui-monospace,'Cascadia Code',Consolas,monospace;font-size:13px;color:#e6e4dc;white-space:break-spaces}
   .md-code-block{display:flex;flex-direction:column;gap:0;background:var(--sidebar);border:1px solid var(--line);border-radius:10px;overflow:hidden}
   .md-code-language{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:7px 14px 0;font-family:ui-monospace,'Cascadia Code',Consolas,monospace}
   .md-code-block .md-pre{margin:0;border:0;border-radius:0;background:transparent;padding:12px 16px 14px}
-  .md-pre{padding:14px 16px;background:var(--sidebar);border:1px solid var(--line);border-radius:10px;overflow-x:auto;font-family:ui-monospace,'Cascadia Code',Consolas,monospace;font-size:12.5px;line-height:1.65;color:#e6e4dc;white-space:pre}
+  .md-pre{padding:14px 16px;background:var(--sidebar);border:1px solid var(--line);border-radius:10px;overflow-x:auto;font-family:ui-monospace,'Cascadia Code',Consolas,monospace;font-size:13px;line-height:1.65;color:#e6e4dc;white-space:pre}
   .md-pre code{font:inherit}
   blockquote{margin:0;padding:2px 0 2px 14px;border-left:2px solid var(--line-strong);color:var(--muted)}
   blockquote > * + *{margin-top:8px}
@@ -178,14 +204,18 @@
   .md-task{position:absolute;left:0;top:5px;width:14px;height:14px;border:1px solid var(--line-strong);border-radius:4px;font-size:10px;line-height:13px;text-align:center;color:var(--black)}
   .md-task.checked{background:var(--yellow);border-color:var(--yellow)}
   .md-table{min-width:0;overflow-x:auto;border:1px solid var(--line);border-radius:10px}
-  .md-table table{border-collapse:collapse;width:100%;font-size:13px;line-height:1.6}
+  .md-table table{border-collapse:collapse;width:100%;font-size:13.5px;line-height:1.6}
   .md-table th,.md-table td{padding:7px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;overflow-wrap:break-word}
   .md-table th{font-weight:600;color:var(--muted);background:var(--soft);white-space:nowrap}
   .md-table tr:last-child td{border-bottom:0}
   .md-table .align-center{text-align:center}
   .md-table .align-right{text-align:right}
   hr{border:0;border-top:1px solid var(--line);margin:2px 0}
-  .md-raw{font-family:ui-monospace,'Cascadia Code',Consolas,monospace;font-size:12.5px;color:var(--muted);white-space:pre-wrap}
+  .md-math{color:var(--text)}
+  .md-math.display{display:block;overflow-x:auto;overflow-y:hidden;padding:2px 0;text-align:center}
+  .md-math.display :global(.katex-display){margin:4px 0}
+  .md-math :global(.katex){font-size:1.04em}
+  .md-raw{font-family:ui-monospace,'Cascadia Code',Consolas,monospace;font-size:13px;color:var(--muted);white-space:pre-wrap}
   strong{font-weight:650}
   em{font-style:italic}
   del{color:var(--faint)}

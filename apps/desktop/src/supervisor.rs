@@ -53,6 +53,7 @@ impl std::error::Error for Error {}
 
 #[derive(Debug)]
 pub enum WorkerSignal {
+    Web(Value),
     Ready,
     Sleeping,
     Error(String),
@@ -92,6 +93,7 @@ struct ServiceChild {
 }
 
 pub struct Supervisor {
+    research: Option<crate::research::Research>,
     pub root: PathBuf,
     pub data: PathBuf,
     pi: Option<Worker>,
@@ -111,6 +113,7 @@ pub struct Supervisor {
 impl Supervisor {
     pub fn new(root: PathBuf, data: PathBuf) -> Self {
         Self {
+            research: None,
             root,
             data,
             pi: None,
@@ -200,7 +203,7 @@ impl Supervisor {
                 "stopped"
             }
         };
-        let services = json!({"pi":state("pi"),"browser":state("browser"),"web":state("web")});
+        let services = json!({"pi":state("pi"),"browser":state("browser"),"web":if self.research.is_some() { "running" } else { "stopped" }});
         let root = &self.root;
         let dependencies = self.dependencies.get_or_insert_with(|| {
             json!({
@@ -476,6 +479,7 @@ impl Supervisor {
     }
 
     pub fn stop_all(&mut self) {
+        self.research = None;
         let _ = self.stop_pi();
         for id in self.services.keys().cloned().collect::<Vec<_>>() {
             let _ = self.stop(&id);
@@ -499,6 +503,34 @@ impl Supervisor {
         }
     }
 
+    fn relay_web(&mut self, message: Value) {
+        if let Some(pi) = self.pi.as_mut() {
+            let _ = writeln!(pi.stdin, "{}", json!({"type":"web_response","message":message}));
+            let _ = pi.stdin.flush();
+        }
+    }
+
+    fn web_request(&mut self, message: Value) {
+        let id = message.get("id").cloned().unwrap_or(Value::Null);
+        let result = (|| -> Result<(), String> {
+            if self.research.is_none() {
+                if message.get("method").and_then(Value::as_str) != Some("tools/call") { return Ok(()); }
+                let mut command = crate::research::command(&self.root, &self.data)?;
+                #[cfg(windows)]
+                if self.job.is_none() { return Err("Unable to contain research worker".into()); }
+                let mut child = command.spawn().map_err(|e| e.to_string())?;
+                #[cfg(windows)]
+                if let Err(error) = self.job.as_ref().unwrap().assign(&child) {
+                    kill_tree(&mut child);
+                    return Err(error.to_string());
+                }
+                self.research = Some(crate::research::Research::new(child)?);
+            }
+            self.research.as_mut().unwrap().send(message)
+        })();
+        if let Err(error) = result { self.relay_web(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":error}})); }
+    }
+
     pub fn drain_signals(&mut self) -> Vec<WorkerSignal> {
         let mut drained = VecDeque::new();
         if let Some(worker) = self.pi.as_mut() {
@@ -517,7 +549,17 @@ impl Supervisor {
         while let Some(signal) = self.deferred.pop_front() {
             drained.push_back(signal);
         }
-        drained.into()
+        let mut visible = Vec::new();
+        for signal in drained {
+            if let WorkerSignal::Web(message) = signal { self.web_request(message); }
+            else { visible.push(signal); }
+        }
+        if let Some(web) = self.research.as_mut() {
+            let (replies, stop) = web.poll();
+            if stop { self.research = None; }
+            for reply in replies { self.relay_web(reply); }
+        }
+        visible
     }
 
     pub fn drain_lifecycle(&mut self) -> Vec<Lifecycle> {
@@ -610,6 +652,9 @@ fn read_worker(
         let _ = writeln!(log, "{}", describe(&value));
         let _ = log.flush();
         match value.get("type").and_then(Value::as_str) {
+            Some("web") => {
+                if let Some(message) = value.get("message") { push(WorkerSignal::Web(message.clone())); }
+            }
             Some("response") => {
                 let Some(id) = value.get("id").and_then(Value::as_str) else {
                     continue;
@@ -697,13 +742,15 @@ fn wipe_param_secrets(params: &mut Value) {
     }
 }
 
-fn kill_tree(child: &mut Child) {
+pub(crate) fn kill_tree(child: &mut Child) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         let _ = Command::new("taskkill.exe")
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
             .creation_flags(0x08000000)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status();
     }
     let _ = child.kill();

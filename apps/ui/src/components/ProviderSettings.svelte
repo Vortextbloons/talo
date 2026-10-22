@@ -138,7 +138,7 @@
     </div>
   {/if}
   {#if connected.length}
-    <div class="connected">
+    <div class="connected-list">
       <h3>Connected</h3>
       {#each connected as connection (connection.id)}
         <div class="connection">
@@ -272,7 +272,7 @@
   .settings-message.error{background:var(--error-bg);border:1px solid var(--error-line);color:var(--error-text)}
   .settings-message.notice{background:#211f16;border:1px solid #4e4324;color:#e8d59e}
   .settings-message button{background:transparent;border:0;color:inherit;padding:0 4px;font-size:16px;line-height:1}
-  .connected{margin-top:18px;display:grid;gap:10px}
+  .connected-list{margin-top:18px;display:grid;gap:10px}
   h3{font-size:13px;font-weight:600;margin:0}
   .connection{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:13px 16px;border:1px solid var(--line);border-radius:12px;background:var(--soft)}
   .connection-main{min-width:0}

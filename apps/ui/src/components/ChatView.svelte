@@ -1,11 +1,13 @@
 <script lang="ts">
   import LibrarySidebar from './LibrarySidebar.svelte';
-  import { library } from '../lib/library.svelte';
+  import { library, mutateLibrary } from '../lib/library.svelte';
   import { tick } from 'svelte';
   import mascot from '../../../../packages/design/mascot.svg';
   import type { ChatMessage } from '../../../../packages/contracts/src/chat';
+  import type { ThinkingLevelName } from '../../../../packages/contracts/src/index';
   import MessageBody from './MessageBody.svelte';
   import Reasoning from './Reasoning.svelte';
+  import WebResearch from './WebResearch.svelte';
   import {
     chat,
     chooseModel,
@@ -22,6 +24,7 @@
     selectionLabel,
     sendMessage,
     stopGeneration,
+    setThinkingLevel,
   } from '../lib/chat.svelte';
 
   let { onOpenSettings, name, tagline, showReasoning }: { onOpenSettings: () => void; name: string; tagline: string; showReasoning?: boolean } = $props();
@@ -31,6 +34,7 @@
     try { return localStorage.getItem(THREADS_KEY) !== '0'; } catch { return true; }
   }
   let showArchived = $state(false);
+  let confirmingDelete = $state<string | null>(null);
   let text = $state('');
   let threadsOpen = $state(initialThreadsOpen());
   function toggleThreads(): void {
@@ -50,6 +54,11 @@
   let pickerEl = $state<HTMLDivElement>();
   let menuEl = $state<HTMLDivElement>();
   let triggerEl = $state<HTMLButtonElement>();
+  let thinkingOpen = $state(false);
+  let thinkingActive = $state('');
+  let thinkingWrapEl = $state<HTMLDivElement>();
+  let thinkingMenuEl = $state<HTMLDivElement>();
+  let thinkingTriggerEl = $state<HTMLButtonElement>();
 
   const active = $derived(chat.active);
   const messages = $derived(chat.active?.messages ?? []);
@@ -101,6 +110,17 @@
     return null;
   });
   const pickerValue = $derived(pickerSelected ? pickerSelected.label : 'Choose a model');
+  const selectedModel = $derived.by(() => {
+    if (!selection) return null;
+    const group = modelGroups.find(item => item.connection.id === selection!.connectionId);
+    return group?.models.find(model => model.id === selection!.modelId) ?? null;
+  });
+  // Thinking levels come from Pi's model registry; only reasoning-capable models list them.
+  const thinkingOptions = $derived(selectedModel?.thinkingLevels ?? []);
+  const thinkingValue = $derived.by(() => {
+    if (chat.thinkingLevel && thinkingOptions.includes(chat.thinkingLevel)) return chat.thinkingLevel;
+    return thinkingOptions.includes('medium') ? 'medium' : thinkingOptions[0] ?? '';
+  });
   const workerLabel = $derived(
     chat.preview ? 'Interface preview'
       : chat.worker.state === 'ready' ? 'Pi ready'
@@ -113,7 +133,7 @@
       : !selection ? 'Choose a model below'
         : !selectionAvailable ? 'Choose a connected model'
           : working ? 'Talo is replying'
-            : 'Enter to send · Shift + Enter for a new line',
+            : '',
   );
   const placeholder = $derived(
     !connected.length ? 'Connect a provider to start'
@@ -230,9 +250,73 @@
   }
 
   function onWindowPointerDown(event: PointerEvent): void {
-    if (!pickerOpen) return;
-    if (pickerEl && event.target instanceof Node && pickerEl.contains(event.target)) return;
-    closePicker();
+    if (pickerOpen && !(pickerEl && event.target instanceof Node && pickerEl.contains(event.target))) closePicker();
+    if (thinkingOpen && !(thinkingWrapEl && event.target instanceof Node && thinkingWrapEl.contains(event.target))) closeThinking();
+    if (confirmingDelete && !(event.target instanceof Node && (event.target as Element).closest?.('.thread-confirm, .thread-delete'))) confirmingDelete = null;
+  }
+
+  /* Deleting is confirmed inline in the rail; the original history file stays on disk. */
+  async function deleteThread(id: string): Promise<void> {
+    const wasActive = chat.active?.conversation.id === id;
+    const next = chat.conversations.find(conversation => conversation.id !== id
+      && !conversation.archived
+      && (conversation.workspaceId ?? 'general') === library.activeWorkspace);
+    confirmingDelete = null;
+    if (!(await mutateLibrary('conversation_delete', { id }))) return;
+    if (wasActive && next) await openConversation(next.id);
+  }
+
+  function thinkingLabel(level: string): string {
+    return level === 'xhigh' ? 'X-High' : level.charAt(0).toUpperCase() + level.slice(1);
+  }
+
+  /* Custom thinking dropdown: the native select popup is OS-drawn and stays light. */
+  function openThinking(): void {
+    thinkingActive = thinkingValue;
+    thinkingOpen = true;
+    tick().then(() => {
+      thinkingMenuEl?.querySelector<HTMLElement>(`[data-thinking="${CSS.escape(thinkingActive)}"]`)?.focus();
+    });
+  }
+
+  function closeThinking(refocus = false): void {
+    thinkingOpen = false;
+    if (refocus) thinkingTriggerEl?.focus();
+  }
+
+  function moveThinking(delta: number, jump?: number): void {
+    if (!thinkingOptions.length) return;
+    const index = thinkingOptions.indexOf(thinkingActive as never);
+    let next: number;
+    if (jump !== undefined) next = jump < 0 ? 0 : thinkingOptions.length - 1;
+    else if (index < 0) next = delta > 0 ? 0 : thinkingOptions.length - 1;
+    else next = (index + delta + thinkingOptions.length) % thinkingOptions.length;
+    thinkingActive = thinkingOptions[next];
+    thinkingMenuEl?.querySelector<HTMLElement>(`[data-thinking="${CSS.escape(thinkingActive)}"]`)?.focus();
+  }
+
+  function onThinkingPillKeydown(event: KeyboardEvent): void {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openThinking();
+    }
+  }
+
+  function onThinkingKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); closeThinking(true); return; }
+    if (event.key === 'ArrowDown') { event.preventDefault(); moveThinking(1); return; }
+    if (event.key === 'ArrowUp') { event.preventDefault(); moveThinking(-1); return; }
+    if (event.key === 'Home') { event.preventDefault(); moveThinking(0, 0); return; }
+    if (event.key === 'End') { event.preventDefault(); moveThinking(0, 1); return; }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      if (thinkingActive) void pickThinking(thinkingActive as ThinkingLevelName);
+    }
+  }
+
+  async function pickThinking(level: ThinkingLevelName): Promise<void> {
+    closeThinking(true);
+    await setThinkingLevel(level);
   }
 
   function onLogScroll(): void {
@@ -275,7 +359,7 @@
   }
 </script>
 
-<svelte:window onpointerdown={onWindowPointerDown} />
+<svelte:window onpointerdown={onWindowPointerDown} onkeydown={(event) => { if (event.key === 'Escape' && confirmingDelete) confirmingDelete = null; }} />
 
 <div class="chat-layout" class:rail-collapsed={!threadsOpen}>
   <aside class="threads" aria-label="Conversations" inert={!threadsOpen} aria-hidden={!threadsOpen}>
@@ -300,13 +384,13 @@
       {#if chat.conversations.length}
         <ul class="thread-list">
           {#each chat.conversations.filter(c => (c.workspaceId ?? 'general') === library.activeWorkspace && Boolean(c.archived) === showArchived) as conversation (conversation.id)}
-            <li>
+            <li class:active={chat.active?.conversation.id === conversation.id}>
               <button
-                class:active={chat.active?.conversation.id === conversation.id}
+                class="thread-open"
                 disabled={working || chat.creating}
                 aria-current={chat.active?.conversation.id === conversation.id ? 'true' : undefined}
                 title={conversation.title || 'New conversation'}
-                onclick={() => { void openConversation(conversation.id); }}
+                onclick={() => { confirmingDelete = null; void openConversation(conversation.id); }}
               >
                 <span class="thread-title">{conversation.title || 'New conversation'}</span>
                 <span class="thread-meta">
@@ -315,6 +399,23 @@
                 </span>
                 {#if chat.openingId === conversation.id}<span class="thread-loading">Opening</span>{/if}
               </button>
+              {#if confirmingDelete === conversation.id}
+                <div class="thread-confirm" role="group" aria-label="Delete this chat">
+                  <span>Delete this chat?</span>
+                  <div class="thread-confirm-actions">
+                    <button class="danger" disabled={library.busy} onclick={() => { void deleteThread(conversation.id); }}>Delete</button>
+                    <button onclick={() => { confirmingDelete = null; }}>Keep</button>
+                  </div>
+                </div>
+              {:else}
+                <button
+                  class="thread-delete"
+                  title="Delete chat"
+                  aria-label={`Delete ${conversation.title || 'this conversation'}`}
+                  disabled={working || library.busy}
+                  onclick={() => { confirmingDelete = conversation.id; }}
+                ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16" /><path d="M9.5 4.5h5" /><path d="M6.5 7l.9 12a1.8 1.8 0 0 0 1.8 1.6h5.6a1.8 1.8 0 0 0 1.8-1.6l.9-12" /><path d="M10.5 11v6" /><path d="M13.5 11v6" /></svg></button>
+              {/if}
             </li>
           {/each}
         </ul>
@@ -414,6 +515,9 @@
                 {#if message.status === 'cancelled'}<span class="status-tag">Stopped</span>{/if}
                 {#if message.status === 'failed'}<span class="status-tag failed">Failed</span>{/if}
               </div>
+              {#if message.generationId && chat.research[message.generationId]?.length}
+                <WebResearch items={chat.research[message.generationId]} working={message.status === 'generating'} onCancel={() => void stopGeneration()} />
+              {/if}
               {#if showReasoning && message.reasoning}
                 <Reasoning
                   text={message.reasoning}
@@ -509,7 +613,50 @@
           {#if chat.selectingModel}<span class="picker-status" role="status">Saving…</span>{/if}
         </div>
         <div class="send-area">
-          <span class="composer-hint">{composerHint}</span>
+          {#if composerHint}<span class="composer-hint">{composerHint}</span>{/if}
+          {#if thinkingOptions.length}
+            <div class="thinking-wrap" bind:this={thinkingWrapEl}>
+              <button
+                type="button"
+                id="chat-thinking"
+                class="thinking-pill"
+                bind:this={thinkingTriggerEl}
+                aria-haspopup="listbox"
+                aria-expanded={thinkingOpen}
+                aria-controls={thinkingOpen ? 'chat-thinking-menu' : undefined}
+                disabled={working || chat.thinkingBusy || !connected.length}
+                onclick={() => { if (thinkingOpen) closeThinking(); else openThinking(); }}
+                onkeydown={onThinkingPillKeydown}
+                title="How much the model reasons before replying"
+              >
+                <span class="thinking-name">Thinking</span>
+                <span class="thinking-value">{thinkingLabel(thinkingValue)}</span>
+                <svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9.5 6 6 6-6" /></svg>
+              </button>
+              {#if thinkingOpen}
+                <div class="thinking-menu" id="chat-thinking-menu" role="listbox" tabindex="-1" aria-labelledby="chat-thinking" bind:this={thinkingMenuEl}>
+                  {#each thinkingOptions as option (option)}
+                    <div
+                      role="option"
+                      data-thinking={option}
+                      class="thinking-option"
+                      class:selected={option === thinkingValue}
+                      class:active={thinkingActive === option}
+                      aria-selected={option === thinkingValue}
+                      tabindex={thinkingActive === option ? 0 : -1}
+                      onfocus={() => { thinkingActive = option; }}
+                      onpointerenter={() => { thinkingActive = option; }}
+                      onkeydown={(event) => { event.stopPropagation(); onThinkingKeydown(event); }}
+                      onclick={() => { void pickThinking(option as ThinkingLevelName); }}
+                    >
+                      <span class="picker-dot" aria-hidden="true"></span>
+                      <span>{thinkingLabel(option)}</span>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
           {#if working}
             <button
               type="button"
@@ -530,9 +677,6 @@
         </div>
       </div>
     </form>
-    {#if !generating && !cancelling && messages.length > 0 && active?.state !== 'failed'}
-      <p class="conversation-foot">Talo can make mistakes. Check anything important.</p>
-    {/if}
     {/if}
   </section>
 </div>
@@ -558,31 +702,45 @@
   .new-thread{background:transparent;border:1px solid var(--line);color:var(--text);padding:5px 10px;font-size:11px;border-radius:7px}
   .new-thread:hover:not(:disabled){border-color:var(--yellow-deep);color:var(--yellow)}
   .thread-list{list-style:none;padding:0;margin:0;display:grid;gap:3px;min-width:0}
-  .thread-list button{position:relative;width:100%;text-align:left;background:transparent;border:1px solid transparent;color:var(--muted);padding:10px 10px;border-radius:9px;display:block;line-height:1.4}
-  .thread-list button:hover:not(:disabled){background:#1d1d19;color:var(--text)}
-  .thread-list button.active{background:#26261f;color:var(--text);border-color:#34342c}
-  .thread-list button.active::before{content:'';position:absolute;left:-1px;top:12px;bottom:12px;width:2px;border-radius:2px;background:var(--yellow)}
+  .thread-list li{position:relative;min-width:0}
+  .thread-open{position:relative;width:100%;text-align:left;background:transparent;border:1px solid transparent;color:var(--muted);padding:10px 32px 10px 10px;border-radius:9px;display:block;line-height:1.4}
+  .thread-open:hover:not(:disabled){background:#1d1d19;color:var(--text)}
+  .thread-list li.active .thread-open{background:#26261f;color:var(--text);border-color:#34342c}
+  .thread-list li.active .thread-open::before{content:'';position:absolute;left:-1px;top:12px;bottom:12px;width:2px;border-radius:2px;background:var(--yellow)}
+  /* Delete stays out of the way until a thread is hovered, focused, or current. */
+  .thread-delete{position:absolute;top:7px;right:6px;z-index:2;display:grid;place-items:center;width:22px;height:22px;padding:0;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--faint);opacity:0;transition:opacity .13s ease,color .15s ease,border-color .15s ease,background .15s ease}
+  .thread-delete svg{width:13px;height:13px;display:block}
+  .thread-list li:hover .thread-delete,.thread-list li:focus-within .thread-delete,.thread-list li.active .thread-delete{opacity:1}
+  .thread-delete:hover:not(:disabled){color:var(--error-text);border-color:var(--error-line);background:var(--error-bg)}
+  @media(hover:none){.thread-delete{opacity:1}}
+  .thread-confirm{position:absolute;inset:0;z-index:3;display:grid;align-content:center;gap:7px;padding:9px 11px;background:#1c1c17;border:1px solid var(--error-line);border-radius:9px;box-shadow:0 10px 26px var(--shadow)}
+  .thread-confirm>span{font-size:10.5px;color:var(--muted);line-height:1.35}
+  .thread-confirm-actions{display:flex;gap:6px}
+  .thread-confirm-actions button{width:auto;flex:1;text-align:center;padding:5px 8px;font-size:10.5px;line-height:1.3;border:1px solid var(--line-strong);border-radius:6px;background:var(--soft);color:var(--text)}
+  .thread-confirm-actions .danger{border-color:var(--error-line);background:var(--error-bg);color:var(--error-text)}
+  .thread-confirm-actions button:hover:not(:disabled){border-color:var(--line-strong);background:#2c2c26}
+  .thread-confirm-actions .danger:hover:not(:disabled){border-color:#7a5a30;background:#33261a}
   .thread-title{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .thread-meta{display:flex;gap:7px;margin-top:4px;font-size:10px;color:var(--faint);white-space:nowrap;overflow:hidden}
   .thread-model{overflow:hidden;text-overflow:ellipsis;max-width:115px}
   .thread-loading{display:block;margin-top:4px;font-size:10px;color:var(--yellow-deep)}
   .threads-empty{font-size:11.5px;line-height:1.6;color:var(--faint);margin:10px 2px}
   .threads-note{font-size:10.5px;line-height:1.5;color:var(--faint);margin:14px 2px 0;border-top:1px solid var(--line);padding-top:12px}
-  .conversation{width:100%;max-width:1180px;margin:0 auto;min-height:0;display:flex;flex-direction:column;padding-left:26px;transition:padding-left .24s cubic-bezier(.2,.7,.3,1)}
+  .conversation{width:100%;max-width:1180px;margin:0 auto;min-height:0;display:flex;flex-direction:column;padding-left:18px;transition:padding-left .24s cubic-bezier(.2,.7,.3,1)}
   .rail-collapsed .conversation{padding-left:0}
   .conversation-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding-bottom:13px;border-bottom:1px solid var(--line);margin-bottom:14px}
   .conversation-lead{display:flex;align-items:flex-start;gap:12px;min-width:0}
   .threads-reopen{align-self:center;padding:6px 10px;font-size:11px;color:var(--muted);gap:8px}
   .threads-reopen svg{width:14px;height:14px;opacity:.75}
   .conversation-title{min-width:0}
-  .conversation-title strong{display:block;font-size:14px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .conversation-title span{display:block;font-size:10.5px;color:var(--muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .conversation-title strong{display:block;font-size:15px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .conversation-title span{display:block;font-size:11px;color:var(--muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .worker{display:inline-flex;align-items:center;gap:7px;font-size:10.5px;color:var(--muted);white-space:nowrap;border:1px solid var(--line);background:var(--soft);border-radius:20px;padding:5px 11px}
   .worker-dot{width:6px;height:6px;border-radius:50%;background:var(--faint)}
   .worker.ready .worker-dot{background:var(--yellow-deep)}
   .worker.starting .worker-dot{background:var(--yellow);animation:pulse 1.4s ease-in-out infinite}
   .worker.failed .worker-dot{background:#d0844c}
-  .chat-message{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 13px;border-radius:9px;font-size:12px;margin-bottom:12px;line-height:1.5}
+  .chat-message{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 13px;border-radius:9px;font-size:12.5px;margin-bottom:12px;line-height:1.5}
   .chat-message.error{background:var(--error-bg);border:1px solid var(--error-line);color:var(--error-text)}
   .chat-message.notice{background:#211f16;border:1px solid #4e4324;color:#e8d59e}
   .chat-message button{background:transparent;border:0;color:inherit;padding:0 4px;font-size:16px;line-height:1}
@@ -590,7 +748,7 @@
   .welcome{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px 12px;width:100%;max-width:640px;align-self:center}
   .welcome img{width:84px;margin-bottom:22px;filter:drop-shadow(0 0 36px rgba(255,212,92,.22)) drop-shadow(0 0 90px rgba(255,212,92,.1))}
   .welcome h2{font-size:23px;letter-spacing:-.6px;font-weight:550;margin:0 0 12px}
-  .welcome p{color:var(--muted);font-size:13.5px;line-height:1.7;margin:0 0 21px}
+  .welcome p{color:var(--muted);font-size:14.5px;line-height:1.7;margin:0 0 21px}
   .welcome small{display:block;margin-top:18px;color:var(--faint);font-size:11px;line-height:1.6}
   .secondary{background:transparent;margin-left:8px}
   .loading-dot{display:block;width:7px;height:7px;border-radius:50%;background:var(--yellow);margin:0 auto 18px;animation:pulse 1.4s ease-in-out infinite}
@@ -598,8 +756,8 @@
   .suggestions button{background:transparent;border:0;border-top:1px solid var(--line);padding:14px 2px 0;color:var(--text);border-radius:0;display:block}
   .suggestions button:hover:not(:disabled){background:transparent;border-top-color:var(--yellow-deep)}
   .suggestions button:hover:not(:disabled) span{color:var(--yellow)}
-  .suggestions span{display:block;font-size:12.5px;font-weight:600;transition:color .15s ease}
-  .suggestions small{display:block;margin-top:6px;font-size:11px;color:var(--muted);line-height:1.5}
+  .suggestions span{display:block;font-size:13px;font-weight:600;transition:color .15s ease}
+  .suggestions small{display:block;margin-top:6px;font-size:11.5px;color:var(--muted);line-height:1.5}
   .log{flex:1;min-height:0;overflow-y:auto;padding:8px 10px 20px 2px;scrollbar-gutter:stable}
   .message{display:flex;gap:12px;padding:14px 0 20px;border-bottom:1px solid var(--line)}
   .message:last-child{border-bottom:0}
@@ -607,7 +765,7 @@
   .avatar{width:27px;height:27px;margin-top:2px;flex-shrink:0}
   .message-body{min-width:0;max-width:92%}
   .message.user .message-body{max-width:82%;background:#23231e;border:1px solid #33332a;border-radius:13px;padding:10px 14px}
-  .message-role{display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--muted);margin-bottom:6px;letter-spacing:.01em}
+  .message-role{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-bottom:6px;letter-spacing:.01em}
   .message.user .message-role{justify-content:flex-end;margin-bottom:4px}
   .message.streaming .message-role>span:first-child{color:var(--yellow)}
   .status-tag{font-size:9.5px;border:1px solid var(--line);border-radius:20px;padding:2px 7px;color:var(--muted)}
@@ -622,7 +780,7 @@
   .retry:hover:not(:disabled){border-color:var(--yellow-deep);color:var(--yellow)}
   .composer{flex-shrink:0;border:1px solid var(--line-strong);border-radius:15px;padding:15px 16px 13px;background:var(--paper);box-shadow:0 12px 32px var(--shadow);margin-top:10px}
   .composer:focus-within{border-color:#4b4b40}
-  .composer textarea{display:block;border:0;resize:none;background:transparent;color:var(--text);width:100%;height:52px;min-height:52px;max-height:220px;font-size:14px;line-height:1.65;padding:2px 2px 8px;overflow-y:auto}
+  .composer textarea{display:block;border:0;resize:none;background:transparent;color:var(--text);width:100%;height:54px;min-height:54px;max-height:220px;font-size:15px;line-height:1.65;padding:2px 2px 8px;overflow-y:auto}
   .composer-note{font-size:11px;color:var(--error-text);margin:0 2px 9px;padding-bottom:9px;border-bottom:1px solid var(--line)}
   .composer-note button{background:transparent;border:0;color:var(--yellow);padding:0;margin-left:5px;text-decoration:underline;font-size:11px}
   .composer-foot{display:flex;align-items:center;justify-content:space-between;gap:14px;border-top:1px solid var(--line);padding-top:10px}
@@ -649,6 +807,23 @@
   .picker-option.selected .picker-name{font-weight:600}
   .picker-tag{font-size:9px;color:var(--yellow-deep);border:1px solid #4e4324;border-radius:20px;padding:2px 7px;white-space:nowrap;flex-shrink:0}
   .picker-status{font-size:10px;color:var(--faint)}
+  /* Thinking level pill + custom menu: the native select popup is OS-drawn and stays light. */
+  .thinking-wrap{position:relative;min-width:0}
+  .thinking-pill{display:flex;align-items:center;gap:6px;border:1px solid var(--line-strong);background:var(--soft);color:var(--muted);border-radius:9px;padding:0 8px;height:32px;cursor:pointer;transition:border-color .15s ease}
+  .thinking-pill:hover:not(:disabled){border-color:#4a4a41;color:var(--text)}
+  .thinking-pill:focus-visible{border-color:#4b4b40}
+  .thinking-pill:disabled{opacity:.45;cursor:not-allowed}
+  .thinking-name{font-size:10px;color:var(--faint);flex-shrink:0}
+  .thinking-value{font-size:11px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .thinking-chevron{width:11px;height:11px;flex-shrink:0;transition:transform .15s ease}
+  .thinking-pill[aria-expanded="true"] .thinking-chevron{transform:rotate(180deg)}
+  .thinking-menu{position:absolute;right:0;bottom:calc(100% + 8px);z-index:40;min-width:140px;background:var(--paper);border:1px solid var(--line-strong);border-radius:12px;padding:6px;box-shadow:0 18px 48px rgba(0,0,0,.55)}
+  .thinking-option{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:8px;font-size:12px;color:var(--text);cursor:pointer;line-height:1.4}
+  .thinking-option.active{background:#24241e}
+  .thinking-option .picker-dot{width:6px;height:6px;border-radius:50%;border:1px solid var(--line-strong);flex-shrink:0}
+  .thinking-option.selected .picker-dot{background:var(--yellow);border-color:var(--yellow)}
+  .thinking-option.selected{font-weight:600}
+  @media(prefers-reduced-motion:reduce){.thinking-chevron{transition:none}}
   .send-area{display:flex;align-items:center;gap:11px;flex-shrink:0}
   .composer-hint{font-size:10px;color:var(--faint);white-space:nowrap}
   .send{background:var(--yellow);color:var(--black);border:0;border-radius:9px;width:34px;height:32px;padding:0;display:grid;place-items:center;flex-shrink:0;line-height:0;transition:background .15s ease}
@@ -671,8 +846,8 @@
     .rail-greeting{padding:0 2px 12px}
     .thread-list{display:flex;overflow-x:auto;gap:5px;padding-bottom:2px}
     .thread-list li{flex:0 0 auto;max-width:190px}
-    .thread-list button{min-width:150px;border-color:var(--line)}
-    .thread-list button.active::before{display:none}
+    .thread-open{min-width:150px;border-color:var(--line)}
+    .thread-list li.active .thread-open::before{display:none}
     .threads-empty{margin:4px 2px}
     .threads-note{margin-top:8px;border-top:0;padding-top:2px}
     .conversation{max-width:none;padding-left:0}
@@ -681,6 +856,7 @@
     .suggestions{grid-template-columns:1fr;gap:6px}
     .composer-hint{display:none}
     .picker-trigger{max-width:190px}
+    .thinking-name{display:none}
     .message.user .message-body{max-width:88%}
     .welcome{padding:18px 4px}
   }

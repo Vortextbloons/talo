@@ -1,8 +1,17 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import os from 'node:os';
 import path from 'node:path';
+import { release, sha256 } from './donsetch.mjs';
+
+for (const [name, expected] of Object.entries(release.files)) {
+  if (sha256(await readFile(path.join('vendor/bundle/node_modules/donsetch/binaries', name))) !== expected) throw new Error(`Bundled DonSeTch checksum mismatch: ${name}`);
+}
+for (const model of release.models) {
+  if (sha256(await readFile(path.join('vendor/bundle/research-models/rerank', model.name))) !== model.sha256) throw new Error(`Bundled model checksum mismatch: ${model.name}`);
+}
+if (sha256(await readFile(`vendor/bundle/donsetch-v${release.version}-source.tar.gz`)) !== release.sourceSha256) throw new Error('Bundled DonSeTch source checksum mismatch');
 
 // Exercise the shipped executable and dependency graph, rather than the developer's Node.
 const data = await mkdtemp(path.join(os.tmpdir(), 'talo-bundle-check-'));

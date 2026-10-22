@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile, cp, readdir, access } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+import { bundleDonsetch } from './donsetch.mjs';
 const destination=path.resolve('vendor/bundle');
 await mkdir(destination,{recursive:true});
 const dependencies={};
@@ -16,12 +17,9 @@ await cp('dist/workers',path.join(destination,'workers'),{recursive:true});
 await cp('dist/services',path.join(destination,'services'),{recursive:true});
 await cp('dist/packages',path.join(destination,'packages'),{recursive:true});
 // Explicit, checksum-verifying installer; no downloads occur on the end user's machine.
-execFileSync(process.execPath,[path.join(destination,'node_modules/donsetch/install.js')],{cwd:destination,stdio:'inherit',windowsHide:true});
+await bundleDonsetch(destination);
 const binary=path.join(destination,'node_modules/donsetch/binaries/donsetch.exe');
 await access(binary);
-const sourceUrl='https://github.com/dondai44423/donsetch/archive/refs/tags/v4.10.1.tar.gz';
-const source=await fetch(sourceUrl);if(!source.ok)throw new Error('Unable to bundle DonSeTch corresponding source');
-await writeFile(path.join(destination,'donsetch-v4.10.1-source.tar.gz'),Buffer.from(await source.arrayBuffer()));
 // Include a machine-readable inventory and complete license files from shipped npm packages.
 const notices=[];
 async function walk(dir){for(const entry of await readdir(dir,{withFileTypes:true})){if(!entry.isDirectory()||entry.name==='.bin')continue;const full=path.join(dir,entry.name);if(entry.name.startsWith('@')){await walk(full);continue;}try{const p=JSON.parse(await readFile(path.join(full,'package.json'),'utf8'));const licenses=[];for(const file of await readdir(full))if(/^(license|copying|notice)/i.test(file)){try{licenses.push({file,text:await readFile(path.join(full,file),'utf8')});}catch{}}notices.push({name:p.name,version:p.version,license:p.license,repository:p.repository,licenses});}catch{}try{await walk(path.join(full,'node_modules'));}catch{}}}

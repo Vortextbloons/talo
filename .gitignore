@@ -12,6 +12,7 @@ coverage/
 vendor/runtime/
 vendor/bundle/
 vendor/downloads/
+vendor/donsetch-source/
 
 # Logs and local data
 *.log
@@ -29,4 +30,7 @@ Desktop.ini
 *.swp
 *.swo
 AGENTS.md
-Docs/
+Docs/*
+!docs/SLICE-4.md
+!docs/DONSETCH-REDISTRIBUTION.md
+!docs/THIRD-PARTY-NOTICES.md

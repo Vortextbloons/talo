@@ -3,7 +3,9 @@ CREATE TABLE library_workspaces (
  archived INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 INSERT INTO library_workspaces(id,name) VALUES('general','General');
-ALTER TABLE chat_conversations ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'general' REFERENCES library_workspaces(id);
+-- SQLite cannot add a REFERENCES column with a non-NULL default; workspace
+-- membership for existing rows is app-enforced with the 'general' default.
+ALTER TABLE chat_conversations ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'general';
 ALTER TABLE chat_conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
 CREATE UNIQUE INDEX chat_session_path_unique ON chat_conversations(session_path) WHERE session_path IS NOT NULL;
 CREATE TABLE library_memories (

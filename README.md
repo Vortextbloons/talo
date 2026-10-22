@@ -2,6 +2,8 @@
 
 A Windows-first, local desktop AI assistant foundation. Tauri 2 owns the tray, persistence, permissions, and service lifecycle. Svelte 5 provides the interface. The unmodified, published Pi SDK runs in a bundled Node process.
 
+Slice 4 adds built-in, API-key-free public web research through pinned DonSeTch 4.10.1: search, fetch, crawl and screenshots. The Windows supervisor starts research on demand, keeps active work alive, and removes the worker and renderers after two idle minutes. Chat includes expandable evidence, source links, cancellation and retries. See [Slice 4 architecture and verification](docs/SLICE-4.md) and [redistribution requirements](docs/DONSETCH-REDISTRIBUTION.md).
+
 ## Develop (Windows x64)
 
 Prerequisites for contributors: Node 24.22.1+, npm, stable Rust with the MSVC target, Visual Studio C++ Build Tools and Windows SDK, and WebView2. End users receive runtimes in the installer.

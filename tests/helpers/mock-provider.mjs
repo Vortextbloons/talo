@@ -95,6 +95,13 @@ export async function startMockProvider(options = {}) {
           'cache-control': 'no-cache',
           connection: 'keep-alive',
         });
+        if (state.mode === 'web-tool' && !parsed.messages?.some(message => message.role === 'tool')) {
+          const chunk = (delta, finish_reason = null) => res.write(`data: ${JSON.stringify({id:'mock-tool',object:'chat.completion.chunk',created:1,model:parsed.model,choices:[{index:0,delta,finish_reason}]})}\n\n`);
+          chunk({role:'assistant', tool_calls:[{index:0,id:'call-web-1',type:'function',function:{name:'web_search',arguments:JSON.stringify({query:'Rust documentation'})}}]});
+          chunk({}, 'tool_calls');
+          res.end('data: [DONE]\n\n');
+          return;
+        }
         let timer;
         let index = 0;
         let closed = false;

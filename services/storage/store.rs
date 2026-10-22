@@ -143,6 +143,8 @@ pub struct ConversationSnapshot {
     pub sequence: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1073,6 +1075,7 @@ mod tests {
             state: "generating".into(),
             sequence: 4,
             error: None,
+            thinking_level: None,
         };
         let value = serde_json::to_value(&snapshot).unwrap();
         // The UI Stop control reads snapshot.generationId; serializing generation_id would

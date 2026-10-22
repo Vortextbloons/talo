@@ -154,14 +154,14 @@
   .sidebar-bottom small{display:block;color:var(--faint);font-size:10px;margin-top:4px}
   .presence{display:inline-block;width:6px;height:6px;background:var(--yellow-deep);border-radius:50%;flex-shrink:0}
   main{flex:1;min-width:0;display:flex;flex-direction:column}
-  header{height:52px;flex-shrink:0;border-bottom:1px solid var(--line);padding:0 40px;display:flex;align-items:center;justify-content:space-between;gap:14px}
+  header{height:52px;flex-shrink:0;border-bottom:1px solid var(--line);padding:0 28px;display:flex;align-items:center;justify-content:space-between;gap:14px}
   .crumbs{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-right:auto}
   .slash{margin:0 10px;color:var(--faint)}
-  .error{margin:12px 40px 0;padding:12px;background:var(--error-bg);border:1px solid var(--error-line);color:var(--error-text);border-radius:10px;font-size:12px;display:flex;justify-content:space-between;align-items:center}
+  .error{margin:12px 28px 0;padding:12px;background:var(--error-bg);border:1px solid var(--error-line);color:var(--error-text);border-radius:10px;font-size:12px;display:flex;justify-content:space-between;align-items:center}
   .error button{padding:2px 8px;background:transparent;border:0}
   /* Scrolling pages flow; chat keeps everything on one surface. */
-  .content{flex:1;min-height:0;display:flex;flex-direction:column;padding:26px 40px 22px;overflow-y:auto;scrollbar-gutter:stable}
-  .content.chat-mode{overflow:hidden;padding:14px 40px 20px}
+  .content{flex:1;min-height:0;display:flex;flex-direction:column;padding:26px 28px 22px;overflow-y:auto;scrollbar-gutter:stable}
+  .content.chat-mode{overflow:hidden;padding:14px 28px 20px}
   .page-heading h1{font-size:30px;letter-spacing:-1.2px;font-weight:560;margin:0 0 8px}
   .page-heading p,.empty p,.card>p{color:var(--muted);font-size:13.5px;line-height:1.7;margin:0}
   .page-heading p{max-width:62ch}
@@ -223,8 +223,8 @@
     .nav-inner{padding:22px 12px 18px}
     header{padding:0 28px}
     .error{margin:12px 28px 0}
-    .content{padding:22px 28px 18px}
-    .content.chat-mode{padding:12px 24px 16px}
+    .content{padding:22px 22px 18px}
+    .content.chat-mode{padding:12px 20px 16px}
   }
   @media(max-width:640px){
     .shell{--nav-w:70px}

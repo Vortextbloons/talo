@@ -1,8 +1,9 @@
-import { Lexer } from 'marked';
+import { Marked } from 'marked';
 
 // Model output is untrusted text. Marked only tokenizes here; MessageBody renders the tokens as
 // Svelte elements, so no raw HTML ever reaches the webview. Raw HTML tokens therefore become
-// literal text instead of markup.
+// literal text instead of markup. Math tokens keep their TeX source; MessageBody renders them
+// through KaTeX, whose output is the only generated markup anywhere in the pipeline.
 
 export type Align = 'left' | 'center' | 'right' | null;
 
@@ -12,6 +13,7 @@ export type Inline =
   | { kind: 'em'; children: Inline[] }
   | { kind: 'del'; children: Inline[] }
   | { kind: 'code'; text: string }
+  | { kind: 'math'; tex: string; display: boolean }
   | { kind: 'break' }
   | { kind: 'link'; href: string; title: string; children: Inline[] }
   | { kind: 'image'; href: string; alt: string; title: string };
@@ -26,6 +28,7 @@ export type Block =
   | { kind: 'paragraph'; children: Inline[] }
   | { kind: 'heading'; depth: number; children: Inline[] }
   | { kind: 'code'; language: string; text: string }
+  | { kind: 'math'; tex: string; display: true }
   | { kind: 'quote'; blocks: Block[] }
   | { kind: 'list'; ordered: boolean; start: number; loose: boolean; items: ListItem[] }
   | { kind: 'table'; align: Align[]; header: Inline[][]; rows: Inline[][][] }
@@ -37,6 +40,7 @@ interface RawToken {
   type: string;
   text?: string;
   tokens?: RawToken[];
+  display?: boolean;
   href?: string;
   title?: string | null;
   lang?: string;
@@ -96,6 +100,9 @@ function inlineNodes(tokens: RawToken[] | undefined, nodes: Inline[] = []): Inli
       case 'codespan':
         nodes.push({ kind: 'code', text: token.text ?? '' });
         break;
+      case 'math_inline':
+        nodes.push({ kind: 'math', tex: token.text ?? '', display: token.display === true });
+        break;
       case 'br':
         nodes.push({ kind: 'break' });
         break;
@@ -151,6 +158,9 @@ function blockList(tokens: RawToken[] | undefined): Block[] {
       case 'code':
         blocks.push({ kind: 'code', language: (token.lang ?? '').trim(), text: (token.text ?? '').replace(/\n$/, '') });
         break;
+      case 'math_display':
+        blocks.push({ kind: 'math', tex: token.text ?? '', display: true });
+        break;
       case 'blockquote':
         blocks.push({ kind: 'quote', blocks: blockList(token.tokens) });
         break;
@@ -193,9 +203,50 @@ function blockList(tokens: RawToken[] | undefined): Block[] {
 }
 
 /** Tokenizes markdown (GFM: tables, task lists, strikethrough, autolinks) into a small safe tree. */
+const mathInline = {
+  name: 'math_inline',
+  level: 'inline' as const,
+  start(src: string): number | undefined {
+    const match = /\\\(|\$\$|\$/.exec(src);
+    return match?.index;
+  },
+  tokenizer(src: string) {
+    // \( ... \) inline, and $$ ... $$ used inline within a paragraph.
+    const paren = /^\\\(([\s\S]+?)\\\)/.exec(src);
+    if (paren) return { type: 'math_inline', raw: paren[0], text: paren[1].trim(), display: false };
+    const double = /^\$\$([\s\S]+?)\$\$/.exec(src);
+    if (double) return { type: 'math_inline', raw: double[0], text: double[1].trim(), display: true };
+    // $ ... $ with the usual currency guards: no space after the opener, no space before the
+    // closer, and no digit right after it ("$5 and $10" stays text).
+    const dollar = /^\$(?!\s)((?:\\.|[^$])+?)(?<!\s)\$(?!\d)/.exec(src);
+    if (dollar) return { type: 'math_inline', raw: dollar[0], text: dollar[1].trim(), display: false };
+    return undefined;
+  },
+};
+
+const mathDisplay = {
+  name: 'math_display',
+  level: 'block' as const,
+  start(src: string): number | undefined {
+    const match = /\$\$|\\\[/.exec(src);
+    return match?.index;
+  },
+  tokenizer(src: string) {
+    // $$ ... $$ and \[ ... \] standing on their own.
+    const double = /^\$\$([\s\S]+?)\$\$(?:\n+|$)/.exec(src);
+    if (double) return { type: 'math_display', raw: double[0], text: double[1].trim() };
+    const bracket = /^\\\[([\s\S]+?)\\\](?:\n+|$)/.exec(src);
+    if (bracket) return { type: 'math_display', raw: bracket[0], text: bracket[1].trim() };
+    return undefined;
+  },
+};
+
+const markdownLexer = new Marked({ gfm: true, breaks: true });
+markdownLexer.use({ extensions: [mathInline, mathDisplay] });
+
 export function parseMarkdown(source: string): Block[] {
   const text = source.replace(/\r\n?/g, '\n');
   if (!text.trim()) return [];
-  const tokens = Lexer.lex(text, { gfm: true, breaks: true }) as unknown as RawToken[];
+  const tokens = markdownLexer.lexer(text) as unknown as RawToken[];
   return blockList(tokens);
 }

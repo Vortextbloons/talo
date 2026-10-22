@@ -10,6 +10,7 @@ mod scheduler;
 #[path = "../../../services/storage/store.rs"]
 mod storage;
 mod supervisor;
+mod research;
 use permissions::Permissions;
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -363,6 +364,8 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             runtime_status,
+            research::research_source_open,
+            research::research_artifact_open,
             load_settings,
             save_settings,
             request_permission,
@@ -379,6 +382,7 @@ fn main() {
             chat::conversation_create,
             chat::conversation_open,
             chat::conversation_select_model,
+            chat::conversation_thinking,
             chat::chat_send,
             chat::chat_retry,
             chat::chat_stop,

@@ -155,6 +155,7 @@ struct SessionBinding {
     provider_id: String,
     model_id: String,
     session_path: Option<String>,
+    thinking_level: Option<String>,
 }
 
 /// In-memory projection of durable chat state. It is rebuilt from SQLite after a restart.
@@ -213,6 +214,7 @@ impl ChatState {
         signal: WorkerSignal,
     ) {
         match signal {
+            WorkerSignal::Web(_) => {}, // handled by the supervisor before chat projection
             WorkerSignal::Ready => emit_worker(app, WorkerState::Ready, None),
             WorkerSignal::Sleeping => {
                 self.sessions.clear();
@@ -224,6 +226,14 @@ impl ChatState {
                 emit_worker(app, WorkerState::Failed, Some(sanitize_error(&message)));
             }
             WorkerSignal::Chat(value) => {
+                if value.get("type").and_then(Value::as_str) == Some("research") {
+                    let id = value.get("generationId").and_then(Value::as_str).unwrap_or("");
+                    let conversation = value.get("conversationId").and_then(Value::as_str).unwrap_or("");
+                    if self.active.get(id).is_some_and(|g| g.conversation_id == conversation) {
+                        let _ = app.emit("talo://chat", &value);
+                    }
+                    return;
+                }
                 if value.get("type").and_then(Value::as_str) == Some("context") {
                     if let Some(id) = value.get("conversationId").and_then(Value::as_str) {
                         let compacted = value
@@ -451,12 +461,19 @@ impl ChatState {
         secret: Option<&Secret>,
     ) -> Result<(), String> {
         supervisor.ensure_worker()?;
+        // Carry the session's thinking level across a rebind so a snapshot taken before
+        // the next session.open does not report a stale level.
+        let known_level = self
+            .sessions
+            .get(&conversation.id)
+            .and_then(|binding| binding.thinking_level.clone());
         let binding = SessionBinding {
             worker_epoch: supervisor.worker_epoch(),
             connection_id: connection.id.clone(),
             provider_id: connection.provider_id.clone(),
             model_id: model_id.to_string(),
             session_path: conversation.session_path.clone(),
+            thinking_level: known_level,
         };
         if self.sessions.get(&conversation.id) == Some(&binding) {
             return Ok(());
@@ -506,6 +523,11 @@ impl ChatState {
             conversation.id.clone(),
             SessionBinding {
                 session_path: session_path.clone(),
+                thinking_level: result
+                    .get("thinkingLevel")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or(binding.thinking_level),
                 ..binding
             },
         );
@@ -590,6 +612,10 @@ fn snapshot(
             None => (None, GenerationState::Idle, 0, None),
         },
     };
+    let thinking_level = chat
+        .sessions
+        .get(&conversation.id)
+        .and_then(|binding| binding.thinking_level.clone());
     Ok(ConversationSnapshot {
         conversation,
         messages,
@@ -597,6 +623,7 @@ fn snapshot(
         state: state.as_str().to_string(),
         sequence,
         error: error.map(|error| sanitize_error(&error)),
+        thinking_level,
     })
 }
 
@@ -838,6 +865,58 @@ fn conversation_select_model_inner(
     // The Pi session must be re-opened with the new provider/model on the next prompt.
     host.chat.sessions.remove(&conversation_id);
     Ok(conversation)
+}
+
+/// Pi session thinking levels, mirroring the worker's allowlist.
+const THINKING_LEVELS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+fn conversation_thinking_inner(
+    host: &mut Host,
+    conversation_id: String,
+    level: String,
+) -> Result<String, String> {
+    let level = level.trim().to_ascii_lowercase();
+    if !THINKING_LEVELS.contains(&level.as_str()) {
+        return Err("Invalid thinking level".into());
+    }
+    if host.chat.has_active_for(&conversation_id) {
+        return Err("Stop the current response before changing thinking".into());
+    }
+    let conversation =
+        storage::get_conversation(&host.db, &conversation_id).map_err(storage_error)?;
+    let (connection, model_id) = load_connection(&host.db, &conversation)?;
+    let secret = decrypt_secret(&connection)?;
+    host.chat.ensure_session(
+        &mut host.db,
+        &mut host.supervisor,
+        &conversation,
+        &connection,
+        &model_id,
+        secret.as_ref(),
+    )?;
+    let result = host
+        .supervisor
+        .request(
+            "session.thinking",
+            json!({"conversationId": &conversation_id, "level": &level}),
+            SESSION_TIMEOUT,
+        )
+        .map_err(|error| {
+            if error.is_timeout() {
+                "Changing thinking timed out".to_string()
+            } else {
+                sanitize_error(&error.to_string())
+            }
+        })?;
+    let effective = result
+        .get("level")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Pi worker did not return a thinking level".to_string())?
+        .to_string();
+    if let Some(binding) = host.chat.sessions.get_mut(&conversation_id) {
+        binding.thinking_level = Some(effective.clone());
+    }
+    Ok(effective)
 }
 
 fn chat_send_inner(
@@ -1300,6 +1379,23 @@ pub async fn conversation_select_model(
             .lock()
             .map_err(|_| "Talo state is unavailable".to_string())?;
         conversation_select_model_inner(&mut host, conversation_id, selection)
+    })
+    .await
+}
+
+/// Apply a Pi session thinking level ('minimal'..'max') to the conversation's open session.
+#[tauri::command]
+pub async fn conversation_thinking(
+    app: AppHandle,
+    conversation_id: String,
+    level: String,
+) -> Result<String, String> {
+    run_blocking(app, move |app| {
+        let shared = app.state::<Shared>();
+        let mut host = shared
+            .lock()
+            .map_err(|_| "Talo state is unavailable".to_string())?;
+        conversation_thinking_inner(&mut host, conversation_id, level)
     })
     .await
 }

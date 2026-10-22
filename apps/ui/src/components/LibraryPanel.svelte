@@ -27,5 +27,39 @@
   {/if}
 </div>
 <style>
-  .library-page{max-width:1150px;margin:auto;padding-bottom:30px}.library-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(280px,1fr);gap:24px;align-items:start}section{background:#fff;border:1px solid #e2e2e2;border-radius:16px;padding:24px}h2{font-size:18px;margin:0 0 10px;letter-spacing:-.4px}h3{font-size:15px;margin:0}p{font-size:13px;line-height:1.6;color:#626262;overflow-wrap:anywhere}article{padding:18px 0;border-bottom:1px solid #eee}article:last-child{border:0}article p{margin:6px 0 12px}form,label{display:grid;gap:8px}form{gap:17px}label{font-size:12px;color:#555}input:not([type=checkbox]),textarea,select{width:100%;box-sizing:border-box;border:1px solid #d6d6d6;background:#fff;border-radius:8px;padding:10px;color:#191919;font:inherit}textarea{resize:vertical}.check{display:flex;gap:9px;align-items:start;line-height:1.5}.check input{accent-color:#171717;margin-top:2px}button{font:inherit;font-size:12px;border:1px solid #d6d6d6;border-radius:8px;padding:9px 12px;background:#fff;color:#1b1b1b;cursor:pointer}button:hover{background:#fff5b6}button:disabled{opacity:.45;cursor:default}.primary{background:#ffe65b;border-color:#e6cb36}.actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}.memory-toolbar{display:flex;gap:24px;align-items:center;justify-content:space-between;margin-bottom:20px}.filters{display:flex;align-items:end;gap:8px;margin:20px 0}.filters label{flex:1;min-width:0}small,.hint{font-size:11px;color:#777}.memory-content{white-space:pre-wrap;color:#252525} .error{padding:14px;background:#fff0c4;border-radius:8px}@media(max-width:900px){.library-grid{grid-template-columns:1fr}.memory-toolbar{align-items:start;flex-direction:column}}
+  .library-page{padding-bottom:30px}
+  .error{padding:12px 14px;background:var(--error-bg);border:1px solid var(--error-line);color:var(--error-text);border-radius:10px;font-size:12px;margin:0 0 16px}
+  .library-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(280px,1fr);gap:22px;align-items:start}
+  section{background:var(--paper);border:1px solid var(--line);border-radius:16px;padding:22px 24px;min-width:0}
+  h2{font-size:17px;margin:0 0 6px;letter-spacing:-.4px;font-weight:550;color:var(--text)}
+  section>p{font-size:12.5px;line-height:1.65;color:var(--muted);margin:0 0 6px}
+  h3{font-size:14px;margin:0;font-weight:550;color:var(--text)}
+  article{background:var(--soft);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-top:12px}
+  article>p{margin:0 0 10px}
+  .memory-content{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.65;color:var(--text)}
+  article small{font-size:11px;color:var(--faint);line-height:1.5;display:block}
+  form,label{display:grid;gap:7px}
+  form{gap:15px}
+  label{font-size:12px;color:var(--muted);font-weight:550}
+  input:not([type=checkbox]),textarea,select{width:100%;box-sizing:border-box;border:1px solid var(--line-strong);background:var(--soft);border-radius:8px;padding:9px 11px;color:var(--text);font:inherit;font-size:12.5px;min-width:0}
+  input:not([type=checkbox]):hover,textarea:hover,select:hover{border-color:#4a4a41}
+  textarea{resize:vertical;line-height:1.6}
+  .check{display:flex;gap:9px;align-items:start;line-height:1.5;font-weight:400;color:var(--muted);cursor:pointer}
+  .check input{accent-color:var(--yellow);margin-top:2px;flex-shrink:0}
+  button{font:inherit;font-size:12px;border:1px solid var(--line-strong);border-radius:8px;padding:8px 13px;background:var(--soft);color:var(--text);cursor:pointer;line-height:1.35}
+  button:hover:not(:disabled){background:#2c2c27;border-color:#4a4a41}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .primary{background:var(--yellow);border-color:var(--yellow);color:var(--black);font-weight:600;padding:9px 16px}
+  .primary:hover:not(:disabled){background:#ffdd7f;border-color:#ffdd7f}
+  .actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .memory-toolbar{display:flex;gap:20px;align-items:end;flex-wrap:wrap;margin:0 0 20px}
+  .memory-toolbar label{margin:0}
+  .memory-toolbar .check{align-items:center;padding:9px 0}
+  .filters{display:flex;align-items:end;gap:8px;margin:16px 0 14px}
+  .filters label{flex:1;min-width:0}
+  .filters button{flex-shrink:0;padding:9px 14px}
+  small,.hint{font-size:11px;color:var(--faint);line-height:1.55}
+  .hint{margin:0}
+  .empty-memory{font-size:12.5px;color:var(--muted)}
+  @media(max-width:900px){.library-grid{grid-template-columns:1fr}.memory-toolbar{align-items:start;flex-direction:column;gap:12px}}
 </style>

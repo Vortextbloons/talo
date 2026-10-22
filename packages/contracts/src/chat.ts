@@ -17,6 +17,8 @@ export interface ChatMessage {
 export interface ConversationSnapshot {
   conversation: ConversationInfo; messages: ChatMessage[];
   generationId: string | null; state: GenerationState; sequence: number; error?: string;
+  /** Effective Pi thinking level for the open session, when known. */
+  thinkingLevel?: string;
 }
 export interface ChatBootstrap {
   conversations: ConversationInfo[]; connections: ConnectionInfo[];
@@ -25,11 +27,18 @@ export interface ChatBootstrap {
 export type ChatEvent = {
   type: 'generation'; conversationId: string; generationId: string; sequence: number;
   state: GenerationState; text?: string; reasoning?: string; message?: ChatMessage; error?: string;
-} | { type: 'worker'; state: 'starting' | 'ready' | 'stopped' | 'failed'; error?: string };
+} | { type: 'worker'; state: 'starting' | 'ready' | 'stopped' | 'failed'; error?: string }
+  | { type: 'research'; conversationId: string; generationId: string; activity: ResearchActivity };
+export interface ResearchActivity {
+  id: string; tool: string; input: string; state: 'running' | 'completed' | 'failed' | 'cancelled';
+  preview?: string; sources?: string[]; artifact?: string; error?: string;
+  results?: { title: string; url: string; snippet: string }[];
+}
 
 /** Private host/worker operations. apiKey is ephemeral and must never be echoed or logged. */
 export type WorkerMethod = 'ping' | 'shutdown' | 'models.list' | 'provider.validate' |
-  'session.open' | 'session.prompt' | 'session.retry' | 'session.abort' | 'session.snapshot';
+  'session.open' | 'session.prompt' | 'session.retry' | 'session.abort' | 'session.snapshot' |
+  'session.thinking';
 export interface WorkerRequest { id: string; method: WorkerMethod; params?: Record<string, unknown> }
 export type WorkerEvent =
   | { type: 'ready' | 'sleeping' | 'error'; message?: string }
@@ -55,6 +64,8 @@ export type WorkerEvent =
  * session.prompt params: conversationId, generationId, text.
  * session.retry params: conversationId, generationId.
  * session.abort params: generationId. session.snapshot returns {messages,state,generationId,sequence}.
+ * session.thinking params: conversationId, level ('minimal'|'low'|'medium'|'high'|'xhigh'|'max');
+ * result { level } is the effective level after Pi clamps it to the model's registry levels.
  * models.list/provider.validate params: provider, model?, apiKey?, baseUrl?. models.list returns
  * {provider,name,native,models}; provider.validate must perform an authenticated probe.
  * A generation event's text is the COMPLETE accumulated assistant text (not a delta).
