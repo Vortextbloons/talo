@@ -131,6 +131,39 @@ pub struct ChatMessage {
     pub generation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Images the user attached to this message; filled in by the host from chat_attachments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<AttachmentInfo>>,
+}
+
+/// One display-ready attachment. `url` is a data URL small enough for the composer to render.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentInfo {
+    pub id: String,
+    pub name: String,
+    pub mime_type: String,
+    pub bytes: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+/// A stored attachment row: the metadata plus where the bytes live on disk.
+#[derive(Clone, Debug)]
+pub struct StoredAttachment {
+    pub generation_id: Option<String>,
+    pub info: AttachmentInfo,
+    pub path: String,
+}
+
+pub struct NewAttachment {
+    pub id: String,
+    pub conversation_id: String,
+    pub generation_id: String,
+    pub name: String,
+    pub mime_type: String,
+    pub bytes: i64,
+    pub path: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -324,9 +357,58 @@ pub fn list_messages(db: &Connection, conversation_id: &str) -> Result<Vec<ChatM
             status: row.get(4)?,
             generation_id: row.get(5)?,
             error: row.get(6)?,
+            attachments: None,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Attachments for one conversation, oldest first. The caller decides what to render.
+pub fn list_attachments(db: &Connection, conversation_id: &str) -> Result<Vec<StoredAttachment>> {
+    let mut statement = db.prepare(
+        "SELECT id,generation_id,name,mime_type,bytes,path FROM chat_attachments
+         WHERE conversation_id=?1 ORDER BY rowid ASC",
+    )?;
+    let rows = statement.query_map(params![conversation_id], |row| {
+        Ok(StoredAttachment {
+            generation_id: row.get(1)?,
+            info: AttachmentInfo {
+                id: row.get(0)?,
+                name: row.get(2)?,
+                mime_type: row.get(3)?,
+                bytes: row.get(4)?,
+                url: None,
+            },
+            path: row.get(5)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn insert_attachments(db: &Connection, items: &[NewAttachment]) -> Result<()> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let tx = db.unchecked_transaction()?;
+    for item in items {
+        tx.execute(
+            &format!(
+                "INSERT INTO chat_attachments(id,conversation_id,generation_id,name,mime_type,bytes,path,created_at)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,{NOW})"
+            ),
+            params![
+                &item.id,
+                &item.conversation_id,
+                &item.generation_id,
+                &item.name,
+                &item.mime_type,
+                item.bytes,
+                &item.path
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 pub fn get_message(db: &Connection, id: &str) -> Result<ChatMessage> {
@@ -342,6 +424,7 @@ pub fn get_message(db: &Connection, id: &str) -> Result<ChatMessage> {
                 status: row.get(4)?,
                 generation_id: row.get(5)?,
                 error: row.get(6)?,
+                attachments: None,
             })
         },
     )
@@ -1070,6 +1153,7 @@ mod tests {
                 status: "generating".into(),
                 generation_id: Some("g1".into()),
                 error: None,
+                attachments: None,
             }],
             generation_id: Some("g1".into()),
             state: "generating".into(),

@@ -4,9 +4,9 @@
   import { sendMessage } from '../lib/chat.svelte';
   let { items, onCancel, working }: { items: ResearchActivity[]; onCancel: () => void; working: boolean } = $props();
   let openError = $state('');
-  const label = (tool: string) => tool === 'web_search' ? 'Searching' : tool === 'web_crawl' ? 'Exploring website' : tool === 'web_screenshot' ? 'Capturing page' : 'Reading';
+  const label = (tool: string) => tool.startsWith('browser_') ? 'Browser ? ' + tool.slice(8).replaceAll('_', ' ') : tool === 'web_search' ? 'Searching' : tool === 'web_crawl' ? 'Exploring website' : tool === 'web_screenshot' ? 'Capturing page' : 'Reading';
   async function openArtifact(name: string) {
-    try { await invoke('research_artifact_open', { name }); }
+    try { await invoke('research_artifact_open', { name, browser: items.some(item => item.tool.startsWith('browser_') && item.artifact === name) }); }
     catch (error) { openError = String(error); }
   }
   async function openSource(event: MouseEvent, url: string) {
@@ -16,7 +16,7 @@
   }
 </script>
 
-<section class="research" aria-label="Web research">
+<section class="research" aria-label="Web and browser activity">
   {#each items as item (item.id)}
     <details class:running={item.state === 'running' && working}>
       <summary>
@@ -35,7 +35,7 @@
           <ul>{#each item.sources as source (source)}<li><a href={source} onclick={(event) => openSource(event, source)} rel="noopener noreferrer">{source}</a></li>{/each}</ul>
         {/if}
         {#if item.artifact}<button onclick={() => openArtifact(item.artifact!)}>Open saved {item.artifact.endsWith('.png') ? 'screenshot' : 'full result'}</button>{/if}
-        {#if item.state === 'running' && working}<button onclick={onCancel}>Cancel research</button>{/if}
+        {#if item.state === 'running' && working}<button onclick={onCancel}>Stop activity</button>{/if}
         {#if item.state === 'failed' || item.state === 'cancelled'}
           <button disabled={working} onclick={() => void sendMessage(`Retry the ${item.tool} request for: ${item.input}`)}>Retry request</button>
         {/if}

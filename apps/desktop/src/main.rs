@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod chat;
+mod attachments;
+mod browser;
 mod credentials;
 #[cfg(windows)]
 mod job;
@@ -31,6 +33,7 @@ struct Host {
     permissions: Permissions,
     chat: chat::ChatState,
     last_maintenance: Instant,
+    browser_approvals: std::collections::HashMap<String, (Value, Instant, u64)>,
 }
 type Shared = Arc<Mutex<Host>>;
 
@@ -74,10 +77,51 @@ impl Host {
     /// Drain worker protocol messages, persist/emit chat transitions and enforce idle sleep.
     /// Running this under the same mutex as commands is what makes snapshots and events
     /// race-safe: a generation cannot advance while a command is mutating it.
+    fn browser_message(&mut self, app: &tauri::AppHandle, mut message: Value) {
+        if message["method"] == "notifications/cancelled" {
+            let request = message["params"]["requestId"].clone();
+            let ids: Vec<_> = self.browser_approvals.iter().filter(|(_, (m,_,_))| m["id"] == request).map(|(id,_)| id.clone()).collect();
+            for id in ids { self.browser_approvals.remove(&id); let _ = self.permissions.resolve(&self.db, &id, false); }
+            self.supervisor.browser_request(json!({"method":"cancel","params":{"requestId":request}})); return;
+        }
+        if message["method"] != "tools/call" { return; }
+        let name = message["params"]["name"].as_str().unwrap_or("").to_string();
+        if !["browser_open","browser_tabs","browser_snapshot","browser_interact","browser_ai","browser_screenshot","browser_download","browser_handoff"].contains(&name.as_str()) {
+            self.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Unknown browser tool"}})); return;
+        }
+        // Model-supplied flags can never authorize a browser operation.
+        if let Some(params) = message["params"].as_object_mut() { params.remove("approved"); }
+        if ["browser_interact","browser_ai","browser_download"].contains(&name.as_str()) {
+            if self.browser_approvals.len() >= 8 { self.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Too many pending browser approvals"}})); return; }
+            if let Ok(browser) = self.supervisor.ensure_browser() {
+                if let Ok(state) = browser.state.lock() {
+                    if let Some(tab) = state["tabs"].as_array().and_then(|tabs| tabs.iter().find(|tab| tab["id"] == state["activeTab"])) {
+                        message["params"]["target"] = json!({"tabId":tab["id"],"revision":tab["revision"]});
+                        message["params"]["page"] = json!({"url":tab["url"],"title":tab["title"]});
+                    }
+                }
+            }
+            let resource = json!({"tool":name,"arguments":message["params"]["arguments"],"target":message["params"]["target"]}).to_string();
+            let id = self.permissions.request("browser.action".into(), resource);
+            self.browser_approvals.insert(id, (message, Instant::now(), self.supervisor.worker_epoch()));
+            open_main(app);
+        } else { self.supervisor.browser_request(message); }
+    }
     fn pump(&mut self, app: &tauri::AppHandle) {
         for signal in self.supervisor.drain_signals() {
-            self.chat.on_worker_signal(&mut self.db, app, signal);
+            if let supervisor::WorkerSignal::Browser(message) = signal { self.browser_message(app, message); }
+            else { self.chat.on_worker_signal(&mut self.db, app, signal); }
         }
+        let epoch = self.supervisor.worker_epoch();
+        let expired: Vec<_> = self.browser_approvals.iter().filter(|(_, (_, at, owner))| *owner != epoch || at.elapsed() > Duration::from_secs(90)).map(|(id, _)| id.clone()).collect();
+        for id in expired {
+            if let Some((message, _, owner)) = self.browser_approvals.remove(&id) {
+                let _ = self.permissions.resolve(&self.db, &id, false);
+                if owner == epoch { self.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Browser approval expired or activity was cancelled."}})); }
+            }
+        }
+        let pending: Vec<_> = self.browser_approvals.iter().map(|(id,(message,_,_))| json!({"id":id,"tool":message["params"]["name"],"arguments":message["params"]["arguments"],"page":message["params"]["page"]})).collect();
+        if self.last_maintenance.elapsed() >= Duration::from_secs(2) { let _ = app.emit("browser-approvals", pending); }
         self.supervisor.refresh();
         for lifecycle in self.supervisor.drain_lifecycle() {
             self.chat.on_lifecycle(&mut self.db, app, lifecycle);
@@ -272,10 +316,21 @@ async fn resolve_permission(
     run_blocking(app, move |app| {
         let shared = app.state::<Shared>();
         let mut h = shared.lock().map_err(|e| e.to_string())?;
+        let current = h.browser_approvals.get(&id).is_none_or(|(_, at, epoch)| at.elapsed() < Duration::from_secs(90) && *epoch == h.supervisor.worker_epoch());
         let Host {
             db, permissions, ..
         } = &mut *h;
-        permissions.resolve(db, &id, allowed)
+        permissions.resolve(db, &id, allowed && current)?;
+        if let Some((mut message, at, epoch)) = h.browser_approvals.remove(&id) {
+            let valid = allowed && at.elapsed() < Duration::from_secs(90) && epoch == h.supervisor.worker_epoch();
+            if valid {
+                let resource = json!({"tool":message["params"]["name"],"arguments":message["params"]["arguments"],"target":message["params"]["target"]}).to_string();
+                h.permissions.consume(&id, "browser.action", &resource)?;
+                message["params"]["approved"] = json!(true);
+                h.supervisor.browser_request(message);
+            } else { h.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Browser action denied, expired or cancelled."}})); }
+        }
+        Ok(())
     })
     .await
 }
@@ -352,6 +407,7 @@ async fn set_autostart(app: tauri::AppHandle, enabled: bool, grant: String) -> R
 }
 
 fn main() {
+    if browser::window_helper() { return; }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             open_main(app);
@@ -364,6 +420,7 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             runtime_status,
+            browser::browser_control,
             research::research_source_open,
             research::research_artifact_open,
             load_settings,
@@ -424,6 +481,7 @@ fn main() {
                 permissions: Permissions::default(),
                 chat: chat::ChatState::default(),
                 last_maintenance: Instant::now(),
+            browser_approvals: Default::default(),
             })));
             let show = MenuItem::with_id(app, "show", "Open Talo", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Talo", true, None::<&str>)?;
@@ -554,6 +612,7 @@ mod dispatch_regression {
             permissions: Permissions::default(),
             chat: chat::ChatState::default(),
             last_maintenance: Instant::now(),
+            browser_approvals: Default::default(),
         }
     }
 

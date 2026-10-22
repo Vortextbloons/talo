@@ -13,7 +13,13 @@ export interface ChatMessage {
   reasoning?: string;
   status: 'completed' | 'generating' | 'cancelled' | 'failed';
   generationId?: string; error?: string;
+  /** Images the user attached to this message. */
+  attachments?: ChatAttachment[];
 }
+/** An image sent with a chat_send call. `data` is standard base64 without the data: prefix. */
+export interface ChatAttachmentInput { name?: string; mimeType: string; data: string }
+/** A stored attachment. `url` is a data URL the composer can render, when it is small enough. */
+export interface ChatAttachment { id: string; name: string; mimeType: string; bytes: number; url?: string }
 export interface ConversationSnapshot {
   conversation: ConversationInfo; messages: ChatMessage[];
   generationId: string | null; state: GenerationState; sequence: number; error?: string;
@@ -51,7 +57,9 @@ export type WorkerEvent =
  * conversation_create({ selection?: ModelSelection }) -> ConversationSnapshot
  * conversation_open({ conversationId }) -> ConversationSnapshot
  * conversation_select_model({ conversationId, selection }) -> ConversationInfo
- * chat_send({ conversationId, generationId, text }) -> void (accepted; events carry result)
+ * chat_send({ conversationId, generationId, text, attachments? }) -> void (accepted; events
+ * carry result). attachments is a bounded list of {name?, mimeType, data}; the host stores
+ * each image under the Pi agent workspace and forwards it to the model as image content.
  * chat_retry({ conversationId, generationId }) -> void (reuse the failed/stopped generation ID)
  * chat_stop({ generationId }) -> void
  * provider_list() -> ConnectionInfo[]
@@ -61,8 +69,10 @@ export type WorkerEvent =
  * Event name: talo://chat, payload ChatEvent.
  * session.open private params: conversationId, sessionPath? (null creates), provider, model,
  * apiKey?, baseUrl?. Result: { sessionId, path, messages: ChatMessage[] }.
- * session.prompt params: conversationId, generationId, text.
- * session.retry params: conversationId, generationId.
+ * session.prompt params: conversationId, generationId, text, images? (each {name, mimeType,
+ * data, path}). The worker sends images natively when the model accepts image input and
+ * otherwise appends the on-disk paths so Pi's own tools can read them.
+ * session.retry params: conversationId, generationId, images?.
  * session.abort params: generationId. session.snapshot returns {messages,state,generationId,sequence}.
  * session.thinking params: conversationId, level ('minimal'|'low'|'medium'|'high'|'xhigh'|'max');
  * result { level } is the effective level after Pi clamps it to the model's registry levels.

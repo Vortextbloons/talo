@@ -37,6 +37,24 @@ CREATE INDEX IF NOT EXISTS chat_messages_conversation
 CREATE INDEX IF NOT EXISTS chat_messages_generation
   ON chat_messages(generation_id);
 
+-- Images the user attached to a turn. The bytes live inside Pi's agent workspace so the
+-- model's own file tools can open them; this table only carries the metadata for display.
+CREATE TABLE IF NOT EXISTS chat_attachments (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  generation_id TEXT,
+  name TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  bytes INTEGER NOT NULL,
+  path TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS chat_attachments_conversation
+  ON chat_attachments(conversation_id);
+CREATE INDEX IF NOT EXISTS chat_attachments_generation
+  ON chat_attachments(generation_id);
+
 CREATE TABLE IF NOT EXISTS chat_generations (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,

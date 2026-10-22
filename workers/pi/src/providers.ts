@@ -379,6 +379,7 @@ export async function describeModels(runtime: ModelRuntime, provider: string): P
     thinkingLevels: getSupportedThinkingLevels(model).map(level => String(level)),
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
+    input: Array.isArray(model.input) ? model.input.map(value => String(value)) : ['text'],
   }));
 }
 

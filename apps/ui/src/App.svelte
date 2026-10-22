@@ -1,4 +1,5 @@
 <script lang="ts">
+  import BrowserPanel from './components/BrowserPanel.svelte';
   import { onMount } from 'svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
@@ -90,6 +91,7 @@
     {#if error}<div class="error" role="alert">{error}<button aria-label="Dismiss error" onclick={()=>error=''}>×</button></div>{/if}
     <div class="content" class:chat-mode={page==='Chat'}>
       {#if page!=='Chat'}<div class="page-heading"><h1>{page}</h1><p>{descriptions[page]}</p></div>{/if}
+      <BrowserPanel visible={page === 'Browser' || page === 'Chat'} compact={page === 'Chat'} />
       {#if page==='Chat'}
         <ChatView onOpenSettings={()=>{page='Settings';}} name={settings.name} tagline={descriptions.Chat} showReasoning={settings.showReasoning === true} />
       {:else if page==='Memory' || page==='Workspaces'}
@@ -106,7 +108,7 @@
           </div>
         </div>
       {:else if page==='Browser'}
-        <section class="empty"><span class="empty-badge"><span class="empty-icon">◎</span></span><h2>A separate space for the web.</h2><p>Talo uses its own Chromium profile. Your everyday browser stays yours.</p><button class="primary" disabled={busy||!isTauri()} onclick={browserStart}>Open Talo browser</button><small>Intelligent browser actions will be added in a later phase.</small></section>
+        <p class="browser-note">Browser profiles and downloads are stored separately from chat transcripts and memory.</p>
       {:else}
         <section class="empty"><span class="empty-badge"><span class="empty-icon">&#9745;</span></span><h2>A clear slate.</h2><p>Your scheduled tasks will live here. Automatic execution is not enabled.</p><span class="coming">Foundation in place</span></section>
       {/if}
@@ -167,7 +169,6 @@
   .page-heading p{max-width:62ch}
   .empty{margin:auto;padding:40px 20px;text-align:center;max-width:520px}
   .empty p{margin:0 0 24px}
-  .empty small{display:block;margin-top:20px;color:var(--muted);font-size:12px}
   .empty-badge{display:grid;place-items:center;width:76px;height:76px;margin:0 auto 28px;border:1px solid var(--line-strong);border-radius:50%;background:var(--paper);box-shadow:0 0 64px 6px rgba(255,212,92,.09),inset 0 0 22px rgba(255,212,92,.05)}
   .empty-icon{font-size:28px;color:var(--yellow-deep)}
   .empty h2{font-size:23px;letter-spacing:-.7px;font-weight:550;margin:0 0 12px}

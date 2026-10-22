@@ -237,5 +237,7 @@ export interface ProviderModelInfo {
   thinkingLevels: ThinkingLevelName[];
   contextWindow: number;
   maxTokens: number;
+  /** Input modalities from Pi's registry, e.g. ['text'] or ['text','image']. */
+  input: string[];
 }
 export interface ProviderModelList { provider: ProviderId; name: string; native: boolean; models: ProviderModelInfo[] }

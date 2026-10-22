@@ -1,22 +1,45 @@
-import { chromium, type BrowserContext } from 'playwright';
 import { createInterface } from 'node:readline';
-import path from 'node:path';
-import { mkdir } from 'node:fs/promises';
-const root=process.env.TALO_VENDOR_DIR;
-const data=process.env.TALO_DATA_DIR;
-if(!root||!data)throw new Error('Host runtime paths required');
-const profile=path.join(data,'browser-profile');await mkdir(profile,{recursive:true});
-let context:BrowserContext|undefined;
-let stopping=false;
-async function stop(){if(stopping)return;stopping=true;await context?.close();process.exit(0);}
-process.on('SIGTERM',()=>void stop());process.on('SIGINT',()=>void stop());
-const input=createInterface({input:process.stdin});input.on('close',()=>void stop());
-input.on('line',line=>{try{if(JSON.parse(line).method==='shutdown')void stop();}catch{/* Ignore malformed lifecycle messages. */}});
-context=await chromium.launchPersistentContext(profile,{executablePath:path.join(root,'runtime/chromium/chrome-win64/chrome.exe'),headless:false,viewport:null,args:[
-  // Keep an open browser from re-downloading components, phoning home or growing its cache forever.
-  '--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-component-update',
-  '--disable-client-side-phishing-detection','--disable-default-apps','--disable-sync','--disable-domain-reliability',
-  '--disable-breakpad','--metrics-recording-only','--disk-cache-size=134217728','--media-cache-size=67108864'
-]});
-context.on('close',()=>{if(!stopping)process.exit(0);});
-process.stdout.write(JSON.stringify({type:'ready',profile})+'\n');
+import { BrowserManager } from './manager.js';
+const root = process.env.TALO_VENDOR_DIR;
+const data = process.env.TALO_DATA_DIR;
+if (!root || !data) throw new Error('Host runtime paths required');
+const send = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');
+const manager = new BrowserManager(root, data, state => send({ type: 'browser_state', state }));
+const requests = new Map<string, AbortController>();
+let stopping = false;
+async function stop() {
+  if (stopping) return;
+  stopping = true;
+  for (const controller of requests.values()) controller.abort();
+  await manager.dispose(); process.exit(0);
+}
+await manager.acquire();
+const input = createInterface({ input: process.stdin });
+input.on('close', () => void stop());
+input.on('line', line => {
+  if (line.length > 64 * 1024 || stopping) return;
+  let value: any; try { value = JSON.parse(line); } catch { return; }
+  if (value.method === 'shutdown') { void stop(); return; }
+  if (value.method === 'cancel') { requests.get(String(value.params?.requestId))?.abort(); return; }
+  const id = String(value.id ?? ''); if (!id || requests.has(id) || requests.size >= 8) return;
+  const controller = new AbortController(); requests.set(id, controller);
+  void (async () => {
+    try {
+      let result;
+      if (value.method === 'state') result = await manager.state();
+      else if (value.method === 'control') {
+        const action = value.params?.action;
+        if (action === 'stop') { await manager.stop(); result = await manager.state(); }
+        else if (action === 'watch') result = await manager.execute({ name: 'browser_handoff', arguments: { action: 'watch' } });
+        else if (['open', 'take_over', 'return', 'pause'].includes(action)) result = await manager.handoff(action === 'return' ? 'agent' : action === 'pause' ? 'paused' : 'human');
+        else throw new Error('Unknown browser control.');
+      } else if (value.method === 'tools/call') result = await manager.execute(value.params, controller.signal);
+      else throw new Error('Unknown browser request.');
+      send({ id, result });
+    } catch (error) { send({ id, error: { message: value.params?.name === 'browser_ai' ? 'Browser AI failed. Use a supported configured provider and retry.' : error instanceof Error ? error.message.slice(0, 500) : 'Browser operation failed.' } }); }
+    finally { requests.delete(id); }
+  })();
+});
+process.on('SIGTERM', () => void stop()); process.on('SIGINT', () => void stop());
+process.on('uncaughtException', () => void stop()); process.on('unhandledRejection', () => void stop());
+send({ type: 'ready' });

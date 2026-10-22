@@ -54,6 +54,7 @@ impl std::error::Error for Error {}
 #[derive(Debug)]
 pub enum WorkerSignal {
     Web(Value),
+    Browser(Value),
     Ready,
     Sleeping,
     Error(String),
@@ -87,17 +88,12 @@ struct Worker {
     eof_at: Option<Instant>,
 }
 
-struct ServiceChild {
-    child: Child,
-    stdin: Option<ChildStdin>,
-}
-
 pub struct Supervisor {
+    browser: Option<crate::browser::Browser>,
     research: Option<crate::research::Research>,
     pub root: PathBuf,
     pub data: PathBuf,
     pi: Option<Worker>,
-    services: HashMap<String, ServiceChild>,
     failures: HashMap<String, String>,
     /// Runtime files cannot appear while the host runs, so probe them once.
     dependencies: Option<Value>,
@@ -113,11 +109,11 @@ pub struct Supervisor {
 impl Supervisor {
     pub fn new(root: PathBuf, data: PathBuf) -> Self {
         Self {
+            browser: None,
             research: None,
             root,
             data,
             pi: None,
-            services: HashMap::new(),
             failures: HashMap::new(),
             dependencies: None,
             deferred: VecDeque::new(),
@@ -173,18 +169,7 @@ impl Supervisor {
                 }
             }
         }
-        self.services
-            .retain(|id, service| match service.child.try_wait() {
-                Ok(Some(status)) => {
-                    if status.success() {
-                        self.failures.remove(id);
-                    } else {
-                        self.failures.insert(id.clone(), status.to_string());
-                    }
-                    false
-                }
-                _ => true,
-            });
+
     }
 
     pub fn status(&mut self) -> Value {
@@ -193,9 +178,9 @@ impl Supervisor {
             let running = if id == "pi" {
                 self.pi.is_some()
             } else {
-                self.services.contains_key(id)
+                self.browser.as_ref().is_some_and(|b| b.state.lock().ok().is_some_and(|s| s["state"] != "crashed" && s["state"] != "stopped"))
             };
-            if running {
+            if id == "browser" && self.browser.as_ref().is_some_and(|b| b.state.lock().ok().is_some_and(|s| s["state"] == "crashed")) { "failed" } else if running {
                 "running"
             } else if self.failures.contains_key(id) {
                 "failed"
@@ -215,7 +200,7 @@ impl Supervisor {
             "mcpAdapter":root.join("bundle/node_modules/pi-mcp-adapter/package.json").is_file()
             })
         });
-        json!({"database":"ready", "services":services, "dependencies":dependencies.clone()})
+        json!({"database":"ready", "services":services, "dependencies":dependencies.clone(),"browser":self.browser.as_ref().and_then(|b| b.state.lock().ok().map(|s| s.clone())).unwrap_or(json!({"state":"stopped","owner":"paused","tabs":[],"busy":false}))})
     }
 
     pub fn start(&mut self, id: &str) -> Result<(), String> {
@@ -227,12 +212,7 @@ impl Supervisor {
                 }
                 self.spawn_pi()
             }
-            "browser" => {
-                if self.services.contains_key(id) {
-                    return Ok(());
-                }
-                self.spawn_service(id)
-            }
+            "browser" => { self.ensure_browser()?.request_ui("open")?; Ok(()) }
             _ => Err("Unknown managed service".into()),
         }
     }
@@ -366,87 +346,27 @@ impl Supervisor {
         Ok(())
     }
 
-    fn spawn_service(&mut self, id: &str) -> Result<(), String> {
-        let script = match id {
-            "browser" => "services/browser/src/main.js",
-            _ => return Err("Unknown managed service".into()),
-        };
-        let node = self.root.join("runtime/node/node.exe");
-        if !node.is_file() {
-            return Err("Bundled Node runtime is missing; run npm run vendor".into());
-        }
-        let logs = self.data.join("logs");
-        fs::create_dir_all(&logs).map_err(|error| error.to_string())?;
-        let out = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(logs.join(format!("{id}.jsonl")))
-            .map_err(|error| error.to_string())?;
-        let err = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(logs.join(format!("{id}.stderr.log")))
-            .map_err(|error| error.to_string())?;
-        let mut command = Command::new(&node);
-        command
-            .arg(self.root.join("bundle").join(script))
-            .current_dir(self.root.join("bundle"))
-            .env("TALO_DATA_DIR", &self.data)
-            .env("TALO_VENDOR_DIR", &self.root)
-            .env("TALO_HOST_MODE", "1")
-            .env_remove("NODE_OPTIONS")
-            .env_remove("NODE_PATH")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::from(out))
-            .stderr(Stdio::from(err));
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
-        }
-        #[cfg(windows)]
-        if self.job.is_none() {
-            return Err("Unable to create worker process containment job".into());
-        }
-        let mut child = command.spawn().map_err(|error| error.to_string())?;
-        #[cfg(windows)]
-        if let Err(error) = self.job.as_ref().unwrap().assign(&child) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error.to_string());
-        }
-        let stdin = child.stdin.take();
-        self.failures.remove(id);
-        self.services
-            .insert(id.into(), ServiceChild { child, stdin });
-        Ok(())
+    pub fn browser_running(&mut self) -> bool { self.browser.as_mut().is_some_and(|b| b.running()) }
+    pub fn ensure_browser(&mut self) -> Result<&mut crate::browser::Browser, String> {
+        if !self.browser_running() || self.browser.as_ref().is_some_and(|b| b.state.lock().ok().is_some_and(|s| s["state"] == "crashed")) { self.browser = None; self.browser = Some(crate::browser::Browser::spawn(&self.root, &self.data)?); }
+        Ok(self.browser.as_mut().unwrap())
+    }
+    pub fn relay_browser(&mut self, message: Value) {
+        if let Some(pi) = self.pi.as_mut() { let _ = writeln!(pi.stdin, "{}", json!({"type":"browser_response","message":message})); let _ = pi.stdin.flush(); }
+    }
+    pub fn browser_request(&mut self, message: Value) {
+        if message["method"] == "cancel" && self.browser.is_none() { return; }
+        let id = message["id"].clone(); let epoch = self.worker_epoch;
+        let result = self.ensure_browser().and_then(|browser| browser.send(message, epoch));
+        if let Err(error) = result { self.relay_browser(json!({"id":id,"error":{"message":error}})); }
     }
 
     pub fn stop(&mut self, id: &str) -> Result<(), String> {
+        if id == "browser" { self.browser = None; return Ok(()); }
         if id == "pi" {
             return self.stop_pi();
         }
-        if let Some(mut service) = self.services.remove(id) {
-            if let Some(input) = service.stdin.as_mut() {
-                let _ = writeln!(input, "{{\"id\":\"host-stop\",\"method\":\"shutdown\"}}");
-                let _ = input.flush();
-            }
-            for _ in 0..30 {
-                if service
-                    .child
-                    .try_wait()
-                    .map_err(|error| error.to_string())?
-                    .is_some()
-                {
-                    self.failures.remove(id);
-                    return Ok(());
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            kill_tree(&mut service.child);
-        }
-        self.failures.remove(id);
-        Ok(())
+        Err("Unknown managed service".into())
     }
 
     /// Intentional Pi shutdown. It does not create a failure lifecycle event.
@@ -479,11 +399,9 @@ impl Supervisor {
     }
 
     pub fn stop_all(&mut self) {
+        self.browser = None;
         self.research = None;
         let _ = self.stop_pi();
-        for id in self.services.keys().cloned().collect::<Vec<_>>() {
-            let _ = self.stop(&id);
-        }
     }
 
     /// Stop an idle worker. The caller passes `busy = true` while any generation is live;
@@ -558,6 +476,10 @@ impl Supervisor {
             let (replies, stop) = web.poll();
             if stop { self.research = None; }
             for reply in replies { self.relay_web(reply); }
+        }
+        if let Some(browser) = self.browser.as_mut() {
+            let replies = browser.poll(self.worker_epoch);
+            for reply in replies { self.relay_browser(reply); }
         }
         visible
     }
@@ -652,6 +574,9 @@ fn read_worker(
         let _ = writeln!(log, "{}", describe(&value));
         let _ = log.flush();
         match value.get("type").and_then(Value::as_str) {
+            Some("browser") => {
+                if let Some(message) = value.get("message") { push(WorkerSignal::Browser(message.clone())); }
+            }
             Some("web") => {
                 if let Some(message) = value.get("message") { push(WorkerSignal::Web(message.clone())); }
             }

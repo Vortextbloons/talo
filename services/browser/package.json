@@ -1,1 +1,1 @@
-{"name":"@talo/browser","version":"0.1.0","private":true,"type":"module","dependencies":{"playwright":"1.64.1","@browserbasehq/stagehand":"4.3.0","donsetch":"4.10.1"}}
+{"name":"@talo/browser","version":"0.1.0","private":true,"type":"module","dependencies":{"@browserbasehq/stagehand":"4.3.0","donsetch":"4.10.1","playwright":"1.64.1","zod":"4.4.3"}}

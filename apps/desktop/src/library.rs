@@ -477,6 +477,7 @@ pub fn transcript(path: &str) -> Result<Vec<storage::ChatMessage>> {
             status: status.into(),
             generation_id: None,
             error: None,
+            attachments: None,
         });
     }
     if !header {
@@ -802,6 +803,7 @@ mod tests {
             status: "completed".into(),
             generation_id: None,
             error: None,
+            attachments: None,
         };
         rebuild_projection(&mut db, "c", &[m]).unwrap();
         assert_eq!(

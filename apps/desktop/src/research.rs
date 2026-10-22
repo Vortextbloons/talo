@@ -271,7 +271,7 @@ pub async fn research_source_open(app: tauri::AppHandle, url: String) -> Result<
 }
 
 #[tauri::command]
-pub async fn research_artifact_open(app: tauri::AppHandle, name: String) -> Result<(), String> {
+pub async fn research_artifact_open(app: tauri::AppHandle, name: String, browser: Option<bool>) -> Result<(), String> {
     crate::run_blocking(app, move |app| {
         use tauri::Manager;
         let (id, extension) = name.rsplit_once('.').ok_or("Invalid artifact name")?;
@@ -283,7 +283,7 @@ pub async fn research_artifact_open(app: tauri::AppHandle, name: String) -> Resu
             .path()
             .app_data_dir()
             .map_err(|e| e.to_string())?
-            .join("artifacts/web")
+            .join(if browser.unwrap_or(false) { "artifacts/browser" } else { "artifacts/web" })
             .canonicalize()
             .map_err(|e| e.to_string())?;
         let file = root.join(&name).canonicalize().map_err(|e| e.to_string())?;

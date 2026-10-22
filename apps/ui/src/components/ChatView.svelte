@@ -36,6 +36,17 @@
   let showArchived = $state(false);
   let confirmingDelete = $state<string | null>(null);
   let text = $state('');
+  /* Images waiting in the composer. `data` is base64 for the host, `url` is the preview. */
+  interface DraftImage { id: string; name: string; mimeType: string; bytes: number; data: string; url: string }
+  const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+  const MAX_IMAGES = 4;
+  const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+  let draftImages = $state<DraftImage[]>([]);
+  let attachError = $state('');
+  let dragOver = $state(false);
+  let viewingImage = $state<string | null>(null);
+  let viewingName = $state<string | null>(null);
+  let fileInput = $state<HTMLInputElement>();
   let threadsOpen = $state(initialThreadsOpen());
   function toggleThreads(): void {
     threadsOpen = !threadsOpen;
@@ -101,6 +112,14 @@
     return groups;
   });
   const pickerOptions = $derived(pickerGroups.flatMap(group => group.options));
+  /* Pi reports image input per model; without it the worker hands over the file path. */
+  const imagesSupported = $derived.by(() => {
+    if (!selection) return false;
+    const connection = connected.find(item => item.id === selection.connectionId);
+    if (!connection) return false;
+    const model = modelsFor(connection).find(item => item.id === selection.modelId);
+    return Boolean(model?.input?.includes('image'));
+  });
   const pickerSelected = $derived.by(() => {
     const found = pickerOptions.find(option => option.selected);
     if (found) return found;
@@ -174,16 +193,114 @@
   }
 
   async function submit(): Promise<void> {
-    if (working || chat.sending || !text.trim()) return;
+    const images = draftImages.map(image => ({ name: image.name, mimeType: image.mimeType, data: image.data }));
+    if (working || chat.sending || (!text.trim() && !images.length)) return;
     const value = text;
-    const accepted = await sendMessage(value);
+    const accepted = await sendMessage(value, images);
     if (accepted) {
       text = '';
+      draftImages = [];
+      attachError = '';
       pinned = true;
       await tick();
       resize();
       if (logEl) logEl.scrollTop = logEl.scrollHeight;
     }
+  }
+
+  function removeDraft(id: string): void {
+    draftImages = draftImages.filter(image => image.id !== id);
+    attachError = '';
+  }
+
+  /**
+   * Turns clipboard or dropped files into composer thumbnails. The bytes stay in memory until
+   * send; the host writes them into Pi's workspace so the model can also open the file.
+   */
+  async function addImages(files: File[] | FileList | null): Promise<void> {
+    if (!files) return;
+    attachError = '';
+    for (const file of Array.from(files)) {
+      if (draftImages.length >= MAX_IMAGES) {
+        attachError = `Attach up to ${MAX_IMAGES} images per message.`;
+        break;
+      }
+      const mimeType = (file.type || '').toLowerCase();
+      if (!IMAGE_TYPES.includes(mimeType)) {
+        attachError = 'Images must be PNG, JPEG, WebP or GIF.';
+        continue;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        attachError = 'Images must be 8 MB or smaller.';
+        continue;
+      }
+      const reader = await new Promise<string>(resolve => {
+        const stream = new FileReader();
+        stream.onload = () => resolve(typeof stream.result === 'string' ? stream.result : '');
+        stream.onerror = () => resolve('');
+        stream.readAsDataURL(file);
+      });
+      const comma = reader.indexOf(',');
+      if (comma < 0) {
+        attachError = 'That image could not be read.';
+        continue;
+      }
+      draftImages = [...draftImages, {
+        id: crypto.randomUUID(),
+        name: file.name || `image.${mimeType.split('/')[1]}`,
+        mimeType,
+        bytes: file.size,
+        data: reader.slice(comma + 1),
+        url: reader,
+      }];
+    }
+  }
+
+  /* A page that copies its own rendering pastes HTML with a data: image instead of a file. */
+  function onComposerPaste(event: ClipboardEvent): void {
+    const clipboard = event.clipboardData;
+    if (!clipboard) return;
+    const files = Array.from(clipboard.items)
+      .filter(item => item.kind === 'file' && IMAGE_TYPES.includes((item.type || '').toLowerCase()))
+      .map(item => item.getAsFile())
+      .filter((file): file is File => Boolean(file));
+    if (files.length) {
+      event.preventDefault();
+      void addImages(files);
+      return;
+    }
+    const html = clipboard.getData('text/html');
+    const match = html ? /<img[^>]+src="(data:image\/[a-z]+;base64,[^"]+)"/i.exec(html) : null;
+    if (match) {
+      event.preventDefault();
+      const header = /^data:(image\/[a-z]+);base64,/i.exec(match[1]);
+      if (!header) return;
+      const base64 = match[1].slice(header[0].length);
+      if (base64.length * 0.75 > MAX_IMAGE_BYTES) {
+        attachError = 'Images must be 8 MB or smaller.';
+        return;
+      }
+      if (draftImages.length >= MAX_IMAGES) {
+        attachError = `Attach up to ${MAX_IMAGES} images per message.`;
+        return;
+      }
+      draftImages = [...draftImages, {
+        id: crypto.randomUUID(),
+        name: 'pasted-image',
+        mimeType: header[1].toLowerCase(),
+        bytes: Math.round(base64.length * 0.75),
+        data: base64,
+        url: match[1],
+      }];
+    }
+  }
+
+  function onComposerDrop(event: DragEvent): void {
+    dragOver = false;
+    const files = event.dataTransfer?.files;
+    if (!files?.length) return;
+    event.preventDefault();
+    void addImages(files);
   }
 
   function onComposerKeydown(event: KeyboardEvent): void {
@@ -359,7 +476,7 @@
   }
 </script>
 
-<svelte:window onpointerdown={onWindowPointerDown} onkeydown={(event) => { if (event.key === 'Escape' && confirmingDelete) confirmingDelete = null; }} />
+<svelte:window onpointerdown={onWindowPointerDown} onkeydown={(event) => { if (event.key === 'Escape' && (confirmingDelete || viewingImage)) { confirmingDelete = null; viewingImage = null; } }} />
 
 <div class="chat-layout" class:rail-collapsed={!threadsOpen}>
   <aside class="threads" aria-label="Conversations" inert={!threadsOpen} aria-hidden={!threadsOpen}>
@@ -518,6 +635,22 @@
               {#if message.generationId && chat.research[message.generationId]?.length}
                 <WebResearch items={chat.research[message.generationId]} working={message.status === 'generating'} onCancel={() => void stopGeneration()} />
               {/if}
+              {#if message.attachments?.length}
+                <div class="message-images">
+                  {#each message.attachments as attachment (attachment.id)}
+                    {#if attachment.url}
+                      <button
+                        type="button"
+                        class="message-image"
+                        title={attachment.name}
+                        onclick={() => { viewingImage = attachment.url ?? null; viewingName = attachment.name; }}
+                      ><img src={attachment.url} alt={attachment.name} loading="lazy" /></button>
+                    {:else}
+                      <span class="message-image missing" title="Too large to preview here">{attachment.name}</span>
+                    {/if}
+                  {/each}
+                </div>
+              {/if}
               {#if showReasoning && message.reasoning}
                 <Reasoning
                   text={message.reasoning}
@@ -546,19 +679,48 @@
     {/if}
 
     {#if chat.phase === 'ready'}
-    <form class="composer" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
+    <form
+      class="composer"
+      class:dragging={dragOver}
+      onsubmit={(event) => { event.preventDefault(); void submit(); }}
+      ondragover={(event) => { if (!event.dataTransfer?.types.includes('Files')) return; event.preventDefault(); dragOver = true; }}
+      ondragleave={() => { dragOver = false; }}
+      ondrop={onComposerDrop}
+    >
       {#if active?.state === 'failed' && !chat.sending}
         <div class="composer-note">That reply did not finish. <button type="button" disabled={chat.preview} onclick={() => { void retryGeneration(); }}>Try again</button></div>
+      {/if}
+      {#if draftImages.length}
+        <div class="drafts" role="list" aria-label="Attached images">
+          {#each draftImages as image (image.id)}
+            <div class="draft" role="listitem">
+              <img src={image.url} alt={image.name} />
+              <button
+                type="button"
+                class="draft-remove"
+                aria-label={`Remove ${image.name}`}
+                disabled={working}
+                onclick={() => removeDraft(image.id)}
+              >×</button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+      {#if attachError}
+        <p class="attach-note" role="alert">{attachError}</p>
+      {:else if draftImages.length && !imagesSupported}
+        <p class="attach-note">This model can’t see images, so Talo names the file path in Pi’s workspace instead.</p>
       {/if}
       <textarea
         bind:this={composerEl}
         bind:value={text}
         aria-label="Message to Talo"
-        placeholder={placeholder}
+        placeholder={draftImages.length ? 'Add a note about the image…' : placeholder}
         rows="1"
         disabled={!connected.length}
         oninput={resize}
         onkeydown={onComposerKeydown}
+        onpaste={onComposerPaste}
       ></textarea>
       <div class="composer-foot">
         <div class="model-picker" bind:this={pickerEl}>
@@ -667,9 +829,28 @@
             >{cancelling ? 'Stopping…' : 'Stop'}</button>
           {:else}
             <button
+              type="button"
+              class="attach"
+              title="Attach an image"
+              aria-label="Attach an image"
+              disabled={!connected.length || working || chat.sending || draftImages.length >= MAX_IMAGES}
+              onclick={() => fileInput?.click()}
+            ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 15.5V10a2.5 2.5 0 0 0-5 0v6a4.5 4.5 0 0 0 9 0V8a2 2 0 1 0-4 0v7" /><path d="M17 6.5h1a3 3 0 0 1 3 3v5" /></svg></button>
+            <input
+              class="file-input"
+              type="file"
+              accept={IMAGE_TYPES.join(',')}
+              multiple
+              bind:this={fileInput}
+              onchange={(event) => {
+                const input = event.currentTarget;
+                void addImages(input.files).then(() => { input.value = ''; });
+              }}
+            />
+            <button
               type="submit"
               class="send"
-              disabled={!connected.length || !selection || !selectionAvailable || !text.trim() || chat.sending || chat.preview}
+              disabled={!connected.length || !selection || !selectionAvailable || (!text.trim() && !draftImages.length) || chat.sending || chat.preview}
               aria-label={chat.sending ? 'Sending message' : 'Send message'}
               aria-busy={chat.sending}
             ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 19.5V5.5" /><path d="m5.5 11.5 6.5-6.5 6.5 6.5" /></svg></button>
@@ -680,6 +861,14 @@
     {/if}
   </section>
 </div>
+
+{#if viewingImage}
+  <div class="lightbox" role="dialog" aria-modal="true" aria-label="Image preview">
+    <button type="button" class="lightbox-backdrop" aria-label="Close preview" onclick={() => { viewingImage = null; }}></button>
+    <img src={viewingImage} alt={viewingName ?? 'Attachment'} />
+    <button type="button" class="lightbox-close" aria-label="Close preview" onclick={() => { viewingImage = null; }}>×</button>
+  </div>
+{/if}
 
 <style>
   /* One full-height surface: the rail holds threads, the column holds the conversation. */
@@ -778,7 +967,26 @@
   .message-error{margin-top:9px;font-size:11.5px;color:var(--error-text);line-height:1.6}
   .retry{background:transparent;border:1px solid var(--line-strong);color:var(--text);font-size:11px;padding:6px 11px;border-radius:7px;margin-top:11px}
   .retry:hover:not(:disabled){border-color:var(--yellow-deep);color:var(--yellow)}
-  .composer{flex-shrink:0;border:1px solid var(--line-strong);border-radius:15px;padding:15px 16px 13px;background:var(--paper);box-shadow:0 12px 32px var(--shadow);margin-top:10px}
+  .composer{flex-shrink:0;border:1px solid var(--line-strong);border-radius:15px;padding:15px 16px 13px;background:var(--paper);box-shadow:0 12px 32px var(--shadow);margin-top:10px;transition:border-color .15s ease,background .15s ease}
+  /* A drop anywhere on the composer takes the file instead of the browser opening it. */
+  .composer.dragging{border-color:var(--yellow-deep);background:#1d1c16}
+  .drafts{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 11px}
+  .draft{position:relative;width:62px;height:62px;border:1px solid var(--line-strong);border-radius:10px;overflow:hidden;background:var(--soft)}
+  .draft img{width:100%;height:100%;object-fit:cover;display:block}
+  .draft-remove{position:absolute;top:2px;right:2px;width:17px;height:17px;display:grid;place-items:center;padding:0;border:1px solid rgba(0,0,0,.45);border-radius:50%;background:rgba(11,11,10,.78);color:var(--text);font-size:11px;line-height:1}
+  .draft-remove:hover:not(:disabled){background:var(--error-bg);color:var(--error-text);border-color:var(--error-line)}
+  .attach-note{font-size:10.5px;color:var(--muted);margin:0 2px 9px;line-height:1.5}
+  .file-input{display:none}
+  .message-images{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:9px}
+  .message-image{padding:0;border:1px solid var(--line-strong);border-radius:9px;overflow:hidden;background:var(--soft);width:132px;height:132px;display:block;line-height:0;transition:border-color .15s ease}
+  .message-image img{width:100%;height:100%;object-fit:cover;display:block}
+  .message-image:hover:not(:disabled){border-color:var(--yellow-deep)}
+  .message-image.missing{width:auto;height:auto;padding:7px 10px;font-size:10.5px;color:var(--faint);line-height:1.4;cursor:default}
+  .message.user .message-images{justify-content:flex-end}
+  .lightbox{position:fixed;inset:0;z-index:60;background:var(--overlay);backdrop-filter:blur(6px);display:grid;place-items:center;padding:40px}
+  .lightbox-backdrop{position:absolute;inset:0;padding:0;border:0;background:transparent;cursor:default}
+  .lightbox img{position:relative;max-width:100%;max-height:100%;border-radius:12px;box-shadow:0 30px 80px rgba(0,0,0,.6)}
+  .lightbox-close{position:absolute;top:18px;right:18px;width:32px;height:32px;padding:0;display:grid;place-items:center;font-size:17px;border-radius:50%;border:1px solid var(--line-strong);background:var(--paper);color:var(--text)}
   .composer:focus-within{border-color:#4b4b40}
   .composer textarea{display:block;border:0;resize:none;background:transparent;color:var(--text);width:100%;height:54px;min-height:54px;max-height:220px;font-size:15px;line-height:1.65;padding:2px 2px 8px;overflow-y:auto}
   .composer-note{font-size:11px;color:var(--error-text);margin:0 2px 9px;padding-bottom:9px;border-bottom:1px solid var(--line)}
@@ -827,6 +1035,9 @@
   .send-area{display:flex;align-items:center;gap:11px;flex-shrink:0}
   .composer-hint{font-size:10px;color:var(--faint);white-space:nowrap}
   .send{background:var(--yellow);color:var(--black);border:0;border-radius:9px;width:34px;height:32px;padding:0;display:grid;place-items:center;flex-shrink:0;line-height:0;transition:background .15s ease}
+  .attach{background:transparent;border:1px solid transparent;border-radius:9px;width:30px;height:32px;padding:0;display:grid;place-items:center;color:var(--faint);flex-shrink:0;transition:color .15s ease,border-color .15s ease,background .15s ease}
+  .attach svg{width:16px;height:16px}
+  .attach:hover:not(:disabled){color:var(--text);border-color:var(--line-strong);background:var(--soft)}
   .send svg{width:16px;height:16px;display:block}
   .send[aria-busy="true"] svg{animation:lift 1.1s ease-in-out infinite}
   .send:hover:not(:disabled){background:#ffdd7f}

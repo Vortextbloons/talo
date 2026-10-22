@@ -1,6 +1,8 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
+  ChatAttachment,
+  ChatAttachmentInput,
   ChatBootstrap,
   ChatEvent,
   ChatMessage,
@@ -491,6 +493,7 @@ export function modelsFor(connection: ConnectionInfo): ProviderModelInfo[] {
       thinkingLevels: [],
       contextWindow: 0,
       maxTokens: 0,
+      input: ['text'],
     }];
   }
   return [];
@@ -618,24 +621,42 @@ export async function setThinkingLevel(level: ThinkingLevelName): Promise<void> 
   }
 }
 
-function noteFirstMessage(conversationId: string, text: string): void {
+function noteFirstMessage(conversationId: string, text: string, hasImages = false): void {
   const conversation = chat.active;
   if (!conversation || conversation.conversation.id !== conversationId) return;
   const current = conversation.conversation.title;
   if (current && current !== 'New conversation') return;
   const compact = text.split(/\s+/).filter(Boolean).join(' ');
-  if (!compact) return;
+  if (!compact) {
+    // An image-only first turn still deserves a title the thread list can read.
+    if (!hasImages) return;
+    conversation.conversation.title = 'Photo';
+    const info = chat.conversations.find(item => item.id === conversationId);
+    if (info) info.title = 'Photo';
+    return;
+  }
   const title = compact.length > 60 ? compact.slice(0, 60) + '…' : compact;
   conversation.conversation.title = title;
   const info = chat.conversations.find(item => item.id === conversationId);
   if (info) info.title = title;
 }
 
-function appendOptimistic(conversationId: string, generationId: string, text: string): void {
+function appendOptimistic(
+  conversationId: string,
+  generationId: string,
+  text: string,
+  attachments: ChatAttachment[] = [],
+): void {
   const conversation = chat.active;
   if (!conversation || conversation.conversation.id !== conversationId) return;
   conversation.messages.push(
-    { id: `local-user-${generationId}`, role: 'user', text, status: 'completed' },
+    {
+      id: `local-user-${generationId}`,
+      role: 'user',
+      text,
+      status: 'completed',
+      ...(attachments.length ? { attachments } : {}),
+    },
     {
       id: `local-assistant-${generationId}`,
       role: 'assistant',
@@ -661,9 +682,9 @@ function rollbackOptimistic(generationId: string): void {
   }
 }
 
-export async function sendMessage(rawText: string): Promise<boolean> {
+export async function sendMessage(rawText: string, attachments: ChatAttachmentInput[] = []): Promise<boolean> {
   const text = rawText.trim();
-  if (!text) return false;
+  if (!text && !attachments.length) return false;
   if (!isTauri()) {
     chat.error = PREVIEW_MESSAGE;
     return false;
@@ -707,13 +728,22 @@ export async function sendMessage(rawText: string): Promise<boolean> {
     }
 
     generationId = newId();
-    appendOptimistic(conversation.conversation.id, generationId, text);
+    // Previews come straight from the composer so the picture appears with the bubble.
+    const previews: ChatAttachment[] = attachments.map((attachment, index) => ({
+      id: `local-image-${generationId}-${index}`,
+      name: attachment.name || 'image',
+      mimeType: attachment.mimeType,
+      bytes: Math.round((attachment.data.length * 3) / 4),
+      url: `data:${attachment.mimeType};base64,${attachment.data}`,
+    }));
+    appendOptimistic(conversation.conversation.id, generationId, text, previews);
     await invoke('chat_send', {
       conversationId: conversation.conversation.id,
       generationId,
       text,
+      attachments,
     });
-    noteFirstMessage(conversation.conversation.id, text);
+    noteFirstMessage(conversation.conversation.id, text, previews.length > 0);
     return true;
   } catch (value) {
     if (generationId) rollbackOptimistic(generationId);

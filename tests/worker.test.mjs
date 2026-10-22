@@ -175,7 +175,7 @@ test('real Pi streaming, authenticated provider validation, cancellation, and re
     assert.ok(chatRequest.body.messages.some(message =>
       message.role === 'system' && JSON.stringify(message.content).includes('You are Talo')),
     'chat should use the Talo persona');
-    assert.deepEqual(chatRequest.body.tools.map(tool => tool.function.name).sort(), ['web_crawl','web_fetch','web_screenshot','web_search'], 'only the four built-in research tools are registered');
+    assert.deepEqual(chatRequest.body.tools.map(tool => tool.function.name).sort(), ['browser_ai','browser_download','browser_handoff','browser_interact','browser_open','browser_screenshot','browser_snapshot','browser_tabs','web_crawl','web_fetch','web_screenshot','web_search'], 'research and dedicated browser tools are registered without built-in filesystem or shell tools');
     assert.ok(!chatRequest.body.messages.some(message => message.role === 'tool'),
       'worker must not send tool results');
     assert.equal(chatRequest.body.stream, true);

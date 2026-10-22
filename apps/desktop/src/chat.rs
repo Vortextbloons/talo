@@ -5,6 +5,7 @@
 //! mutating generations for one conversation. Worker events carry complete accumulated text;
 //! the host persists and re-emits them with its own monotonic sequence.
 use crate::{
+    attachments,
     credentials::{self, Secret},
     run_blocking,
     storage::{
@@ -17,6 +18,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::path::Path;
 use tauri::{AppHandle, Emitter, Manager};
 
 pub const EVENT_NAME: &str = "talo://chat";
@@ -214,7 +216,7 @@ impl ChatState {
         signal: WorkerSignal,
     ) {
         match signal {
-            WorkerSignal::Web(_) => {}, // handled by the supervisor before chat projection
+            WorkerSignal::Web(_) | WorkerSignal::Browser(_) => {}, // handled by the supervisor before chat projection
             WorkerSignal::Ready => emit_worker(app, WorkerState::Ready, None),
             WorkerSignal::Sleeping => {
                 self.sessions.clear();
@@ -437,6 +439,7 @@ impl ChatState {
             status: state.message_status().into(),
             generation_id: Some(generation_id.to_string()),
             error: error.clone(),
+            attachments: None,
         });
         emit_generation(
             app,
@@ -593,8 +596,9 @@ fn snapshot(
     chat: &ChatState,
     conversation: ConversationInfo,
 ) -> Result<ConversationSnapshot, String> {
-    let messages =
+    let mut messages =
         storage::list_messages(db, &conversation.id).map_err(|error| error.to_string())?;
+    attach_images(db, &conversation.id, &mut messages);
     let active = chat
         .active
         .iter()
@@ -629,6 +633,53 @@ fn snapshot(
 
 fn storage_error(error: storage::Error) -> String {
     error.to_string()
+}
+
+/// Puts each turn's images back on the message that carried them. Rows are keyed by the
+/// generation id, which survives a projection rebuild, so a reopened chat still shows them.
+fn attach_images(db: &rusqlite::Connection, conversation_id: &str, messages: &mut [ChatMessage]) {
+    let stored = match storage::list_attachments(db, conversation_id) {
+        Ok(stored) if !stored.is_empty() => stored,
+        _ => return,
+    };
+    let mut by_generation: HashMap<String, Vec<storage::AttachmentInfo>> = HashMap::new();
+    for row in stored {
+        let Some(generation_id) = row.generation_id.clone() else {
+            continue;
+        };
+        let mut info = row.info;
+        info.url = attachments::display_url(Path::new(&row.path), &info.mime_type, info.bytes);
+        by_generation.entry(generation_id).or_default().push(info);
+    }
+    for message in messages.iter_mut() {
+        if message.role != "user" {
+            continue;
+        }
+        let Some(generation_id) = message.generation_id.as_deref() else {
+            continue;
+        };
+        if let Some(images) = by_generation.get(generation_id) {
+            message.attachments = Some(images.clone());
+        }
+    }
+}
+
+/// Re-reads a turn's images from disk so a retry reaches the model with the same pictures.
+fn images_for_generation(db: &rusqlite::Connection, conversation_id: &str, generation_id: &str) -> Vec<Value> {
+    storage::list_attachments(db, conversation_id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|row| row.generation_id.as_deref() == Some(generation_id))
+        .filter_map(|row| {
+            let bytes = std::fs::read(&row.path).ok()?;
+            Some(json!({
+                "name": row.info.name,
+                "mimeType": row.info.mime_type,
+                "data": attachments::encode_base64(&bytes),
+                "path": row.path,
+            }))
+        })
+        .collect()
 }
 
 fn validate_id(value: &str, label: &str) -> Result<String, String> {
@@ -919,12 +970,23 @@ fn conversation_thinking_inner(
     Ok(effective)
 }
 
+/// An image the composer attached to a message. `data` is base64 without the data: prefix.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentInput {
+    pub mime_type: String,
+    pub data: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
 fn chat_send_inner(
     app: &AppHandle,
     host: &mut Host,
     conversation_id: String,
     generation_id: String,
     text: String,
+    attachments: Vec<AttachmentInput>,
 ) -> Result<(), String> {
     let Host {
         db,
@@ -940,17 +1002,29 @@ fn chat_send_inner(
             "A response is already in progress. Stop it before sending another message.".into(),
         );
     }
-    if text.trim().is_empty() {
+    if text.trim().is_empty() && attachments.is_empty() {
         return Err("Write a message first".into());
     }
     if text.len() > MAX_MESSAGE_BYTES {
         return Err("That message is too long".into());
     }
+    // Validate before the generation row exists so a bad image never leaves a stuck turn.
+    let validated = attachments::validate(
+        attachments
+            .iter()
+            .map(|image| (image.mime_type.as_str(), image.data.as_str(), image.name.as_deref())),
+    )?;
+    let workspace = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("agent-workspace");
+    let stored = attachments::store(&workspace, &conversation_id, validated)?;
     let generation_id = validate_id(&generation_id, "generation id")?;
     let conversation = storage::get_conversation(db, &conversation_id).map_err(storage_error)?;
     let (connection, model_id) = load_connection(db, &conversation)?;
     let title = if conversation.title == "New conversation" || conversation.title.is_empty() {
-        title_from(&text)
+        title_from(&text).or_else(|| stored.first().map(|image| image.name.clone()))
     } else {
         None
     };
@@ -966,6 +1040,21 @@ fn chat_send_inner(
         },
     )
     .map_err(storage_error)?;
+    let rows: Vec<storage::NewAttachment> = stored
+        .iter()
+        .map(|image| storage::NewAttachment {
+            id: image.id.clone(),
+            conversation_id: conversation_id.clone(),
+            generation_id: generation_id.clone(),
+            name: image.name.clone(),
+            mime_type: image.mime_type.clone(),
+            bytes: image.bytes as i64,
+            path: image.path.to_string_lossy().to_string(),
+        })
+        .collect();
+    if let Err(error) = storage::insert_attachments(db, &rows) {
+        return Err(storage_error(error));
+    }
     chat.active.insert(
         generation_id.clone(),
         ActiveGeneration {
@@ -1013,6 +1102,15 @@ fn chat_send_inner(
         "generationId": generation_id,
         "text": text,
         "context": crate::library::context(db,&conversation,&text).unwrap_or_default(),
+        "images": stored
+            .iter()
+            .map(|image| json!({
+                "name": image.name,
+                "mimeType": image.mime_type,
+                "data": image.data,
+                "path": image.path.to_string_lossy(),
+            }))
+            .collect::<Vec<_>>(),
     });
     match supervisor.request("session.prompt", params, PROMPT_TIMEOUT) {
         Ok(_) => {}
@@ -1101,13 +1199,14 @@ fn chat_retry_inner(
     let reference_context =
         crate::library::context(db, &conversation, &plan.user_text).unwrap_or_default();
     let params = if had_sqlite_session {
-        json!({"conversationId": conversation_id, "generationId": generation_id, "context":reference_context})
+        json!({"conversationId": conversation_id, "generationId": generation_id, "context":reference_context, "images": images_for_generation(db, &conversation_id, &generation_id)})
     } else {
         json!({
             "conversationId": conversation_id,
             "generationId": generation_id,
             "text": plan.user_text,
             "context": reference_context,
+            "images": images_for_generation(db, &conversation_id, &generation_id),
         })
     };
     let method = if had_sqlite_session {
@@ -1408,13 +1507,21 @@ pub async fn chat_send(
     conversation_id: String,
     generation_id: String,
     text: String,
+    attachments: Option<Vec<AttachmentInput>>,
 ) -> Result<(), String> {
     run_blocking(app, move |app| {
         let shared = app.state::<Shared>();
         let mut host = shared
             .lock()
             .map_err(|_| "Talo state is unavailable".to_string())?;
-        chat_send_inner(app, &mut host, conversation_id, generation_id, text)
+        chat_send_inner(
+            app,
+            &mut host,
+            conversation_id,
+            generation_id,
+            text,
+            attachments.unwrap_or_default(),
+        )
     })
     .await
 }
@@ -1558,6 +1665,7 @@ mod tests {
             permissions: crate::permissions::Permissions::default(),
             chat: ChatState::default(),
             last_maintenance: std::time::Instant::now(),
+            browser_approvals: std::collections::HashMap::new(),
         };
         host.chat.active.insert(
             "g1".into(),
