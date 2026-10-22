@@ -480,6 +480,52 @@
       && !working;
   }
 
+  /** Finished assistant turns that carry no reply (the tool-call steps of a generation)
+    * collapse into one "worked through it" row; expanding it reveals each turn's reasoning. */
+  type RenderedTurn =
+    | { kind: 'message'; message: ChatMessage; index: number; firstOfGeneration: boolean }
+    | { kind: 'turns'; id: string; turns: ChatMessage[]; firstOfGeneration: boolean };
+
+  let expandedTurns = $state<Record<string, boolean>>({});
+  function toggleTurns(id: string): void {
+    expandedTurns[id] = !expandedTurns[id];
+  }
+
+  function isFirstOfGeneration(index: number): boolean {
+    const message = messages[index];
+    if (!message?.generationId) return false;
+    return !messages.slice(0, index).some(previous => previous.role === 'assistant' && previous.generationId === message.generationId);
+  }
+
+  const renderedTurns = $derived.by(() => {
+    const items: RenderedTurn[] = [];
+    let pending: { turns: ChatMessage[]; head: number } | null = null;
+    const flush = (): void => {
+      if (!pending) return;
+      if (pending.turns.length >= 2) {
+        items.push({ kind: 'turns', id: `turns-${pending.turns[0].id}`, turns: pending.turns, firstOfGeneration: isFirstOfGeneration(pending.head) });
+      } else {
+        items.push({ kind: 'message', message: pending.turns[0], index: pending.head, firstOfGeneration: isFirstOfGeneration(pending.head) });
+      }
+      pending = null;
+    };
+    for (let index = 0; index < messages.length; index++) {
+      const message = messages[index];
+      // Only quiet, settled steps group. The live turn, anything with a reply, an error
+      // or attachments stays a full row so streaming and status tags are never hidden.
+      const quiet = message.role === 'assistant' && message.status === 'completed'
+        && !message.text && !message.error && !message.attachments?.length;
+      if (quiet) {
+        if (!pending) pending = { turns: [], head: index };
+        pending.turns.push(message);
+        continue;
+      }
+      flush();
+      items.push({ kind: 'message', message, index, firstOfGeneration: isFirstOfGeneration(index) });
+    }
+    flush();
+    return items;
+  });
 
 </script>
 
@@ -636,8 +682,36 @@
       </div>
     {:else}
       <div class="log" bind:this={logEl} onscroll={onLogScroll} aria-live="polite" aria-busy={working} role="log">
-        {#each messages as message, index (message.id)}
-          <article class="message {message.role}" class:streaming={message.status === 'generating'}>
+        {#each renderedTurns as item (item.kind === 'turns' ? item.id : item.message.id)}
+          {#if item.kind === 'turns'}
+            <article class="message assistant turns-group">
+              <img class="avatar" src={mascot} alt="" aria-hidden="true" />
+              <div class="message-body">
+                <div class="message-role"><span>{agentName}</span></div>
+                {#if item.firstOfGeneration && item.turns[0].generationId && chat.research[item.turns[0].generationId]?.length}
+                  <WebResearch items={chat.research[item.turns[0].generationId]} working={chat.active?.generationId === item.turns[0].generationId} onCancel={() => void stopGeneration()} />
+                {/if}
+                {#if showReasoning && item.turns.some(turn => turn.reasoning)}
+                  <button type="button" class="turns-toggle" aria-expanded={Boolean(expandedTurns[item.id])} onclick={() => toggleTurns(item.id)}>
+                    <svg class="turns-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9.5 6 6 6-6" /></svg>
+                    Worked through it · {item.turns.length} steps
+                  </button>
+                  {#if expandedTurns[item.id]}
+                    <div class="turns-list">
+                      {#each item.turns as turn (turn.id)}
+                        {#if turn.reasoning}<Reasoning text={turn.reasoning} thinking={false} hasReply={false} />{/if}
+                      {/each}
+                    </div>
+                  {/if}
+                {:else}
+                  <p class="turns-summary">Worked through it in {item.turns.length} steps.</p>
+                {/if}
+              </div>
+            </article>
+          {:else}
+            {@const message = item.message}
+            {@const index = item.index}
+            <article class="message {message.role}" class:streaming={message.status === 'generating'}>
             {#if message.role === 'assistant'}
               <img class="avatar" class:busy={message.status === 'generating'} src={mascot} alt="" aria-hidden="true" />
             {/if}
@@ -689,6 +763,7 @@
               {/if}
             </div>
           </article>
+          {/if}
         {/each}
       </div>
     {/if}
@@ -1003,6 +1078,15 @@
   .message-error{margin-top:9px;font-size:11.5px;color:var(--error-text);line-height:1.6}
   .retry{background:transparent;border:1px solid var(--line-strong);color:var(--text);font-size:11px;padding:6px 11px;border-radius:7px;margin-top:11px}
   .retry:hover:not(:disabled){border-color:var(--yellow-deep);color:var(--yellow)}
+  /* Collapsed tool-call turns: one quiet row, expanding to the individual turns' reasoning. */
+  .turns-group .message-role{margin-bottom:4px}
+  .turns-toggle{display:inline-flex;align-items:center;gap:6px;background:transparent;border:0;padding:2px 0;color:var(--faint);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
+  .turns-toggle:hover{color:var(--yellow-deep)}
+  .turns-chevron{width:11px;height:11px;transition:transform .15s ease}
+  .turns-toggle[aria-expanded="true"] .turns-chevron{transform:rotate(180deg)}
+  .turns-list{margin-top:10px}
+  .turns-list :global(.reasoning){margin:0 0 10px}
+  .turns-summary{margin:2px 0 0;font-size:12px;color:var(--faint)}
   .composer{flex-shrink:0;border:1px solid var(--line-strong);border-radius:15px;padding:15px 16px 13px;background:var(--paper);box-shadow:0 12px 32px var(--shadow);margin-top:10px;transition:border-color .15s ease,background .15s ease}
   /* A drop anywhere on the composer takes the file instead of the browser opening it. */
   .composer.dragging{border-color:var(--yellow-deep);background:#1d1c16}
