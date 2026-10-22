@@ -16,7 +16,7 @@
   // every delta is quadratic in the response length. Parse at most every 150ms while it
   // changes; the trailing parse always catches up, so settled text is fully rendered.
   const PARSE_INTERVAL = 150;
-  let tree = $state<Block[]>([]);
+  let tree = $state.raw<Block[]>([]);
   let lastParse = 0;
 
   $effect(() => {

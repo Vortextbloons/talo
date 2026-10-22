@@ -44,7 +44,7 @@ impl Browser {
                 let mut bytes = Vec::new();
                 let mut limited = std::io::Read::take(&mut reader, 1024 * 1024 + 1);
                 match limited.read_until(b'\n', &mut bytes) { Ok(0) | Err(_) => break, _ if bytes.len() > 1024 * 1024 => break, _ => {} }
-                let Ok(value) = serde_json::from_slice::<Value>(&bytes) else { continue };
+                let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) else { continue };
                 if value["type"] == "browser_state" {
                     let id = value["sessionId"].as_str().unwrap_or("primary");
                     if id == "primary" { if let Ok(mut state) = cached.lock() { *state = value["state"].clone(); } }
@@ -52,7 +52,15 @@ impl Browser {
                     continue;
                 }
                 // Keep only the newest frame. Never log frames or forward them to Pi.
-                if value["type"] == "browser_frame" { if let Ok(mut frame) = latest_frame.lock() { *frame = Some(json!({"sessionId":value["sessionId"],"frame":value["frame"]})); } crate::supervisor::wake_pump(); continue; }
+                if value["type"] == "browser_frame" {
+                    if let Ok(mut frame) = latest_frame.lock() {
+                        *frame = Some(Value::Object(serde_json::Map::from_iter([
+                            ("sessionId".into(), value["sessionId"].take()),
+                            ("frame".into(), value["frame"].take()),
+                        ])));
+                    }
+                    crate::supervisor::wake_pump(); continue;
+                }
                 let id = value["id"].as_str().unwrap_or("");
                 if let Some(sender) = replies.lock().ok().and_then(|mut p| p.remove(id)) {
                     let result = if value.get("error").is_some() { Err(value["error"]["message"].as_str().unwrap_or("Browser request failed").to_string()) } else { Ok(value["result"].clone()) };

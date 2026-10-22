@@ -767,6 +767,55 @@ mod dispatch_regression {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn agent_reads_do_not_emit_changes_but_mutations_do() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tauri::Listener;
+
+        let host = test_host();
+        agent::init(&host.db).unwrap();
+        host.db
+            .execute(
+                "INSERT INTO agent_assignments(id,workspace_id,title) VALUES('a1','general','Review invoice')",
+                [],
+            )
+            .unwrap();
+        let app = tauri::Builder::default()
+            .any_thread()
+            .manage(Arc::new(Mutex::new(host)))
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let changes = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&changes);
+        app.listen("agent-changed", move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+        });
+
+        for operation in ["state", "refresh"] {
+            let state = tauri::async_runtime::block_on(agent::agent_action(
+                app.handle().clone(),
+                operation.into(),
+                None,
+            ))
+            .unwrap();
+            assert_eq!(state["assignments"].as_array().unwrap().len(), 1);
+            assert_eq!(
+                changes.load(Ordering::SeqCst),
+                0,
+                "{operation} triggered another refresh"
+            );
+        }
+
+        tauri::async_runtime::block_on(agent::agent_action(
+            app.handle().clone(),
+            "assignment".into(),
+            Some(json!({"id":"a1","status":"done"})),
+        ))
+        .unwrap();
+        assert_eq!(changes.load(Ordering::SeqCst), 1);
+    }
+
     /// The native event loop must keep dispatching while a command holds the host mutex.
     /// This reproduces the NVIDIA NIM freeze without a key or a real network request.
     #[test]

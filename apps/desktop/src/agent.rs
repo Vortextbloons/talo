@@ -754,7 +754,9 @@ pub async fn agent_action(
             _ => Err("Unknown agent operation".into()),
         };
         let result = result?;
-        let _ = app.emit("agent-changed", ());
+        if !matches!(operation.as_str(), "state" | "refresh") {
+            let _ = app.emit("agent-changed", ());
+        }
         Ok(result)
     })
     .await
