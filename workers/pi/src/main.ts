@@ -39,6 +39,7 @@ import {
   type ProviderPreference,
 } from './providers.js';
 import {
+  extractReasoning,
   extractText,
   inspectLastTurn,
   lastRetryableTurn as restoreRetryableTurn,
@@ -119,6 +120,7 @@ interface Generation {
   finalized: boolean;
   finalizing?: Promise<void>;
   text: string;
+  reasoning: string;
   error?: string;
 }
 
@@ -303,7 +305,7 @@ function emitGeneration(
   record: SessionRecord,
   generation: Generation,
   state: GenerationState,
-  detail: { text?: string; message?: ChatMessage; error?: string } = {},
+  detail: { text?: string; reasoning?: string; message?: ChatMessage; error?: string } = {},
 ): void {
   if (record.closing) return;
   record.sequence += 1;
@@ -314,6 +316,7 @@ function emitGeneration(
     sequence: record.sequence,
     state,
     ...(detail.text !== undefined ? { text: detail.text } : {}),
+    ...(detail.reasoning !== undefined ? { reasoning: detail.reasoning } : {}),
     ...(detail.message ? { message: cloneMessage(detail.message) } : {}),
     ...(detail.error ? { error: detail.error } : {}),
   });
@@ -325,6 +328,8 @@ function liveAssistant(record: SessionRecord, generation: Generation): ChatMessa
     if (message.role === 'assistant' && message.generationId === generation.id) {
       message.status = 'generating';
       message.text = generation.text;
+      if (generation.reasoning) message.reasoning = generation.reasoning;
+      else delete message.reasoning;
       delete message.error;
       return message;
     }
@@ -336,6 +341,7 @@ function liveAssistant(record: SessionRecord, generation: Generation): ChatMessa
     status: 'generating',
     generationId: generation.id,
   };
+  if (generation.reasoning) message.reasoning = generation.reasoning;
   record.messages.push(message);
   return message;
 }
@@ -351,6 +357,7 @@ function handleSessionEvent(record: SessionRecord, event: AgentSessionEvent): vo
   if (event.type === 'message_start') {
     if (event.message.role !== 'assistant') return;
     generation.text = '';
+    generation.reasoning = '';
     generation.error = undefined;
     updateLiveAssistant(record, generation);
     emitGeneration(record, generation, 'generating', { text: '' });
@@ -363,7 +370,16 @@ function handleSessionEvent(record: SessionRecord, event: AgentSessionEvent): vo
       if (text !== generation.text) {
         generation.text = text;
         updateLiveAssistant(record, generation);
-        emitGeneration(record, generation, 'generating', { text });
+        emitGeneration(record, generation, 'generating', { text, reasoning: generation.reasoning });
+      }
+      return;
+    }
+    if (update.type === 'thinking_start' || update.type === 'thinking_delta' || update.type === 'thinking_end') {
+      const reasoning = extractReasoning(update.partial);
+      if (reasoning !== generation.reasoning) {
+        generation.reasoning = reasoning;
+        updateLiveAssistant(record, generation);
+        emitGeneration(record, generation, 'generating', { text: generation.text, reasoning });
       }
       return;
     }
@@ -376,17 +392,19 @@ function handleSessionEvent(record: SessionRecord, event: AgentSessionEvent): vo
   if (event.type === 'message_end') {
     if (event.message.role !== 'assistant') return;
     const message = event.message as {
-      content?: string | Array<{ type?: string; text?: string }>;
+      content?: string | Array<{ type?: string; text?: string; thinking?: string }>;
       stopReason?: string;
       errorMessage?: string;
     };
     generation.text = extractText(message);
+    generation.reasoning = extractReasoning(message);
     if (message.errorMessage) generation.error = sanitizeError(message.errorMessage);
     updateLiveAssistant(record, generation);
     return;
   }
   if (event.type === 'auto_retry_start') {
     generation.text = '';
+    generation.reasoning = '';
     generation.error = undefined;
     updateLiveAssistant(record, generation);
     emitGeneration(record, generation, 'generating', { text: '' });
@@ -454,6 +472,7 @@ function beginGeneration(record: SessionRecord, generationId: string, text: stri
     cancelRequested: false,
     finalized: false,
     text: '',
+    reasoning: '',
   };
   record.generation = generation;
   record.state = 'generating';
@@ -494,7 +513,7 @@ function launchGeneration(record: SessionRecord, generation: Generation): void {
     record.state = 'failed';
     record.generationId = generation.id;
     record.error = generation.error;
-    emitGeneration(record, generation, 'failed', { text: generation.text, error: generation.error });
+    emitGeneration(record, generation, 'failed', { text: generation.text, reasoning: generation.reasoning, error: generation.error });
   });
 }
 
@@ -562,9 +581,12 @@ function finalizeGeneration(record: SessionRecord, generation: Generation): Prom
     const text = state === 'completed'
       ? assistant?.text || generation.text
       : generation.text || assistant?.text || '';
+    const reasoning = assistant?.reasoning || generation.reasoning;
 
     if (assistant) {
       assistant.text = text;
+      if (reasoning) assistant.reasoning = reasoning;
+      else delete assistant.reasoning;
       assistant.status = state;
       assistant.generationId = generation.id;
       if (error) assistant.error = error;
@@ -576,6 +598,7 @@ function finalizeGeneration(record: SessionRecord, generation: Generation): Prom
         text,
         status: state,
         generationId: generation.id,
+        ...(reasoning ? { reasoning } : {}),
         ...(error ? { error } : {}),
       };
       messages.push(assistant);
@@ -606,6 +629,7 @@ function finalizeGeneration(record: SessionRecord, generation: Generation): Prom
     emitGeneration(record, generation, state, {
       text,
       message: assistant,
+      ...(reasoning ? { reasoning } : {}),
       ...(error ? { error } : {}),
     });
   })();

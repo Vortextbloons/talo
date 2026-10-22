@@ -90,6 +90,8 @@ pub enum ChatEvent {
         state: GenerationState,
         #[serde(skip_serializing_if = "Option::is_none")]
         text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<ChatMessage>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -141,6 +143,7 @@ struct ActiveGeneration {
     state: GenerationState,
     sequence: i64,
     text: String,
+    reasoning: String,
     assistant_id: String,
     cancel_requested: bool,
 }
@@ -194,6 +197,7 @@ impl ChatState {
                 &id,
                 "failed",
                 &active.text,
+                Some(active.reasoning.as_str()).filter(|reasoning| !reasoning.is_empty()),
                 "failed",
                 Some("Talo closed before the response completed"),
                 active.sequence + 1,
@@ -260,6 +264,7 @@ impl ChatState {
                             &id,
                             GenerationState::Failed,
                             None,
+                            None,
                             Some(failure.clone()),
                         );
                     }
@@ -289,6 +294,7 @@ impl ChatState {
             generation_id,
             state,
             text,
+            reasoning,
             message,
             error,
             ..
@@ -306,6 +312,15 @@ impl ChatState {
         let active_text = text
             .or_else(|| message.as_ref().map(|message| message.text.clone()))
             .unwrap_or_else(|| self.active[&generation_id].text.clone());
+        // An empty reasoning string is a deliberate reset (new turn); otherwise the
+        // accumulated thinking text rides along with every progress event.
+        let active_reasoning = reasoning
+            .or_else(|| {
+                message
+                    .as_ref()
+                    .and_then(|message| message.reasoning.clone())
+            })
+            .unwrap_or_else(|| self.active[&generation_id].reasoning.clone());
 
         if state.terminal() {
             let final_state = if self.active[&generation_id].cancel_requested
@@ -321,6 +336,7 @@ impl ChatState {
                 &generation_id,
                 final_state,
                 Some(active_text),
+                Some(active_reasoning),
                 error,
             );
             return;
@@ -339,6 +355,7 @@ impl ChatState {
             let active = self.active.get_mut(&generation_id).expect("checked above");
             active.state = effective;
             active.text = active_text.clone();
+            active.reasoning = active_reasoning.clone();
             active.sequence += 1;
             active.sequence
         };
@@ -348,6 +365,7 @@ impl ChatState {
             sequence,
             effective.as_str(),
             &active_text,
+            Some(active_reasoning.as_str()).filter(|reasoning| !reasoning.is_empty()),
         );
         emit_generation(
             app,
@@ -356,6 +374,7 @@ impl ChatState {
             sequence,
             effective,
             Some(active_text),
+            Some(active_reasoning),
             None,
             error.map(|error| sanitize_error(&error)),
         );
@@ -368,12 +387,14 @@ impl ChatState {
         generation_id: &str,
         state: GenerationState,
         text: Option<String>,
+        reasoning: Option<String>,
         error: Option<String>,
     ) {
         let Some(active) = self.active.remove(generation_id) else {
             return;
         };
         let text = text.unwrap_or(active.text);
+        let reasoning = reasoning.unwrap_or(active.reasoning);
         let error = error.map(|error| sanitize_error(&error));
         let sequence = active.sequence + 1;
         let persisted = storage::finalize_generation(
@@ -381,6 +402,7 @@ impl ChatState {
             generation_id,
             state.as_str(),
             &text,
+            Some(reasoning.as_str()).filter(|reasoning| !reasoning.is_empty()),
             state.message_status(),
             error.as_deref(),
             sequence,
@@ -391,6 +413,7 @@ impl ChatState {
             id: active.assistant_id,
             role: "assistant".into(),
             text: text.clone(),
+            reasoning: Some(reasoning.clone()).filter(|reasoning| !reasoning.is_empty()),
             status: state.message_status().into(),
             generation_id: Some(generation_id.to_string()),
             error: error.clone(),
@@ -402,6 +425,7 @@ impl ChatState {
             sequence,
             state,
             Some(text),
+            Some(reasoning),
             Some(message),
             error,
         );
@@ -491,6 +515,7 @@ impl ChatState {
             generation_id,
             GenerationState::Failed,
             None,
+            None,
             Some(error),
         );
     }
@@ -512,6 +537,7 @@ fn emit_generation(
     sequence: i64,
     state: GenerationState,
     text: Option<String>,
+    reasoning: Option<String>,
     message: Option<ChatMessage>,
     error: Option<String>,
 ) {
@@ -523,6 +549,7 @@ fn emit_generation(
             sequence,
             state,
             text,
+            reasoning,
             message,
             error,
         },
@@ -826,6 +853,7 @@ fn chat_send_inner(
             state: GenerationState::Generating,
             sequence: 1,
             text: String::new(),
+            reasoning: String::new(),
             assistant_id,
             cancel_requested: false,
         },
@@ -836,6 +864,7 @@ fn chat_send_inner(
         &generation_id,
         1,
         GenerationState::Generating,
+        Some(String::new()),
         Some(String::new()),
         None,
         None,
@@ -910,6 +939,7 @@ fn chat_retry_inner(
             state: GenerationState::Generating,
             sequence: sequence + 1,
             text: String::new(),
+            reasoning: String::new(),
             assistant_id: plan.assistant_id.clone(),
             cancel_requested: false,
         },
@@ -920,6 +950,7 @@ fn chat_retry_inner(
         &generation_id,
         sequence + 1,
         GenerationState::Generating,
+        Some(String::new()),
         Some(String::new()),
         None,
         None,
@@ -984,6 +1015,7 @@ fn chat_stop_inner(app: &AppHandle, host: &mut Host, generation_id: String) -> R
     }
     let conversation_id = active.conversation_id.clone();
     let text = active.text.clone();
+    let active_reasoning = active.reasoning.clone();
     let sequence = {
         let active = chat.active.get_mut(&generation_id).expect("checked above");
         active.state = GenerationState::Cancelling;
@@ -991,7 +1023,14 @@ fn chat_stop_inner(app: &AppHandle, host: &mut Host, generation_id: String) -> R
         active.sequence += 1;
         active.sequence
     };
-    let _ = storage::update_progress(db, &generation_id, sequence, "cancelling", &text);
+    let _ = storage::update_progress(
+        db,
+        &generation_id,
+        sequence,
+        "cancelling",
+        &text,
+        Some(active_reasoning.as_str()).filter(|reasoning| !reasoning.is_empty()),
+    );
     emit_generation(
         &app,
         &conversation_id,
@@ -999,6 +1038,7 @@ fn chat_stop_inner(app: &AppHandle, host: &mut Host, generation_id: String) -> R
         sequence,
         GenerationState::Cancelling,
         Some(text.clone()),
+        Some(active_reasoning),
         None,
         None,
     );
@@ -1015,6 +1055,7 @@ fn chat_stop_inner(app: &AppHandle, host: &mut Host, generation_id: String) -> R
         &generation_id,
         GenerationState::Cancelled,
         Some(text),
+        None,
         None,
     );
     Ok(())
@@ -1384,6 +1425,7 @@ mod tests {
                 state: GenerationState::Generating,
                 sequence: 1,
                 text: String::new(),
+                reasoning: String::new(),
                 assistant_id: "a1".into(),
                 cancel_requested: false,
             },
@@ -1410,6 +1452,7 @@ mod tests {
             sequence: 2,
             state: GenerationState::Generating,
             text: Some("hi".into()),
+            reasoning: Some("hmm".into()),
             message: None,
             error: None,
         };
@@ -1419,6 +1462,7 @@ mod tests {
         assert_eq!(value["generationId"], "g");
         assert_eq!(value["state"], "generating");
         assert_eq!(value["sequence"], 2);
+        assert_eq!(value["reasoning"], "hmm");
         let worker = serde_json::to_value(ChatEvent::Worker {
             state: WorkerState::Ready,
             error: None,

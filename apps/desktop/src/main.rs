@@ -184,6 +184,7 @@ async fn save_settings(app: tauri::AppHandle, settings: Value) -> Result<(), Str
             "model",
             "baseUrl",
             "reasoning",
+            "showReasoning",
             "memory",
             "complete",
         ];

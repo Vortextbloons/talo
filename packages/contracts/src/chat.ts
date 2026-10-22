@@ -8,6 +8,8 @@ export interface ConversationInfo {
 }
 export interface ChatMessage {
   id: string; role: 'user' | 'assistant'; text: string;
+  /** Complete accumulated thinking text when the model exposes it; absent otherwise. */
+  reasoning?: string;
   status: 'completed' | 'generating' | 'cancelled' | 'failed';
   generationId?: string; error?: string;
 }
@@ -21,7 +23,7 @@ export interface ChatBootstrap {
 }
 export type ChatEvent = {
   type: 'generation'; conversationId: string; generationId: string; sequence: number;
-  state: GenerationState; text?: string; message?: ChatMessage; error?: string;
+  state: GenerationState; text?: string; reasoning?: string; message?: ChatMessage; error?: string;
 } | { type: 'worker'; state: 'starting' | 'ready' | 'stopped' | 'failed'; error?: string };
 
 /** Private host/worker operations. apiKey is ephemeral and must never be echoed or logged. */
@@ -55,5 +57,6 @@ export type WorkerEvent =
  * models.list/provider.validate params: provider, model?, apiKey?, baseUrl?. models.list returns
  * {provider,name,native,models}; provider.validate must perform an authenticated probe.
  * A generation event's text is the COMPLETE accumulated assistant text (not a delta).
+ * reasoning, when present, is the COMPLETE accumulated thinking text (not a delta).
  * Event sequence numbers increase within a generation, including across its retries.
  */

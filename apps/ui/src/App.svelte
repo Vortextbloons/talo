@@ -12,7 +12,16 @@
   const pages = ['Chat', 'Workspaces', 'Tasks', 'Browser', 'Memory', 'Settings'] as const;
   type Page = typeof pages[number];
   let page = $state<Page>('Chat');
-  let settings = $state<Onboarding>({name:'',personality:'Thoughtful and direct',...DEFAULT_PREFERENCE,memory:'workspace',complete:false});
+  const NAV_KEY = 'talo.nav.collapsed';
+  function initialNavCollapsed(): boolean {
+    try { return localStorage.getItem(NAV_KEY) === '1'; } catch { return false; }
+  }
+  let navCollapsed = $state(initialNavCollapsed());
+  function toggleNav(): void {
+    navCollapsed = !navCollapsed;
+    try { localStorage.setItem(NAV_KEY, navCollapsed ? '1' : '0'); } catch { /* storage can be unavailable */ }
+  }
+  let settings = $state<Onboarding>({name:'',personality:'Thoughtful and direct',...DEFAULT_PREFERENCE,memory:'workspace',showReasoning:false,complete:false});
   let provider = $derived(providerDescriptor(settings.provider));
   let connectedCount = $derived(chat.connections.filter(connection=>connection.connected).length);
   let chatSelection = $derived(selectionLabel(chat.active?.conversation.selection ?? chat.draftSelection));
@@ -49,29 +58,45 @@
     try{busy=true;status=await invoke<RuntimeStatus>('service_control',{service,start,grant:grant??null});}catch(e){error=String(e);}finally{busy=false;}
   }
   function browserStart(){return permission('browser.start','persistent-profile',id=>control('browser',true,id));}
+  async function saveReasoning(){
+    const value = settings.showReasoning;
+    if(!isTauri())return;
+    try{await invoke('save_settings',{settings:{...settings,complete:true}});}
+    catch(e){error=String(e);settings.showReasoning=!value;}
+  }
 </script>
 
-<div class="shell">
-  <aside>
-    <a class="brand" href="#chat" onclick={()=>page='Chat'}><img src={mascot} alt=""/><span>talo<span class="dot">.</span></span></a>
-    <div class="nav-caption">Your everyday companion</div>
-    <nav aria-label="Main navigation">{#each pages as item (item)}<button class={{selected:page===item}} onclick={()=>page=item}><span class="nav-icon"><NavIcon name={item} /></span>{item}{#if page===item}<span class="nav-dot"></span>{/if}</button>{/each}</nav>
-    <div class="sidebar-bottom"><span class="presence"></span><div>Talo is here<small>{isTauri()?'Running quietly in your tray':'Interface preview'}</small></div></div>
+<div class="shell" class:nav-collapsed={navCollapsed}>
+  <aside inert={navCollapsed} aria-hidden={navCollapsed}>
+    <div class="nav-inner">
+      <div class="aside-head">
+        <a class="brand" href="#chat" onclick={()=>page='Chat'}><img src={mascot} alt=""/><span>talo<span class="dot">.</span></span></a>
+        <button class="rail-toggle" onclick={toggleNav} aria-expanded={!navCollapsed} aria-label="Collapse navigation" title="Collapse navigation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="3.5"/><path d="M9.5 4.5v15"/></svg></button>
+      </div>
+      <div class="nav-caption">Your everyday companion</div>
+      <nav aria-label="Main navigation">{#each pages as item (item)}<button class={{selected:page===item}} onclick={()=>page=item} title={item}><span class="nav-icon"><NavIcon name={item} /></span><span class="nav-label">{item}</span>{#if page===item}<span class="nav-dot"></span>{/if}</button>{/each}</nav>
+      <div class="sidebar-bottom"><span class="presence"></span><div>Talo is here<small>{isTauri()?'Running quietly in your tray':'Interface preview'}</small></div></div>
+    </div>
   </aside>
   <main>
-    <header><span class="crumbs">Personal space <span class="slash">/</span> {page}</span></header>
+    <header>
+      {#if navCollapsed}
+        <button class="header-toggle" onclick={toggleNav} aria-expanded={!navCollapsed} aria-label="Show navigation" title="Show navigation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="3.5"/><path d="M9.5 4.5v15"/></svg></button>
+      {/if}
+      <span class="crumbs">Personal space <span class="slash">/</span> {page}</span>
+    </header>
     {#if error}<div class="error" role="alert">{error}<button aria-label="Dismiss error" onclick={()=>error=''}>×</button></div>{/if}
     <div class="content" class:chat-mode={page==='Chat'}>
       {#if page!=='Chat'}<div class="page-heading"><h1>{page}</h1><p>{descriptions[page]}</p></div>{/if}
       {#if page==='Chat'}
-        <ChatView onOpenSettings={()=>{page='Settings';}} name={settings.name} tagline={descriptions.Chat} />
+        <ChatView onOpenSettings={()=>{page='Settings';}} name={settings.name} tagline={descriptions.Chat} showReasoning={settings.showReasoning === true} />
       {:else if page==='Settings'}
         <div class="settings-grid">
           <div class="settings-col main">
             <ProviderSettings />
           </div>
           <div class="settings-col side">
-            <section class="card card--prefs"><h2>Your preferences</h2><dl><dt>Name</dt><dd>{settings.name||'Not set'}</dd><dt>Personality</dt><dd>{settings.personality}</dd><dt>Chat model</dt><dd>{connectedCount ? chatSelection : 'No provider connected yet'}</dd>{#if settings.provider==='custom'}<dt>Custom endpoint</dt><dd>{settings.baseUrl||'Not set'}</dd>{/if}<dt>Memory</dt><dd>{settings.memory}</dd></dl><button class="primary" onclick={()=>{editing=true;step=0;}}>Edit setup</button></section>
+            <section class="card card--prefs"><h2>Your preferences</h2><dl><dt>Name</dt><dd>{settings.name||'Not set'}</dd><dt>Personality</dt><dd>{settings.personality}</dd><dt>Chat model</dt><dd>{connectedCount ? chatSelection : 'No provider connected yet'}</dd>{#if settings.provider==='custom'}<dt>Custom endpoint</dt><dd>{settings.baseUrl||'Not set'}</dd>{/if}<dt>Memory</dt><dd>{settings.memory}</dd></dl><label class="check preference-toggle"><input type="checkbox" bind:checked={settings.showReasoning} onchange={saveReasoning}/> <span>Show model reasoning in Chat</span></label><button class="primary" onclick={()=>{editing=true;step=0;}}>Edit setup</button></section>
             <section class="card card--services"><h2>Local services</h2><p>Start or stop the bundled runtimes. Pi starts when you send a message and rests after two idle minutes.</p>{#each ['pi','browser'] as service (service)}<div class="service"><div><strong>{service==='pi'?'Pi worker':'Chromium'}</strong><small>{status?.services[service as ServiceId]??'Desktop app required'}</small></div><button disabled={busy||!isTauri()} onclick={()=>status?.services[service as ServiceId]==='running'?control(service as ServiceId,false):service==='browser'?browserStart():control('pi',true)}>{status?.services[service as ServiceId]==='running'?'Stop':'Start'}</button></div>{/each}<p class="detail">SQLite: {status?.database??'Desktop app required'}</p>{#if status}<div class="dependencies">{#each Object.entries(status.dependencies) as [name,ready] (name)}<span>{ready?'✓':'○'} {name}</span>{/each}</div>{/if}</section>
             <section class="card card--windows"><h2>Windows</h2><p>Closing the window keeps Talo in the tray. Use Quit Talo to exit.</p><button disabled={busy||!isTauri()} onclick={()=>permission('autostart.change','enable',async grant=>{await invoke('set_autostart',{enabled:true,grant});})}>Enable launch at sign-in</button> <button disabled={busy||!isTauri()} onclick={()=>permission('autostart.change','disable',async grant=>{await invoke('set_autostart',{enabled:false,grant});})}>Disable launch at sign-in</button></section>
           </div>
@@ -97,15 +122,24 @@
 
 <style>
   /* The window is the page: a fixed app frame, each region scrolls itself. */
-  .shell{display:flex;height:100vh;height:100dvh;overflow:hidden;background:var(--bg)}
-  aside{width:226px;flex-shrink:0;background:var(--sidebar);color:var(--text);border-right:1px solid var(--line);padding:26px 16px 20px;display:flex;flex-direction:column;min-height:0}
-  .brand{display:flex;align-items:center;gap:11px;padding:0 12px;color:var(--text);text-decoration:none}
-  .brand img{width:34px;filter:drop-shadow(0 0 18px rgba(255,212,92,.18))}
+  .shell{display:flex;height:100vh;height:100dvh;overflow:hidden;background:var(--bg);--nav-w:226px}
+  aside{width:var(--nav-w);flex-shrink:0;background:var(--sidebar);color:var(--text);border-right:1px solid var(--line);overflow:hidden;transition:width .24s cubic-bezier(.2,.7,.3,1),border-color .2s ease}
+  .nav-inner{width:var(--nav-w);height:100%;padding:26px 16px 20px;display:flex;flex-direction:column;min-height:0;transition:opacity .16s ease}
+  .shell.nav-collapsed aside{width:0;border-right-color:transparent}
+  .shell.nav-collapsed .nav-inner{opacity:0;visibility:hidden}
+  .aside-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-left:12px;min-width:0}
+  .brand{display:flex;align-items:center;gap:11px;padding:0;color:var(--text);text-decoration:none;min-width:0}
+  .brand img{width:34px;flex-shrink:0;filter:drop-shadow(0 0 18px rgba(255,212,92,.18))}
   .brand>span{font-size:28px;font-weight:650;letter-spacing:-1.4px}
   .dot{color:var(--yellow)}
+  .rail-toggle,.header-toggle{display:grid;place-items:center;width:28px;height:28px;padding:0;flex-shrink:0;background:transparent;border:1px solid transparent;border-radius:7px;color:var(--faint);transition:color .15s ease,border-color .15s ease,background .15s ease}
+  .rail-toggle svg,.header-toggle svg{width:15px;height:15px}
+  .rail-toggle:hover,.header-toggle:hover{color:var(--text);border-color:var(--line-strong);background:var(--soft)}
+  .header-toggle{align-self:center;margin-right:-4px}
   .nav-caption{font-size:10.5px;color:var(--faint);margin:16px 12px 24px;letter-spacing:.06em;text-transform:uppercase}
   nav{display:grid;gap:4px}
-  nav button{background:transparent;color:var(--muted);border:0;padding:11px 13px;text-align:left;display:flex;align-items:center;gap:12px;border-radius:9px;font-size:13.5px}
+  nav button{background:transparent;color:var(--muted);border:0;padding:11px 13px;text-align:left;display:flex;align-items:center;gap:12px;border-radius:9px;font-size:13.5px;white-space:nowrap}
+  .nav-label{min-width:0;overflow:hidden;text-overflow:ellipsis}
   nav button:hover{background:#1d1d19;color:var(--text)}
   nav button.selected{background:#26261f;color:var(--yellow)}
   .nav-icon{--icon-opacity:.6;width:22px;height:22px;display:grid;place-items:center;flex-shrink:0}
@@ -116,8 +150,8 @@
   .sidebar-bottom small{display:block;color:var(--faint);font-size:10px;margin-top:4px}
   .presence{display:inline-block;width:6px;height:6px;background:var(--yellow-deep);border-radius:50%;flex-shrink:0}
   main{flex:1;min-width:0;display:flex;flex-direction:column}
-  header{height:52px;flex-shrink:0;border-bottom:1px solid var(--line);padding:0 40px;display:flex;align-items:center;justify-content:space-between}
-  .crumbs{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  header{height:52px;flex-shrink:0;border-bottom:1px solid var(--line);padding:0 40px;display:flex;align-items:center;justify-content:space-between;gap:14px}
+  .crumbs{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-right:auto}
   .slash{margin:0 10px;color:var(--faint)}
   .error{margin:12px 40px 0;padding:12px;background:var(--error-bg);border:1px solid var(--error-line);color:var(--error-text);border-radius:10px;font-size:12px;display:flex;justify-content:space-between;align-items:center}
   .error button{padding:2px 8px;background:transparent;border:0}
@@ -144,6 +178,7 @@
   .settings-col{display:grid;gap:22px;min-width:0}
   .card h2{font-size:17px;letter-spacing:-.4px;font-weight:550;margin:0 0 4px}
   .card>p{margin:6px 0 0}
+  .preference-toggle{margin:0 0 18px;font-size:12.5px}
   dl{display:grid;grid-template-columns:140px 1fr;gap:13px 18px;font-size:13px;margin:20px 0}
   dt{color:var(--muted)}
   dd{margin:0}
@@ -180,14 +215,17 @@
     .settings-grid .card--windows{order:4}
   }
   @media(max-width:900px){
-    aside{width:188px;padding:22px 12px 18px}
+    .shell{--nav-w:188px}
+    .nav-inner{padding:22px 12px 18px}
     header{padding:0 28px}
     .error{margin:12px 28px 0}
     .content{padding:22px 28px 18px}
     .content.chat-mode{padding:12px 24px 16px}
   }
   @media(max-width:640px){
-    aside{width:70px;padding:18px 8px}
+    .shell{--nav-w:70px}
+    .nav-inner{padding:18px 8px}
+    .aside-head{flex-direction:column;gap:12px;padding-left:0}
     .brand{padding:0;justify-content:center}
     .brand>span,.nav-caption,.sidebar-bottom{display:none}
     .brand img{width:40px}
@@ -203,5 +241,8 @@
     dl{grid-template-columns:1fr;gap:7px}
     dd{margin-bottom:10px}
     .dependencies{flex-wrap:wrap}
+  }
+  @media(prefers-reduced-motion:reduce){
+    aside,.nav-inner,.rail-toggle,.header-toggle{transition:none}
   }
 </style>

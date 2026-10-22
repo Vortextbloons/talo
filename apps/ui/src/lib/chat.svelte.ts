@@ -170,12 +170,16 @@ function chooseAssistant(conversation: ConversationSnapshot, generationId: strin
   return conversation.messages.find(message => message.role === 'assistant' && message.generationId === generationId);
 }
 
-function upsertStreamText(generationId: string, text: string, state: GenerationState): void {
+function upsertStreamText(generationId: string, text: string, state: GenerationState, reasoning?: string): void {
   const conversation = chat.active;
   if (!conversation) return;
   const existing = chooseAssistant(conversation, generationId);
   if (existing) {
     existing.text = text;
+    if (reasoning !== undefined) {
+      if (reasoning) existing.reasoning = reasoning;
+      else delete existing.reasoning;
+    }
     existing.status = statusFor(state);
     return;
   }
@@ -185,6 +189,7 @@ function upsertStreamText(generationId: string, text: string, state: GenerationS
     text,
     status: statusFor(state),
     generationId,
+    ...(reasoning ? { reasoning } : {}),
   });
 }
 
@@ -233,6 +238,7 @@ function finishGeneration(event: Extract<ChatEvent, { type: 'generation' }>): vo
       status: 'failed',
       generationId: event.generationId,
       error: event.error ?? 'The reply did not finish.',
+      ...(event.reasoning ? { reasoning: event.reasoning } : {}),
     };
     conversation.messages.push(assistant);
   }
@@ -286,7 +292,7 @@ function handleGenerationEvent(event: Extract<ChatEvent, { type: 'generation' }>
     conversation.state = event.state;
     conversation.generationId = event.generationId;
   }
-  if (event.text !== undefined) upsertStreamText(event.generationId, event.text, event.state);
+  if (event.text !== undefined) upsertStreamText(event.generationId, event.text, event.state, event.reasoning);
   if (event.message) upsertMessage(event.message, event.generationId);
   if (event.error) conversation.error = event.error;
 

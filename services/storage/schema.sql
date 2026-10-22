@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK(role IN ('user','assistant')),
   text TEXT NOT NULL DEFAULT '',
+  reasoning TEXT,
   status TEXT NOT NULL CHECK(status IN ('completed','generating','cancelled','failed')),
   generation_id TEXT,
   error TEXT,

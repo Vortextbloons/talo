@@ -46,6 +46,25 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub fn init(db: &Connection) -> Result<()> {
     db.execute_batch(SCHEMA)?;
+    // Databases created before reasoning display lack the column; add it in place.
+    let has_reasoning: i64 = db.query_row(
+        "SELECT count(*) FROM pragma_table_info('chat_messages') WHERE name='reasoning'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_reasoning == 0 {
+        db.execute_batch("ALTER TABLE chat_messages ADD COLUMN reasoning TEXT")?;
+    }
+    db.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")?;
+    let migrated: i64 = db.query_row("SELECT count(*) FROM schema_migrations WHERE version=3", [], |r| r.get(0))?;
+    if migrated == 0 {
+        db.execute_batch("BEGIN IMMEDIATE")?;
+        if let Err(error) = db.execute_batch(include_str!("slice3.sql")) {
+            let _ = db.execute_batch("ROLLBACK");
+            return Err(error.into());
+        }
+        db.execute_batch("INSERT INTO schema_migrations(version) VALUES(3); PRAGMA user_version=3; COMMIT")?;
+    }
     Ok(())
 }
 
@@ -66,6 +85,8 @@ pub struct ConversationInfo {
     pub created_at: String,
     pub updated_at: String,
     pub selection: Option<ModelSelection>,
+    pub workspace_id: String,
+    pub archived: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -74,6 +95,8 @@ pub struct ChatMessage {
     pub id: String,
     pub role: String,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation_id: Option<String>,
@@ -176,11 +199,13 @@ fn conversation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Conversati
         created_at: row.get(6)?,
         updated_at: row.get(7)?,
         selection,
+        workspace_id: row.get(8)?,
+        archived: row.get(9)?,
     })
 }
 
 const CONVERSATION_COLUMNS: &str =
-    "id,title,session_id,session_path,connection_id,model_id,created_at,updated_at";
+    "id,title,session_id,session_path,connection_id,model_id,created_at,updated_at,workspace_id,archived";
 
 pub fn list_conversations(db: &Connection) -> Result<Vec<ConversationInfo>> {
     let sql = format!(
@@ -256,7 +281,7 @@ pub fn update_conversation_session(
 
 pub fn list_messages(db: &Connection, conversation_id: &str) -> Result<Vec<ChatMessage>> {
     let mut statement = db.prepare(
-        "SELECT id,role,text,status,generation_id,error FROM chat_messages
+        "SELECT id,role,text,reasoning,status,generation_id,error FROM chat_messages
          WHERE conversation_id=?1 ORDER BY rowid ASC",
     )?;
     let rows = statement.query_map(params![conversation_id], |row| {
@@ -264,9 +289,10 @@ pub fn list_messages(db: &Connection, conversation_id: &str) -> Result<Vec<ChatM
             id: row.get(0)?,
             role: row.get(1)?,
             text: row.get(2)?,
-            status: row.get(3)?,
-            generation_id: row.get(4)?,
-            error: row.get(5)?,
+            reasoning: row.get(3)?,
+            status: row.get(4)?,
+            generation_id: row.get(5)?,
+            error: row.get(6)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -274,16 +300,17 @@ pub fn list_messages(db: &Connection, conversation_id: &str) -> Result<Vec<ChatM
 
 pub fn get_message(db: &Connection, id: &str) -> Result<ChatMessage> {
     db.query_row(
-        "SELECT id,role,text,status,generation_id,error FROM chat_messages WHERE id=?1",
+        "SELECT id,role,text,reasoning,status,generation_id,error FROM chat_messages WHERE id=?1",
         params![id],
         |row| {
             Ok(ChatMessage {
                 id: row.get(0)?,
                 role: row.get(1)?,
                 text: row.get(2)?,
-                status: row.get(3)?,
-                generation_id: row.get(4)?,
-                error: row.get(5)?,
+                reasoning: row.get(3)?,
+                status: row.get(4)?,
+                generation_id: row.get(5)?,
+                error: row.get(6)?,
             })
         },
     )
@@ -511,6 +538,7 @@ pub fn update_progress(
     sequence: i64,
     state: &str,
     text: &str,
+    reasoning: Option<&str>,
 ) -> Result<()> {
     let tx = db.transaction()?;
     let conversation_id: Option<String> = tx
@@ -532,11 +560,11 @@ pub fn update_progress(
     )?;
     tx.execute(
         &format!(
-            "UPDATE chat_messages SET text=?2,status='generating',updated_at={NOW}
+            "UPDATE chat_messages SET text=?2,reasoning=?4,status='generating',updated_at={NOW}
              WHERE conversation_id=?1 AND generation_id=?3 AND role='assistant'
              AND status='generating'"
         ),
-        params![conversation_id, text, generation_id],
+        params![conversation_id, text, generation_id, reasoning],
     )?;
     tx.execute(
         &format!("UPDATE chat_conversations SET updated_at={NOW} WHERE id=?1"),
@@ -553,6 +581,7 @@ pub fn finalize_generation(
     generation_id: &str,
     state: &str,
     text: &str,
+    reasoning: Option<&str>,
     message_status: &str,
     error: Option<&str>,
     sequence: i64,
@@ -590,9 +619,9 @@ pub fn finalize_generation(
     if let Some(ref assistant_id) = assistant_id {
         tx.execute(
             &format!(
-                "UPDATE chat_messages SET text=?2,status=?3,error=?4,updated_at={NOW} WHERE id=?1"
+                "UPDATE chat_messages SET text=?2,reasoning=?3,status=?4,error=?5,updated_at={NOW} WHERE id=?1"
             ),
-            params![assistant_id, text, message_status, error],
+            params![assistant_id, text, reasoning, message_status, error],
         )?;
     }
     tx.execute(
@@ -702,14 +731,15 @@ pub fn import_messages_if_empty(
     for message in messages {
         tx.execute(
             &format!(
-                "INSERT INTO chat_messages(id,conversation_id,role,text,status,generation_id,error,created_at,updated_at)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,{NOW},{NOW})"
+                "INSERT INTO chat_messages(id,conversation_id,role,text,reasoning,status,generation_id,error,created_at,updated_at)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,{NOW},{NOW})"
             ),
             params![
                 message.id,
                 conversation_id,
                 message.role,
                 message.text,
+                message.reasoning,
                 message.status,
                 message.generation_id,
                 message.error
