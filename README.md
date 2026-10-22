@@ -17,4 +17,4 @@ npm run dev
 
 Close hides the window. Open it from the tray; Quit Talo shuts down services and exits. Settings exposes Pi and Chromium start/stop controls. Pi exits after five idle minutes; restarting it restores the latest persistent session when opened. Chromium retains a separate profile across restarts.
 
-See [architecture](docs/ARCHITECTURE.md), [feature boundaries](docs/PLACEHOLDERS.md), [runtime setup](docs/SETUP.md), [design](docs/DESIGN.md), and [third-party notices](docs/THIRD-PARTY-NOTICES.md).
+See [architecture](docs/ARCHITECTURE.md), [model providers](docs/PROVIDERS.md), [feature boundaries](docs/PLACEHOLDERS.md), [runtime setup](docs/SETUP.md), [design](docs/DESIGN.md), and [third-party notices](docs/THIRD-PARTY-NOTICES.md).

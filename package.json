@@ -1,18 +1,33 @@
 {
-  "name": "talo", "version": "0.1.0", "private": true, "type": "module",
-  "workspaces": ["apps/ui", "workers/pi", "services/browser", "packages/contracts"],
-  "engines": {"node": ">=24.0.0 <27"},
+  "name": "talo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/ui",
+    "workers/pi",
+    "services/browser",
+    "packages/contracts"
+  ],
+  "engines": {
+    "node": ">=24.0.0 <27"
+  },
   "scripts": {
     "dev": "tauri dev --config apps/desktop/tauri.conf.json",
     "dev:ui": "npm run dev -w @talo/ui",
     "build:ui": "npm run build -w @talo/ui",
-    "build:workers": "tsc -p tsconfig.workers.json",
-    "check": "npm run check -w @talo/ui && tsc -p tsconfig.workers.json --noEmit",
+    "build:workers": "node node_modules/@typescript/native/bin/tsc -p tsconfig.workers.json",
+    "check": "npm run check -w @talo/ui && node node_modules/@typescript/native/bin/tsc -p tsconfig.workers.json --noEmit",
     "test": "node --test tests/*.test.mjs",
     "vendor": "node scripts/vendor.mjs",
     "prepare:bundle": "npm run build:workers && node scripts/bundle.mjs",
     "package": "npm run vendor && npm run prepare:bundle && tauri build --config apps/desktop/tauri.conf.json",
     "host:check": "cargo check --manifest-path apps/desktop/Cargo.toml"
   },
-  "devDependencies": {"@tauri-apps/cli":"2.12.4", "typescript":"5.9.3", "@types/node":"24.10.1"}
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4",
+    "@types/node": "24.19.2",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "typescript": "6.0.3"
+  }
 }

@@ -48,6 +48,8 @@ fn save_settings(host: State<Shared>, settings: Value) -> Result<(), String> {
         "personality",
         "provider",
         "model",
+        "baseUrl",
+        "reasoning",
         "memory",
         "complete",
     ];
@@ -55,7 +57,36 @@ fn save_settings(host: State<Shared>, settings: Value) -> Result<(), String> {
     if obj.keys().any(|k| !allowed.contains(&k.as_str())) || settings.to_string().len() > 8192 {
         return Err("Invalid settings".into());
     }
-    host.lock().map_err(|e|e.to_string())?.db.execute("INSERT INTO settings(key,value) VALUES('onboarding',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[settings.to_string()]).map_err(|e|e.to_string())?;
+    let provider = match obj.get("provider") {
+        Some(Value::String(value)) if value.len() <= 64 => value.as_str(),
+        Some(_) => return Err("Invalid provider".into()),
+        None => "opencode",
+    };
+    // Mirrors the provider IDs in packages/contracts/src/providers.ts.
+    if !["opencode", "opencode-go", "openrouter", "nvidia", "custom"].contains(&provider) {
+        return Err("Unknown provider".into());
+    }
+    let model = match obj.get("model") {
+        Some(Value::String(value)) if value.len() <= 200 => value.as_str(),
+        Some(_) => return Err("Invalid model".into()),
+        None => "",
+    };
+    let base_url = match obj.get("baseUrl") {
+        Some(Value::String(value)) if value.len() <= 2048 => value.as_str(),
+        Some(_) => return Err("Invalid base URL".into()),
+        None => "",
+    };
+    let reasoning = match obj.get("reasoning") {
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return Err("Invalid reasoning flag".into()),
+        None => false,
+    };
+    let h = host.lock().map_err(|e| e.to_string())?;
+    h.db.execute("INSERT INTO settings(key,value) VALUES('onboarding',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[settings.to_string()]).map_err(|e|e.to_string())?;
+    // Non-secret provider preferences are projected for the Pi worker, which owns models.json.
+    let projection = json!({"provider":provider,"model":model,"baseUrl":base_url,"reasoning":reasoning});
+    std::fs::write(h.supervisor.data.join("provider.json"), projection.to_string())
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 #[tauri::command]

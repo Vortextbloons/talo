@@ -3,6 +3,7 @@ node_modules/
 dist/
 target/
 .svelte-kit/
+.svelte-check/
 .vite/
 coverage/
 *.tsbuildinfo
