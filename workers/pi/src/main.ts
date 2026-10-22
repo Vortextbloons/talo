@@ -63,7 +63,16 @@ const REGISTERED_TOOLS = [...ACTIVE_TOOLS,...WEB_TOOLS,...BROWSER_TOOLS,'mcp'];
 const permissionTransport = new WebTransport((value:any) => process.stdout.write(`${JSON.stringify({...value,type:'tools'})}\n`));
 let disabledTools = new Set<string>();
 const authorize = async(action:string,scope:string,summary:string,signal?:AbortSignal) => {
-  if(action==='tool.use')return REGISTERED_TOOLS.includes(scope as any)&&!disabledTools.has(scope);
+  if(action==='tool.use') {
+    const generation = [...sessions.values()].find(r => r.generation && !r.generation.finalized)?.generation;
+    if (generation?.background && ++generation.toolCalls > 50) {
+      generation.error = 'Scheduled task exceeded its 50 tool-call limit.';
+      const record = sessions.get(generation.conversationId);
+      void record?.session.abort();
+      throw new Error(generation.error);
+    }
+    return REGISTERED_TOOLS.includes(scope as any)&&!disabledTools.has(scope);
+  }
   const result=await permissionTransport.request('permission',{action,scope,summary},signal,90_000);
   return result?.allowed===true;
 };
@@ -171,6 +180,10 @@ function promptImages(value: unknown): PromptImage[] {
 }
 
 interface Generation {
+  background: boolean;
+  toolCalls: number;
+  cost: number;
+  tokens: number;
   id: string;
   conversationId: string;
   userText: string;
@@ -461,6 +474,18 @@ function handleSessionEvent(record: SessionRecord, event: AgentSessionEvent): vo
   }
   if (event.type === 'message_end') {
     if (event.message.role !== 'assistant') return;
+    const usage = (event.message as any).usage;
+    if (usage) {
+      generation.cost += Number(usage.cost?.total ?? 0);
+      generation.tokens += Number(usage.totalTokens ?? 0);
+      if (generation.background) {
+        process.stdout.write(`${JSON.stringify({type:'tools',message:{method:'automation.usage',params:{generationId:generation.id,cost:generation.cost,tokens:generation.tokens,toolCalls:generation.toolCalls}}})}\n`);
+        if (generation.cost >= 1 || generation.tokens >= 100_000) {
+          generation.error = 'Scheduled task reached its model budget ($1 estimated or 100,000 tokens).';
+          void record.session.abort();
+        }
+      }
+    }
     const message = event.message as {
       content?: string | Array<{ type?: string; text?: string; thinking?: string }>;
       stopReason?: string;
@@ -534,6 +559,7 @@ function beginGeneration(record: SessionRecord, generationId: string, text: stri
   });
 
   const generation: Generation = {
+    background: false, toolCalls: 0, cost: 0, tokens: 0,
     id: generationId,
     conversationId: record.conversationId,
     userText: text,
@@ -1025,6 +1051,8 @@ async function startSessionPrompt(params: Record<string, unknown>): Promise<{ re
   if (Buffer.byteLength(context, 'utf8') > 4096) throw new Error('Reference context exceeds budget');
   record.setContext(context);
   const generation = beginGeneration(record, generationId, text, false);
+  generation.background = params.background === true;
+  record.session.setAutoRetryEnabled(!generation.background);
   generation.images = images;
   return { record, generation };
 }

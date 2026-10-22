@@ -620,7 +620,7 @@
         {#each messages as message, index (message.id)}
           <article class="message {message.role}" class:streaming={message.status === 'generating'}>
             {#if message.role === 'assistant'}
-              <img class="avatar" src={mascot} alt="" aria-hidden="true" />
+              <img class="avatar" class:busy={message.status === 'generating'} src={mascot} alt="" aria-hidden="true" />
             {/if}
             <div class="message-body">
               <div class="message-role">
@@ -822,6 +822,7 @@
             <button
               type="button"
               class="stop"
+              class:stopping={cancelling}
               disabled={cancelling || chat.sending}
               onclick={() => { void stopGeneration(); }}
               aria-label={cancelling ? 'Stopping reply' : 'Stop reply'}
@@ -874,7 +875,7 @@
 <style>
   /* One full-height surface: the rail holds threads, the column holds the conversation. */
   .chat-workspace{flex:1;min-height:0;min-width:0;display:flex;position:relative}
-  .browser-chip{display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 9px;color:var(--muted);font-size:10px;white-space:nowrap}.browser-chip svg{width:14px;height:14px}.browser-chip:hover:not(:disabled),.browser-chip.browser-active{color:var(--yellow);border-color:var(--line-strong)}.browser-dot{width:4px;height:4px;background:var(--yellow);border-radius:50%}
+  .browser-chip{display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 9px;color:var(--muted);font-size:10px;white-space:nowrap}.browser-chip svg{width:14px;height:14px}.browser-chip:hover:not(:disabled),.browser-chip.browser-active{color:var(--yellow);border-color:var(--line-strong)}.browser-dot{width:4px;height:4px;background:var(--yellow);border-radius:50%;animation:pulse 1.5s ease-in-out infinite}
   .chat-layout{--rail-w:clamp(180px,15vw,220px);flex:1;min-width:0;min-height:0;display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);transition:grid-template-columns .24s cubic-bezier(.2,.7,.3,1)}
   .chat-layout>*{min-width:0}
   .chat-layout.rail-collapsed{grid-template-columns:0 minmax(0,1fr)}
@@ -933,7 +934,7 @@
   .chat-message button{background:transparent;border:0;color:inherit;padding:0 4px;font-size:16px;line-height:1}
   /* Empty moments center in whatever height is left, with the mascot lit from within. */
   .welcome{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px 12px;width:100%;max-width:640px;align-self:center}
-  .welcome img{width:84px;margin-bottom:22px;filter:drop-shadow(0 0 36px rgba(255,212,92,.22)) drop-shadow(0 0 90px rgba(255,212,92,.1))}
+  .welcome img{width:84px;margin-bottom:22px;filter:drop-shadow(0 0 36px rgba(255,212,92,.22)) drop-shadow(0 0 90px rgba(255,212,92,.1));animation:mascot-bob 5.5s ease-in-out infinite}
   .welcome h2{font-size:23px;letter-spacing:-.6px;font-weight:550;margin:0 0 12px}
   .welcome p{color:var(--muted);font-size:14.5px;line-height:1.7;margin:0 0 21px}
   .welcome small{display:block;margin-top:18px;color:var(--faint);font-size:11px;line-height:1.6}
@@ -946,10 +947,11 @@
   .suggestions span{display:block;font-size:13px;font-weight:600;transition:color .15s ease}
   .suggestions small{display:block;margin-top:6px;font-size:11.5px;color:var(--muted);line-height:1.5}
   .log{flex:1;min-height:0;overflow-y:auto;padding:8px 10px 20px 2px;scrollbar-gutter:stable}
-  .message{display:flex;gap:12px;padding:14px 0 20px;border-bottom:1px solid var(--line)}
+  .message{display:flex;gap:12px;padding:14px 0 20px;border-bottom:1px solid var(--line);animation:msg-in .32s cubic-bezier(.2,.7,.3,1)}
   .message:last-child{border-bottom:0}
   .message.user{justify-content:flex-end}
-  .avatar{width:27px;height:27px;margin-top:2px;flex-shrink:0}
+  .avatar{width:27px;height:27px;margin-top:2px;flex-shrink:0;transform-origin:50% 80%}
+  .avatar.busy{animation:avatar-think 1.4s ease-in-out infinite;filter:drop-shadow(0 0 9px rgba(255,212,92,.35))}
   .message-body{min-width:0;max-width:92%}
   .message.user .message-body{max-width:82%;background:#23231e;border:1px solid #33332a;border-radius:13px;padding:10px 14px}
   .message-role{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-bottom:6px;letter-spacing:.01em}
@@ -1037,16 +1039,24 @@
   .attach{background:transparent;border:1px solid transparent;border-radius:9px;width:30px;height:32px;padding:0;display:grid;place-items:center;color:var(--faint);flex-shrink:0;transition:color .15s ease,border-color .15s ease,background .15s ease}
   .attach svg{width:16px;height:16px}
   .attach:hover:not(:disabled){color:var(--text);border-color:var(--line-strong);background:var(--soft)}
-  .send svg{width:16px;height:16px;display:block}
+  .send svg{width:16px;height:16px;display:block;transition:transform .18s ease}
   .send[aria-busy="true"] svg{animation:lift 1.1s ease-in-out infinite}
   .send:hover:not(:disabled){background:#ffdd7f}
+  .send:hover:not(:disabled) svg{transform:translateY(-1.5px)}
+  .send:active:not(:disabled) svg{transform:translateY(1px) scale(.9)}
   .stop{background:transparent;border:1px solid var(--line-strong);color:var(--text);border-radius:9px;padding:7px 12px;font-size:11px;line-height:1.3}
+  .stop:not(:disabled){animation:stop-pulse 2s ease-in-out infinite}
+  .stop.stopping{border-color:var(--yellow-deep)}
   .stop:hover:not(:disabled){border-color:var(--yellow-deep);color:var(--yellow)}
   .conversation-foot{margin-top:9px;font-size:9.5px;color:var(--faint);text-align:center}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
   @keyframes bob{0%,100%{transform:translateY(0);opacity:.45}50%{transform:translateY(-3px);opacity:1}}
   @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
   @keyframes lift{0%,100%{opacity:.35;transform:translateY(1px)}50%{opacity:1;transform:translateY(-1.5px)}}
+  @keyframes msg-in{from{opacity:0;transform:translateY(7px)}}
+  @keyframes avatar-think{0%,100%{transform:rotate(-4deg) translateY(.5px)}50%{transform:rotate(4deg) translateY(-1.5px)}}
+  @keyframes mascot-bob{0%,100%{transform:translateY(1px) rotate(-1.5deg)}50%{transform:translateY(-3px) rotate(1.5deg)}}
+  @keyframes stop-pulse{50%{border-color:var(--yellow-deep);box-shadow:0 0 0 3px rgba(255,212,92,.08)}}
   @media(max-width:980px){
     .chat-layout{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
     .chat-layout.rail-collapsed{grid-template-columns:1fr;grid-template-rows:0 minmax(0,1fr)}
@@ -1074,5 +1084,9 @@
   @media(prefers-reduced-motion:reduce){
     .typing i,.cursor,.send[aria-busy="true"] svg,.loading-dot{animation:none}
     .picker-chevron,.chat-layout,.threads,.rail-inner,.conversation{transition:none}
+  }
+  @media(prefers-reduced-motion:reduce){
+    .avatar.busy,.welcome img,.stop,.browser-dot,.message{animation:none}
+    .send svg{transition:none}
   }
 </style>

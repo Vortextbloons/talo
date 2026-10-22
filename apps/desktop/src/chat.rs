@@ -992,7 +992,7 @@ pub struct AttachmentInput {
     pub name: Option<String>,
 }
 
-fn chat_send_inner(
+pub(crate) fn chat_send_inner(
     app: &AppHandle,
     host: &mut Host,
     conversation_id: String,
@@ -1000,6 +1000,10 @@ fn chat_send_inner(
     text: String,
     attachments: Vec<AttachmentInput>,
 ) -> Result<(), String> {
+    let background = host.db.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE generation_id=?1 AND status IN ('running','awaiting_approval'))",[&generation_id],|r|r.get::<_,bool>(0)).unwrap_or(false);
+    if !background && crate::automation::current(host).is_some() {
+        return Err("A scheduled task is running. Cancel it in Tasks before sending a message.".into());
+    }
     let Host {
         db,
         supervisor,
@@ -1124,6 +1128,8 @@ fn chat_send_inner(
             }))
             .collect::<Vec<_>>(),
     });
+    let mut params = params;
+    params["background"] = json!(background);
     match supervisor.request("session.prompt", params, PROMPT_TIMEOUT) {
         Ok(_) => {}
         // A worker that acknowledges prompts only at completion is still streaming events.
@@ -1139,6 +1145,8 @@ fn chat_retry_inner(
     conversation_id: String,
     generation_id: String,
 ) -> Result<(), String> {
+    let scheduled=host.db.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE generation_id=?1)",[&generation_id],|r|r.get::<_,bool>(0)).unwrap_or(false);
+    if scheduled { return Err("Review this scheduled run before creating a new task; automatic replay is disabled.".into()); }
     let Host {
         db,
         supervisor,
@@ -1234,7 +1242,7 @@ fn chat_retry_inner(
     Ok(())
 }
 
-fn chat_stop_inner(app: &AppHandle, host: &mut Host, generation_id: String) -> Result<(), String> {
+pub(crate) fn chat_stop_inner(app: &AppHandle, host: &mut Host, generation_id: String) -> Result<(), String> {
     let Host {
         db,
         supervisor,

@@ -110,6 +110,7 @@ pub struct Supervisor {
 }
 
 impl Supervisor {
+    pub fn pi_pid(&self) -> Option<u32> { self.pi.as_ref().map(|worker|worker.child.id()) }
     pub fn new(root: PathBuf, data: PathBuf) -> Self {
         Self {
             browser: None,
@@ -387,6 +388,8 @@ impl Supervisor {
         let Some(mut worker) = self.pi.take() else {
             return Ok(());
         };
+        // Revoke outstanding browser requests and approvals owned by the stopped worker.
+        self.worker_epoch += 1;
         worker.ready.store(false, Ordering::SeqCst);
         fail_pending(&worker.pending, "Pi worker was stopped before replying");
         let _ = writeln!(

@@ -1,5 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod chat;
+mod automation;
+mod diagnostics;
+mod power;
 mod attachments;
 mod browser;
 mod credentials;
@@ -80,7 +83,7 @@ impl Host {
     /// Drain worker protocol messages, persist/emit chat transitions and enforce idle sleep.
     /// Running this under the same mutex as commands is what makes snapshots and events
     /// race-safe: a generation cannot advance while a command is mutating it.
-    fn browser_message(&mut self, _app: &tauri::AppHandle, mut message: Value) {
+    fn browser_message(&mut self, app: &tauri::AppHandle, mut message: Value) {
         if message["method"] == "notifications/cancelled" {
             let request = message["params"]["requestId"].clone();
             let ids: Vec<_> = self.browser_approvals.iter().filter(|(_, (m,_,_))| m["id"] == request).map(|(id,_)| id.clone()).collect();
@@ -99,11 +102,30 @@ impl Host {
         if !exists {
             self.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Browser requires a valid chat thread."}})); return;
         }
+        if let Some(run) = automation::current(self) {
+            if ["browser_interact", "browser_ai", "browser_download"].contains(&name.as_str()) {
+                let resource = json!({"tool":message["params"]["name"],"arguments":message["params"]["arguments"],"target":message["params"]["target"]}).to_string();
+                let id = self.permissions.request("browser.action".into(),resource);
+                self.browser_approvals.insert(id,(message,Instant::now(),self.supervisor.worker_epoch()));
+                automation::notify(app,&run,"A scheduled browser action needs approval. Open Talo within 85 seconds.");
+                return;
+            }
+        }
         message["params"]["approved"] = json!(true);
         if let Some(params) = message["params"].as_object_mut() { params.remove("target"); }
         self.supervisor.browser_request(message);
     }
     fn pump(&mut self, app: &tauri::AppHandle) {
+        if power::take_interrupt() {
+            automation::event(self,None,"windows_suspend_resume");
+            if let Some(run)=automation::current(self) {
+                let generation=self.db.query_row::<String,_,_>("SELECT generation_id FROM automation_runs WHERE id=?1",[&run],|r|r.get(0)).ok();
+                if let Some(generation)=generation { let _=automation::stop_run(self,app,generation); }
+                let _=self.db.execute("UPDATE automation_tasks SET paused=1 WHERE id=(SELECT task_id FROM automation_runs WHERE id=?1)",[&run]);
+                let _=self.db.execute("UPDATE automation_runs SET status='uncertain',finished_at=unixepoch(),error='Windows suspended or resumed during execution. Review progress before resuming.' WHERE id=?1",[&run]);
+                automation::notify(app,&run,"Scheduled task interrupted by Windows sleep; review progress");
+            }
+        }
         if let Some(frame) = self.supervisor.take_browser_frame() { let _ = app.emit_to("main", "browser-frame", frame); }
         for signal in self.supervisor.drain_signals() {
             if let supervisor::WorkerSignal::Tools(message) = signal { integrations::message(self, app, message); }
@@ -123,14 +145,18 @@ impl Host {
         if self.last_maintenance.elapsed() >= Duration::from_secs(2) { let _ = app.emit("browser-approvals", pending); }
         self.supervisor.refresh();
         for lifecycle in self.supervisor.drain_lifecycle() {
+            automation::event(self,None,match &lifecycle { supervisor::Lifecycle::Started=>"worker_started", supervisor::Lifecycle::Exited{..}=>"worker_exited" });
             self.chat.on_lifecycle(&mut self.db, app, lifecycle);
         }
         let busy = self.chat.is_generating();
         if self.supervisor.idle_stop(busy) {
+            automation::event(self,None,"worker_hibernated");
             self.chat.on_worker_intentionally_stopped(app);
         }
         if self.last_maintenance.elapsed() >= Duration::from_secs(2) {
-            let _ = scheduler::tick(&self.db);
+            if let Err(_) = automation::tick(self, app) {
+                automation::event(self, None, "scheduler_error");
+            }
             self.last_maintenance = Instant::now();
         }
     }
@@ -332,6 +358,10 @@ async fn resolve_permission(
             if valid {
                 let resource = json!({"tool":message["params"]["name"],"arguments":message["params"]["arguments"],"target":message["params"]["target"]}).to_string();
                 h.permissions.consume(&id, "browser.action", &resource)?;
+                if !automation::reserve(&h,"browser.action",&resource) {
+                    h.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Duplicate scheduled browser action suppressed. Review the conversation."}}));
+                    return Ok(());
+                }
                 message["params"]["approved"] = json!(true);
                 h.supervisor.browser_request(message);
             } else { h.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Browser action denied, expired or cancelled."}})); }
@@ -407,6 +437,11 @@ async fn set_autostart(app: tauri::AppHandle, enabled: bool, grant: String) -> R
 }
 
 fn main() {
+    #[cfg(windows)]
+    unsafe {
+        let args:Vec<u16>="--tray\0".encode_utf16().collect();
+        windows_sys::Win32::System::Recovery::RegisterApplicationRestart(args.as_ptr(),0);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             open_main(app);
@@ -418,6 +453,7 @@ fn main() {
         )
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
+            automation::automation_action,
             integrations::tools_action,
             runtime_status,
             browser::browser_control,
@@ -455,10 +491,15 @@ fn main() {
             std::fs::create_dir_all(&data)?;
             let mut db = Connection::open(data.join("talo.db"))?;
             db.busy_timeout(Duration::from_secs(5))?;
+            // WAL keeps the pump's per-event writes from stalling the UI thread; NORMAL sync is
+            // the documented safe pairing for WAL in a single-process desktop app.
+            db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
             db.execute_batch(include_str!("../../../services/memory/schema.sql"))?;
             // Chat/provider metadata is added alongside the memory schema. The DDL is
             // idempotent so existing v1 databases upgrade in place.
             storage::init(&db)?;
+            scheduler::init(&db)?;
+            scheduler::recover(&db)?;
             // Interrupted executions require approval again after restart.
             db.execute(
                 "UPDATE tasks SET state='awaiting_permission' WHERE state='running'",
@@ -486,9 +527,52 @@ fn main() {
                 last_maintenance: Instant::now(),
             browser_approvals: Default::default(),
             })));
+            diagnostics::start(app.handle().clone());
+            #[cfg(windows)]
+            app.manage(power::Registration::new()?);
+            // Boot takes a few hundred milliseconds. Warm the worker the first time the window
+            // takes focus so the first message never waits, while a tray-only launch stays
+            // dormant and never pays for a worker it does not use.
+            if let Some(window) = app.get_webview_window("main") {
+                let handle = app.handle().clone();
+                let warmed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                window.on_window_event(move |event| {
+                    if !matches!(event, tauri::WindowEvent::Focused(true)) {
+                        return;
+                    }
+                    if warmed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                        return;
+                    }
+                    let handle = handle.clone();
+                    std::thread::spawn(move || {
+                        let shared = handle.state::<Shared>();
+                        let Ok(mut host) = shared.lock() else {
+                            return;
+                        };
+                        let _ = host.supervisor.start("pi");
+                    });
+                });
+            }
+            {
+                use tauri_plugin_notification::NotificationExt;
+                let handle=app.handle().clone();
+                app.notification().on_action(move |action| {
+                    if action.action_id() != "tap" { return; }
+                    let run=action.notification().and_then(|n|n.extra().get("runId")).and_then(Value::as_str).map(str::to_owned);
+                    if let Some(run)=run {
+                        if let Ok(h)=handle.state::<Shared>().lock() {
+                            let _=h.db.execute("INSERT INTO settings(key,value) VALUES('notification_run',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[run]);
+                        }
+                    }
+                    open_main(&handle);
+                    let _=handle.emit("automation-open",());
+                })?;
+            }
             let show = MenuItem::with_id(app, "show", "Open Talo", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Talo", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let pause = MenuItem::with_id(app, "pause_automation", "Pause Automation", true, None::<&str>)?;
+            let resume = MenuItem::with_id(app, "resume_automation", "Resume Automation", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &pause, &resume, &quit])?;
             TrayIconBuilder::new()
                 .icon(tauri::image::Image::from_bytes(include_bytes!(
                     "../icons/icon.png"
@@ -497,6 +581,16 @@ fn main() {
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => open_main(app),
+                    "pause_automation" | "resume_automation" => {
+                        let paused=event.id.as_ref()=="pause_automation";
+                        let app=app.clone();
+                        std::thread::spawn(move||{
+                            if let Ok(h)=app.state::<Shared>().lock(){
+                                let _=automation::set_paused(&h,paused);
+                                let _=app.emit("automation-changed",());
+                            }
+                        });
+                    }
                     "quit" => {
                         if let Ok(mut host) = app.state::<Shared>().lock() {
                             let Host {

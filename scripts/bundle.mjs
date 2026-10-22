@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, cp, readdir, access } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, cp, readdir, access, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { bundleDonsetch } from './donsetch.mjs';
@@ -13,6 +13,19 @@ const bundledLock={name:'talo-runtime',version:'0.1.0',lockfileVersion:3,require
 for(const [key,value] of Object.entries(lock.packages))if(key.startsWith('node_modules/')&&!value.link&&!value.dev)bundledLock.packages[key]=value;
 await writeFile(path.join(destination,'package-lock.json'),JSON.stringify(bundledLock,null,2));
 execFileSync('cmd.exe',['/d','/s','/c','npm ci --omit=dev --ignore-scripts --no-audit --no-fund'],{cwd:destination,stdio:'inherit',windowsHide:true});
+// Strip files the runtime never opens: source maps, type declarations and the Java engine
+// that recheck only falls back to off Windows. Markdown stays: pi reads its own README.md
+// and CHANGELOG.md at runtime. License and notice files are preserved for the inventory.
+async function prune(dir){
+  for(const entry of await readdir(dir,{withFileTypes:true})){
+    const full=path.join(dir,entry.name);
+    if(entry.isDirectory()){await prune(full);continue;}
+    if(/^(license|copying|notice)/i.test(entry.name))continue;
+    if(/\.(?:map|d\.ts|d\.mts|d\.cts)$/i.test(entry.name))await rm(full,{force:true});
+  }
+}
+await prune(path.join(destination,'node_modules'));
+await rm(path.join(destination,'node_modules/recheck-jar'),{recursive:true,force:true});
 await cp('dist/workers',path.join(destination,'workers'),{recursive:true});
 await cp('dist/services',path.join(destination,'services'),{recursive:true});
 await cp('dist/packages',path.join(destination,'packages'),{recursive:true});

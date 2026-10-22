@@ -12,12 +12,14 @@
   import ProviderSettings from './components/ProviderSettings.svelte';
   import ToolsSettings from './components/ToolsSettings.svelte';
   import ToolApprovals from './components/ToolApprovals.svelte';
+  import TasksPanel from './components/TasksPanel.svelte';
   import { chat, disposeChat, initChat, selectionLabel } from './lib/chat.svelte';
   import { CUSTOM_BASE_URL_EXAMPLE, DEFAULT_PREFERENCE, PROVIDERS, parseProviderPreference, providerDescriptor } from '../../../packages/contracts/src/index';
   import type { Onboarding, RuntimeStatus, ServiceId } from '../../../packages/contracts/src/index';
   const pages = ['Chat', 'Workspaces', 'Tasks', 'Browser', 'Memory', 'Settings'] as const;
   type Page = typeof pages[number];
   let page = $state<Page>('Chat');
+  let taskFocus = $state('');
   function navigatePage(next: Page) { if (page !== next) closeBrowser(); page = next; }
   const NAV_KEY = 'talo.nav.collapsed';
   function initialNavCollapsed(): boolean {
@@ -32,6 +34,7 @@
   let provider = $derived(providerDescriptor(settings.provider));
   let connectedCount = $derived(chat.connections.filter(connection=>connection.connected).length);
   let chatSelection = $derived(selectionLabel(chat.active?.conversation.selection ?? chat.draftSelection));
+  const aiWorking = $derived(chat.active?.state === 'generating' || chat.active?.state === 'cancelling');
   let loaded = $state(false);
   let editing = $state(false);
   let step = $state(0);
@@ -46,6 +49,12 @@
   onMount(() => {
     let active=true;
     let unlisten:(()=>void)|undefined;
+    let stopAutomation:(()=>void)|undefined;
+    const notification=async()=>{if(!isTauri())return;const run=await invoke<string>('automation_action',{operation:'notification'});if(run&&active){taskFocus=run;navigatePage('Tasks');}};
+    if(isTauri()){
+      void notification().catch(()=>{});
+      void listen('automation-open',()=>void notification().catch(()=>{})).then(stop=>{if(active)stopAutomation=stop;else stop();});
+    }
     void initChat();
     const stopBrowser = initBrowser();
     (async()=>{try { if(isTauri()){const saved=await invoke<Onboarding|null>('load_settings');if(saved && active)settings={...settings,...saved,...parseProviderPreference(saved)};await refresh();} }catch(e){error=String(e);}finally{if(active)loaded=true;}})();
@@ -53,7 +62,7 @@
     if(isTauri())listen<RuntimeStatus>('runtime-status',event=>{if(active)status=event.payload;}).then(stop=>{if(active)unlisten=stop;else stop();});
     const wake=()=>{if(active)refresh().catch(()=>{});};
     window.addEventListener('focus',wake);
-    return ()=>{active=false;unlisten?.();window.removeEventListener('focus',wake);disposeChat();stopBrowser();};
+    return ()=>{active=false;unlisten?.();stopAutomation?.();window.removeEventListener('focus',wake);disposeChat();stopBrowser();};
   });
   async function save() { try {busy=true;if(isTauri())await invoke('save_settings',{settings:{...settings,complete:true}});settings.complete=true;editing=false;void refreshLibrary();}catch(e){error=String(e);}finally{busy=false;} }
   async function permission(action:string,resource:string,run:(id:string)=>Promise<void>) {
@@ -80,7 +89,7 @@
   }
 </script>
 
-<div class="shell" class:nav-collapsed={navCollapsed}>
+<div class="shell" class:nav-collapsed={navCollapsed} class:ai-working={aiWorking}>
   <aside inert={navCollapsed} aria-hidden={navCollapsed}>
     <div class="nav-inner">
       <div class="aside-head">
@@ -88,7 +97,7 @@
         <button class="rail-toggle" onclick={toggleNav} aria-expanded={!navCollapsed} aria-label="Collapse navigation" title="Collapse navigation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="3.5"/><path d="M9.5 4.5v15"/></svg></button>
       </div>
       <div class="nav-caption">Your everyday companion</div>
-      <nav aria-label="Main navigation">{#each pages as item (item)}<button class={{selected:page===item}} onclick={()=>navigatePage(item)} title={item}><span class="nav-icon"><NavIcon name={item} /></span><span class="nav-label">{item}</span>{#if page===item}<span class="nav-dot"></span>{/if}</button>{/each}</nav>
+      <nav aria-label="Main navigation">{#each pages as item (item)}<button class={{selected:page===item}} class:thinking={item==='Chat' && aiWorking} onclick={()=>navigatePage(item)} title={item}><span class="nav-icon"><NavIcon name={item} working={item==='Chat' && aiWorking} /></span><span class="nav-label">{item}</span>{#if page===item}<span class="nav-dot"></span>{/if}</button>{/each}</nav>
       <div class="sidebar-bottom"><span class="presence"></span><div>Talo is here<small>{isTauri()?'Running quietly in your tray':'Interface preview'}</small></div></div>
     </div>
   </aside>
@@ -121,6 +130,8 @@
         </div>
       {:else if page==='Browser'}
         <p class="browser-note">Browser profiles and downloads are stored separately from chat transcripts and memory.</p>
+      {:else if page==='Tasks'}
+        <TasksPanel focusRun={taskFocus} onOpenChat={()=>navigatePage('Chat')} />
       {:else}
         <section class="empty"><span class="empty-badge"><span class="empty-icon">&#9745;</span></span><h2>A clear slate.</h2><p>Your scheduled tasks will live here. Automatic execution is not enabled.</p><span class="coming">Foundation in place</span></section>
       {/if}
@@ -161,6 +172,10 @@
   .nav-label{min-width:0;overflow:hidden;text-overflow:ellipsis}
   nav button:hover{background:#1d1d19;color:var(--text)}
   nav button.selected{background:#26261f;color:var(--yellow)}
+  /* While Talo works, the chat entry glows so the answer feels alive from the rail too. */
+  nav button.thinking{color:var(--yellow)}
+  nav button.thinking .nav-icon{--icon-opacity:1}
+  .shell.ai-working .brand img{animation:brand-bob 1.7s ease-in-out infinite;filter:drop-shadow(0 0 22px rgba(255,212,92,.34))}
   .nav-icon{--icon-opacity:.6;width:22px;height:22px;display:grid;place-items:center;flex-shrink:0}
   nav button:hover .nav-icon{--icon-opacity:.85}
   nav button.selected .nav-icon{--icon-opacity:1}
@@ -262,5 +277,7 @@
   }
   @media(prefers-reduced-motion:reduce){
     aside,.nav-inner,.rail-toggle,.header-toggle{transition:none}
+    .shell.ai-working .brand img{animation:none}
   }
+  @keyframes brand-bob{0%,100%{transform:translateY(0) rotate(0)}50%{transform:translateY(-2.5px) rotate(-5deg)}}
 </style>

@@ -31,7 +31,7 @@ impl Permissions {
             .ok_or("Unknown permission request")?;
         db.execute(
             "INSERT INTO permission_audit(id,action,resource,allowed) VALUES(?1,?2,?3,?4)",
-            params![id, action, resource, allowed],
+            params![id, action, if action=="browser.action" { "protected browser operation" } else { &resource }, allowed],
         )
         .map_err(|e| e.to_string())?;
         if allowed {

@@ -50,6 +50,12 @@ pub fn reply(h: &mut crate::Host, id: Value, allowed: bool) {
         .relay_tools(json!({"id":id,"result":{"allowed":allowed}}));
 }
 pub fn message(h: &mut crate::Host, app: &tauri::AppHandle, message: Value) {
+    if message["method"] == "automation.usage" {
+        let p=&message["params"];
+        let generation=p["generationId"].as_str().unwrap_or("");
+        let _=h.db.execute("UPDATE automation_runs SET usage=?2 WHERE generation_id=?1",rusqlite::params![generation,p.to_string()]);
+        return;
+    }
     if message["method"] == "status" {
         h.integrations.status = message["params"].clone();
         let _ = app.emit("tools-changed", ());
@@ -112,13 +118,15 @@ pub fn message(h: &mut crate::Host, app: &tauri::AppHandle, message: Value) {
         reply(h, message["id"].clone(), false);
         return;
     }
-    // A background run never opens an approval window or acquires new grants.
+    // Scheduled work waits at the same exact-operation broker; it never acquires grants itself.
     let attended = app
         .get_webview_window("main")
         .is_some_and(|w| w.is_visible().unwrap_or(false));
-    match crate::permissions::policy(action, scope, &config["grants"], attended) {
+    let background = crate::automation::current(h);
+    match crate::permissions::policy(action, scope, &config["grants"], attended || background.is_some()) {
         crate::permissions::Decision::Allow => {
-            reply(h, message["id"].clone(), true);
+            let allowed=crate::automation::reserve(h,action,scope);
+            reply(h, message["id"].clone(), allowed);
             return;
         }
         crate::permissions::Decision::Deny => {
@@ -135,6 +143,9 @@ pub fn message(h: &mut crate::Host, app: &tauri::AppHandle, message: Value) {
         uuid::Uuid::new_v4().to_string(),
         (message, Instant::now(), h.supervisor.worker_epoch()),
     );
+    if let Some(run) = background {
+        crate::automation::notify(app, &run, "A scheduled task needs your approval. Open Talo within 85 seconds.");
+    }
     let _ = app.emit("tool-approvals-changed", ());
 }
 pub fn expire(h: &mut crate::Host) -> bool {
@@ -202,6 +213,7 @@ pub async fn tools_action(
                 let (message,at,epoch)=h.integrations.pending.remove(id).ok_or("Approval expired or cancelled")?;
                 let decision=p["decision"].as_str().unwrap_or("deny");
                 let allowed=["once","scope"].contains(&decision)&&at.elapsed()<Duration::from_secs(85)&&epoch==h.supervisor.worker_epoch();
+                let allowed=allowed&&crate::automation::reserve(&h,message["params"]["action"].as_str().unwrap_or(""),message["params"]["scope"].as_str().unwrap_or(""));
                 if allowed&&decision=="scope"{
                     config["grants"].as_array_mut().ok_or("Invalid grants")?.push(json!({"id":uuid::Uuid::new_v4().to_string(),"action":message["params"]["action"],"scope":message["params"]["scope"],"summary":message["params"]["summary"]}));save(&h.supervisor.data,&config)?;
                 }
