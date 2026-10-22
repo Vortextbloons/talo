@@ -11,7 +11,7 @@
 
   let {
     settings, status, busy,
-    onPersist, onService, onBrowserStart, onAutostart, onMemory, onOpenMemory, onOpenChat, onRerunSetup,
+    onPersist, onService, onBrowserStart, onAutostart, onMemory, onOpenChat, onRerunSetup,
   }: {
     settings: Onboarding;
     status: RuntimeStatus | null;
@@ -21,7 +21,6 @@
     onBrowserStart: () => Promise<void>;
     onAutostart: (enabled: boolean) => Promise<void>;
     onMemory: (enabled: boolean) => Promise<void>;
-    onOpenMemory: () => void;
     onOpenChat: () => void;
     onRerunSetup: () => void;
   } = $props();
@@ -187,11 +186,10 @@
             <div class="what"><strong>Remember between chats</strong><small>Kept on this PC. Nothing leaves the machine.</small></div>
             <div class="how">
               <button class="switch" role="switch" aria-checked={library.memoryEnabled} aria-label="Remember between chats" onclick={() => void onMemory(!library.memoryEnabled)}></button>
-              <button class="quiet" onclick={onOpenMemory}>Open memory</button>
             </div>
           </div>
         </div>
-        <p class="after">What Talo remembers lives in Memory, where you can read and delete every entry.</p>
+        <p class="after">Talo surfaces what it remembers in your chats, when it is relevant.</p>
       </section>
 
       <details class="disclosure full">

@@ -1,5 +1,5 @@
 <script lang="ts">
-  export type IconName = 'Chat' | 'Inbox' | 'Workspaces' | 'Tasks' | 'Browser' | 'Memory' | 'Settings';
+  export type IconName = 'Chat' | 'Inbox' | 'Workspaces' | 'Tasks' | 'Settings';
   let { name, working = false }: { name: IconName; working?: boolean } = $props();
   const chatting = $derived(name === 'Chat' && working === true);
 </script>
@@ -18,13 +18,6 @@
   {:else if name === 'Tasks'}
     <rect x="3" y="3" width="18" height="18" rx="5" />
     <path d="m8.4 12.2 2.5 2.5 4.8-5.2" />
-  {:else if name === 'Browser'}
-    <rect x="3" y="4" width="18" height="16" rx="4" />
-    <path d="M3 9.5h18" />
-    <circle cx="6.7" cy="6.8" r=".9" fill="currentColor" stroke="none" />
-    <circle cx="9.4" cy="6.8" r=".9" fill="currentColor" stroke="none" />
-  {:else if name === 'Memory'}
-    <path d="M6.5 3.5h11a1.5 1.5 0 0 1 1.5 1.5v15.2L12 16.6l-7 3.6V5a1.5 1.5 0 0 1 1.5-1.5Z" />
   {:else if name === 'Settings'}
     <path d="M4 7.5h9M17 7.5h3M4 16.5h2.5M10.5 16.5h9.5" />
     <circle cx="15" cy="7.5" r="2.2" />

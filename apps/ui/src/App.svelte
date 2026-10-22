@@ -18,7 +18,7 @@
   import { checkForUpdates } from './lib/updates.svelte';
   import { CUSTOM_BASE_URL_EXAMPLE, DEFAULT_PREFERENCE, PROVIDERS, parseProviderPreference, providerDescriptor } from '../../../packages/contracts/src/index';
   import type { Onboarding, RuntimeStatus, ServiceId } from '../../../packages/contracts/src/index';
-  const pages = ['Chat', 'Inbox', 'Workspaces', 'Tasks', 'Browser', 'Memory', 'Settings'] as const;
+  const pages = ['Chat', 'Inbox', 'Workspaces', 'Tasks', 'Settings'] as const;
   type Page = typeof pages[number];
   let page = $state<Page>('Chat');
   /** The rail shows a count only when something genuinely waits on a person. */
@@ -45,7 +45,7 @@
   let busy = $state(false);
   let pending = $state<{id:string; action:string; resource:string; run:(id:string)=>Promise<void>} | null>(null);
   const descriptions:Record<Page,string> = {
-    Chat:'A little space to think things through.',Inbox:'What Talo has asked, proposed or left for you.',Workspaces:'Keep each project in its own place.',Tasks:'A home for the things you want to come back to.',Browser:'Your browser, with a space of its own.',Memory:'The useful things, remembered on your terms.',Settings:'Make yourself at home.'
+    Chat:'A little space to think things through.',Inbox:'What Talo has asked, proposed or left for you.',Workspaces:'Keep each project in its own place.',Tasks:'A home for the things you want to come back to.',Settings:'Make yourself at home.'
   };
   async function refresh() { if(isTauri()) status = await invoke<RuntimeStatus>('runtime_status'); }
   onMount(() => {
@@ -108,12 +108,12 @@
     try{await saveSettings(settings);}catch(e){error=String(e);return;}
     editing=false;void refreshLibrary();
   }
-  /* Keyboard map: Ctrl+1..7 switch pages, Ctrl+N starts a conversation, Ctrl+B keeps the rail open,
+  /* Keyboard map: Ctrl+1..5 switch pages, Ctrl+N starts a conversation, Ctrl+B keeps the rail open,
      Ctrl+, opens Settings. */
   function onKeydown(event:KeyboardEvent):void{
     if(!loaded||!settings.complete||editing)return;
     if(!event.ctrlKey||event.altKey||event.shiftKey||event.metaKey)return;
-    if(event.key>='1'&&event.key<='6'){
+    if(event.key>='1'&&event.key<='5'){
       const item=pages[Number(event.key)-1];
       if(item){event.preventDefault();navigatePage(item);}
       return;
@@ -155,12 +155,12 @@
     {#if error}<div class="error" role="alert">{error}<button aria-label="Dismiss error" onclick={()=>error=''}>×</button></div>{/if}
     <div class="content" class:chat-mode={page==='Chat'}>
       {#if page!=='Chat'}<div class="page-heading"><h1>{page}</h1><p>{descriptions[page]}</p></div>{/if}
-      <BrowserPanel pageView={page === 'Browser'} />
+      <BrowserPanel />
       {#if page==='Inbox'}
         <InboxPanel onOpenChat={()=>navigatePage('Chat')} />
       {:else if page==='Chat'}
         <ChatView onOpenSettings={()=>{navigatePage('Settings');}} name={settings.name} tagline={descriptions.Chat} showReasoning={settings.showReasoning === true} agentName={settings.agentName || 'Talo'} onRenameAgent={renameAgent} />
-      {:else if page==='Memory' || page==='Workspaces'}
+      {:else if page==='Workspaces'}
         <LibraryPanel mode={page} />
       {:else if page==='Settings'}
         <SettingsPanel
@@ -172,12 +172,9 @@
           onBrowserStart={browserStart}
           onAutostart={setAutostart}
           onMemory={setMemory}
-          onOpenMemory={()=>navigatePage('Memory')}
           onOpenChat={()=>navigatePage('Chat')}
           onRerunSetup={()=>{editing=true;step=0;}}
         />
-      {:else if page==='Browser'}
-        <p class="browser-note">Browser profiles and downloads are stored separately from chat transcripts and memory.</p>
       {:else if page==='Tasks'}
         <TasksPanel focusRun={taskFocus} onOpenChat={()=>navigatePage('Chat')} />
       {:else}
