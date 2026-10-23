@@ -12,16 +12,17 @@ function bundledRuntime() {
   }
 }
 
+/**
+ * Integration tests launch the Bun bundle, which is what the installer runs. A previous
+ * copy under `vendor/bundle` is ignored so an old package cannot hide a current failure.
+ * `bun run verify:bundle` is what boots that packaged copy.
+ */
 export function workerLocation() {
-  const bundled = path.resolve('vendor/bundle/workers/pi/src/main.js');
-  if (fs.existsSync(bundled)) {
-    return { script: bundled, cwd: path.resolve('vendor/bundle'), runtime: bundledRuntime() };
+  const bundled = path.resolve('dist/entries/workers/pi/src/main.js');
+  if (!fs.existsSync(bundled)) {
+    throw new Error('Build the Pi worker (bun run build:workers) before running its tests');
   }
-  const dist = path.resolve('dist/workers/pi/src/main.js');
-  if (fs.existsSync(dist)) {
-    return { script: dist, cwd: path.resolve('.'), runtime: bundledRuntime() };
-  }
-  throw new Error('Build the Pi worker before running its tests');
+  return { script: bundled, cwd: path.resolve('.'), runtime: bundledRuntime() };
 }
 
 /**

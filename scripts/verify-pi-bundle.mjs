@@ -47,13 +47,28 @@ try {
           finish(new Error('Bundled Pi health check failed'));
           return;
         }
+        child.stdin.write(JSON.stringify({ id: 'bundle-session', method: 'session.open', params: { conversationId: 'bundle-check' } }) + '\n');
+      }
+      if (event.type === 'response' && event.id === 'bundle-session') {
+        if (event.error) {
+          finish(new Error('Bundled Pi could not open a session for tool discovery'));
+          return;
+        }
+        child.stdin.write(JSON.stringify({ id: 'bundle-tools', method: 'tools.status' }) + '\n');
+      }
+      if (event.type === 'response' && event.id === 'bundle-tools') {
+        const googleTools = event.result?.tools?.filter(tool => tool.id.startsWith('google_')) ?? [];
+        if (event.error || googleTools.length !== 13) {
+          finish(new Error('Bundled Pi is missing the Google Workspace tools; refresh the worker bundle'));
+          return;
+        }
         verified = true;
         child.stdin.end(JSON.stringify({ id: 'bundle-shutdown', method: 'shutdown' }) + '\n');
       }
     });
     child.once('exit', code => finish(code === 0 && verified ? undefined : new Error('Bundled Pi exited before completing its health check')));
   });
-  console.log('Bundled runtime launches Pi and completes its IPC health check.');
+  console.log('Bundled runtime launches Pi, completes its IPC health check, and exposes Google Workspace tools.');
 } finally {
   if (child?.pid && child.exitCode === null && child.signalCode === null) {
     const exited = new Promise(resolve => child.once('exit', resolve));

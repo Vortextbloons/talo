@@ -145,6 +145,7 @@ pub fn tick(h: &mut Host, app: &tauri::AppHandle) -> Result<(), String> {
             h.chat.on_lifecycle(&mut h.db, app, lifecycle);
         }
         chat::chat_send_inner(app, h, conversation, generation, task.prompt, vec![])
+            .and_then(|deferred| chat::drive(app, h, deferred))
     })();
     if let Err(error) = launch {
         h.db.execute("UPDATE automation_tasks SET paused=1 WHERE id=(SELECT task_id FROM automation_runs WHERE id=?1)",[&run]).map_err(|e|e.to_string())?;

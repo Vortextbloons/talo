@@ -691,7 +691,9 @@ fn launch_queued(host: &mut Host, app: &tauri::AppHandle) {
             break;
         }
         emit_task_update(&host.db, app, &task.id);
-        if let Err(error) = chat::chat_child_send_inner(app, host, &task) {
+        if let Err(error) = chat::chat_child_send_inner(app, host, &task)
+            .and_then(|deferred| chat::drive(app, host, deferred))
+        {
             let _ = finish(&host.db, &task.id, "failed", None, Some(&chat::sanitize_error(&error)));
             emit_task_update(&host.db, app, &task.id);
         }

@@ -166,6 +166,7 @@ const WORKER_METHODS = new Set<WorkerMethod>([
   'session.deliver',
   'session.abort',
   'session.snapshot',
+  'session.history',
   'session.thinking',
   'tools.configure', 'tools.status', 'tools.test', 'tools.cancel',
 ]);
@@ -408,7 +409,9 @@ function cloneMessages(messages: ChatMessage[]): ChatMessage[] {
   return messages.map(cloneMessage);
 }
 
-function conversationResult(record: SessionRecord): Record<string, unknown> {
+/// Opening a session returns metadata only. A long transcript must never ride on one
+/// protocol frame: the host asks for it in bounded pages through `session.history`.
+function sessionMetadata(record: SessionRecord): Record<string, unknown> {
   return {
     sessionId: record.sessionId,
     autoCompactionEnabled: record.session.autoCompactionEnabled,
@@ -416,13 +419,44 @@ function conversationResult(record: SessionRecord): Record<string, unknown> {
     path: record.path,
     provider: record.provider,
     model: record.model,
-    messages: cloneMessages(record.messages),
+    messageCount: record.messages.length,
     thinkingLevel: record.session.thinkingLevel,
     state: record.state,
     generationId: record.generationId,
     sequence: record.sequence,
     ...(record.error ? { error: record.error } : {}),
   };
+}
+
+function conversationResult(record: SessionRecord): Record<string, unknown> {
+  return { ...sessionMetadata(record), messages: cloneMessages(record.messages) };
+}
+
+const HISTORY_PAGE_MESSAGES = 200;
+const HISTORY_PAGE_BYTES = 1024 * 1024;
+
+function historyPage(record: SessionRecord, params: Record<string, unknown>): Record<string, unknown> {
+  const offset = params.offset === undefined ? 0 : params.offset;
+  if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 0) {
+    throw new Error('Invalid history offset');
+  }
+  const requested = params.limit === undefined ? HISTORY_PAGE_MESSAGES : params.limit;
+  if (typeof requested !== 'number' || !Number.isInteger(requested) || requested < 1) {
+    throw new Error('Invalid history limit');
+  }
+  const limit = Math.min(requested, HISTORY_PAGE_MESSAGES);
+  const messages: ChatMessage[] = [];
+  let bytes = 0;
+  let index = offset;
+  while (index < record.messages.length && messages.length < limit) {
+    const message = cloneMessage(record.messages[index]);
+    const size = Buffer.byteLength(JSON.stringify(message), 'utf8');
+    if (messages.length > 0 && bytes + size > HISTORY_PAGE_BYTES) break;
+    bytes += size;
+    messages.push(message);
+    index += 1;
+  }
+  return { messages, nextOffset: index < record.messages.length ? index : null };
 }
 
 function findGeneration(generationId: string): { record: SessionRecord; generation: Generation } | undefined {
@@ -967,7 +1001,7 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
       } else {
         const selectionChanged = explicitProvider !== undefined || explicitModel !== undefined ||
           apiKey !== undefined || explicitBaseUrl !== undefined;
-        if (!selectionChanged) return conversationResult(existing);
+        if (!selectionChanged) return sessionMetadata(existing);
         // A different credential needs a different runtime. Reopen the same durable file
         // instead of mutating a session that is bound to the old runtime.
         if ((existing.state === 'generating' || existing.state === 'cancelling') && existing.generation) {
@@ -1155,7 +1189,7 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
     record.unsubscribe = session.subscribe(event => handleSessionEvent(record, event));
     sessions.set(conversationId, record);
     await evictSessions(conversationId);
-    return conversationResult(record);
+    return sessionMetadata(record);
   }));
 }
 
@@ -1382,6 +1416,13 @@ async function handle(request: WorkerRequest): Promise<void> {
       }
       case 'session.snapshot': {
         send({ type: 'response', id: request.id, result: snapshot(params) });
+        return;
+      }
+      case 'session.history': {
+        const conversationId = requireId(params.conversationId, 'conversationId');
+        const record = sessions.get(conversationId);
+        if (!record) throw new Error('Conversation is not open');
+        send({ type: 'response', id: request.id, result: historyPage(record, params) });
         return;
       }
       case 'session.thinking': {

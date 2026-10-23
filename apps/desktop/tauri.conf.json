@@ -4,9 +4,9 @@
   "version": "0.2.0",
   "identifier": "com.talo.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev:ui",
+    "beforeDevCommand": "bun run dev:ui",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "npm run build:ui",
+    "beforeBuildCommand": "bun run build:ui",
     "frontendDist": "../ui/dist"
   },
   "app": {

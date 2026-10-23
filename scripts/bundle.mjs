@@ -4,15 +4,38 @@ import path from 'node:path';
 import { bundleDonsetch } from './donsetch.mjs';
 const destination=path.resolve('vendor/bundle');
 await mkdir(destination,{recursive:true});
+const entries=[
+  ['dist/entries/workers/pi/src/main.js','workers/pi/src/main.js'],
+  ['dist/entries/workers/pi/src/transcript.js','workers/pi/src/transcript.js'],
+  ['dist/entries/services/browser/src/main.js','services/browser/src/main.js'],
+];
+async function copyRuntimeCode(){
+  for(const [from,to] of entries){
+    const target=path.join(destination,to);
+    await mkdir(path.dirname(target),{recursive:true});
+    await cp(from,target);
+  }
+}
+if(process.argv.includes('--code-only')){
+  await copyRuntimeCode();
+  process.exit(0);
+}
 const dependencies={};
 for(const file of ['workers/pi/package.json','services/browser/package.json'])Object.assign(dependencies,JSON.parse(await readFile(file,'utf8')).dependencies);
 await writeFile(path.join(destination,'package.json'),JSON.stringify({name:'talo-runtime',version:'0.1.0',private:true,type:'module',dependencies},null,2));
 // The root lock is authoritative. Copy its fully resolved production graph, including native optional modules.
-const lock=JSON.parse(await readFile('package-lock.json','utf8'));
-const bundledLock={name:'talo-runtime',version:'0.1.0',lockfileVersion:3,requires:true,packages:{'':{name:'talo-runtime',version:'0.1.0',dependencies}}};
-for(const [key,value] of Object.entries(lock.packages))if(key.startsWith('node_modules/')&&!value.link&&!value.dev)bundledLock.packages[key]=value;
-await writeFile(path.join(destination,'package-lock.json'),JSON.stringify(bundledLock,null,2));
-execFileSync('cmd.exe',['/d','/s','/c','npm ci --omit=dev --ignore-scripts --no-audit --no-fund'],{cwd:destination,stdio:'inherit',windowsHide:true});
+function parseBunLock(text){return JSON.parse(text.replace(/,(\s*[}\]])/g,'$1'));}
+const lock=parseBunLock(await readFile('bun.lock','utf8'));
+const packages={};
+for(const [key,value] of Object.entries(lock.packages)){
+  if(Array.isArray(value)&&String(value[0]).includes('workspace:'))continue;
+  packages[key]=value;
+}
+const bundledLock={lockfileVersion:lock.lockfileVersion,configVersion:lock.configVersion,workspaces:{'':{name:'talo-runtime',dependencies}},packages};
+await writeFile(path.join(destination,'bun.lock'),JSON.stringify(bundledLock,null,2));
+await rm(path.join(destination,'package-lock.json'),{force:true});
+const bunBinary=await access(path.resolve('vendor/runtime/bun/bun.exe')).then(()=>path.resolve('vendor/runtime/bun/bun.exe'),()=>'bun');
+execFileSync(bunBinary,['install','--frozen-lockfile','--ignore-scripts','--production'],{cwd:destination,stdio:'inherit',windowsHide:true});
 // Strip files the runtime never opens: source maps, type declarations and the Java engine
 // that recheck only falls back to off Windows. Markdown stays: pi reads its own README.md
 // and CHANGELOG.md at runtime. License and notice files are preserved for the inventory.
@@ -26,9 +49,7 @@ async function prune(dir){
 }
 await prune(path.join(destination,'node_modules'));
 await rm(path.join(destination,'node_modules/recheck-jar'),{recursive:true,force:true});
-await cp('dist/workers',path.join(destination,'workers'),{recursive:true});
-await cp('dist/services',path.join(destination,'services'),{recursive:true});
-await cp('dist/packages',path.join(destination,'packages'),{recursive:true});
+await copyRuntimeCode();
 // Explicit, checksum-verifying installer; no downloads occur on the end user's machine.
 await bundleDonsetch(destination);
 const binary=path.join(destination,'node_modules/donsetch/binaries/donsetch.exe');

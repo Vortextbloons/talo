@@ -79,7 +79,7 @@ export interface ResearchActivity {
 export type WorkerMethod = 'ping' | 'shutdown' | 'models.list' | 'provider.validate' |
   'chatgpt.begin' | 'chatgpt.poll' | 'chatgpt.refresh' | 'chatgpt.revoke' |
   'session.open' | 'session.prompt' | 'session.retry' | 'session.deliver' | 'session.abort' | 'session.snapshot' |
-  'session.thinking' | 'tools.configure' | 'tools.status' | 'tools.test' | 'tools.cancel';
+  'session.history' | 'session.thinking' | 'tools.configure' | 'tools.status' | 'tools.test' | 'tools.cancel';
 export interface WorkerRequest { id: string; method: WorkerMethod; params?: Record<string, unknown> }
 export type WorkerEvent =
   | { type: 'ready' | 'sleeping' | 'error'; message?: string }
@@ -108,7 +108,10 @@ export type WorkerEvent =
  * provider_models({ connectionId }) -> ProviderModelInfo[]
  * Event name: talo://chat, payload ChatEvent.
  * session.open private params: conversationId, sessionPath? (null creates), provider, model,
- * apiKey?, baseUrl?. Result: { sessionId, path, messages: ChatMessage[] }.
+ * apiKey?, baseUrl?. Result: bounded metadata { sessionId, path, provider, model, messageCount,
+ * thinkingLevel, state, generationId, sequence }, never the transcript.
+ * session.history params: conversationId, offset?, limit? (max 200). Result: { messages,
+ * nextOffset } where each page is also bounded by bytes; nextOffset is null on the last page.
  * session.prompt params: conversationId, generationId, text, images? (each {name, mimeType,
  * data, path}), capabilities? (subset of 'web'|'browser'|'files'|'google'; absent or empty means all).
  * The worker sends images natively when the model accepts image input and

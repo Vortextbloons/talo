@@ -12,21 +12,19 @@ use crate::{
         self, ChatMessage, ConnectionInfo, ConnectionRow, ConversationInfo, ConversationSnapshot,
         ModelSelection, NewGeneration,
     },
-    supervisor::{Lifecycle, Supervisor, WorkerSignal},
+    supervisor::{self, Lifecycle, Supervisor, WorkerSignal},
     Host, Shared,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 
 pub const EVENT_NAME: &str = "talo://chat";
 const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 const MAX_ERROR_CHARS: usize = 500;
 const SESSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-/// Prompt acknowledgement budget. If the worker accepts prompts by streaming events instead
-/// of replying immediately, the command returns after this short budget and the pump streams.
-const PROMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Identity is refreshed for each turn, independently of memory or saved Pi sessions.
 fn agent_context(db: &rusqlite::Connection, conversation: &ConversationInfo, query: &str) -> String {
@@ -201,11 +199,23 @@ struct SessionBinding {
     credential_hash: Option<String>,
 }
 
+/// A finished reply whose terminal row could not be written yet. The text stays in memory and
+/// is retried, so a database fault cannot announce a completion that never became durable.
+struct PendingFinalize {
+    conversation_id: String,
+    state: GenerationState,
+    text: String,
+    reasoning: String,
+    error: Option<String>,
+    sequence: i64,
+}
+
 /// In-memory projection of durable chat state. It is rebuilt from SQLite after a restart.
 #[derive(Default)]
 pub struct ChatState {
     active: HashMap<String, ActiveGeneration>,
     sessions: HashMap<String, SessionBinding>,
+    pending: HashMap<String, PendingFinalize>,
 }
 
 impl ChatState {
@@ -226,6 +236,62 @@ impl ChatState {
 
     pub fn any_active(&self) -> bool {
         !self.active.is_empty()
+    }
+
+    /// Retry terminal writes that failed. Until one succeeds the generation stays live, so a
+    /// new turn for that conversation keeps failing instead of silently losing this reply.
+    pub fn retry_pending(&mut self, db: &mut rusqlite::Connection, app: &AppHandle) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let ids = self.pending.keys().cloned().collect::<Vec<_>>();
+        for id in ids {
+            let Some(pending) = self.pending.get(&id) else {
+                continue;
+            };
+            let sequence = pending.sequence + 1;
+            let stored = storage::finalize_generation(
+                db,
+                &id,
+                pending.state.as_str(),
+                &pending.text,
+                Some(pending.reasoning.as_str()).filter(|reasoning| !reasoning.is_empty()),
+                pending.state.message_status(),
+                pending.error.as_deref(),
+                sequence,
+            );
+            let message = match stored {
+                Ok(message) => message,
+                Err(_) => continue,
+            };
+            let Some(pending) = self.pending.remove(&id) else {
+                continue;
+            };
+            self.active.remove(&id);
+            let Some(message) = message else {
+                // Another terminal write already closed this generation.
+                continue;
+            };
+            emit_generation(
+                app,
+                &pending.conversation_id,
+                &id,
+                sequence,
+                pending.state,
+                Some(pending.text.clone()),
+                Some(pending.reasoning.clone()),
+                Some(message),
+                pending.error.clone(),
+            );
+            crate::delegation::on_generation_finished(
+                db,
+                app,
+                &id,
+                pending.state,
+                &pending.text,
+                pending.error.as_deref(),
+            );
+        }
     }
 
     /// Persist a failed terminal state for every live generation without emitting events.
@@ -515,11 +581,12 @@ impl ChatState {
         let Some(active) = self.active.remove(generation_id) else {
             return;
         };
+        let conversation_id = active.conversation_id.clone();
         let text = text.unwrap_or(active.text);
         let reasoning = reasoning.unwrap_or(active.reasoning);
         let error = error.map(|error| sanitize_error(&error));
         let sequence = active.sequence + 1;
-        let persisted = storage::finalize_generation(
+        let persisted = match storage::finalize_generation(
             db,
             generation_id,
             state.as_str(),
@@ -528,9 +595,48 @@ impl ChatState {
             state.message_status(),
             error.as_deref(),
             sequence,
-        )
-        .ok()
-        .flatten();
+        ) {
+            Ok(message) => message,
+            Err(failure) => {
+                // Keep the finished reply recoverable instead of announcing it as saved.
+                self.pending.insert(
+                    generation_id.to_string(),
+                    PendingFinalize {
+                        conversation_id: conversation_id.clone(),
+                        state,
+                        text: text.clone(),
+                        reasoning: reasoning.clone(),
+                        error: error.clone(),
+                        sequence,
+                    },
+                );
+                self.active.insert(
+                    generation_id.to_string(),
+                    ActiveGeneration {
+                        state,
+                        sequence,
+                        text,
+                        reasoning,
+                        ..active
+                    },
+                );
+                emit_generation(
+                    app,
+                    &conversation_id,
+                    generation_id,
+                    sequence,
+                    state,
+                    None,
+                    None,
+                    None,
+                    Some(format!(
+                        "Talo could not save this reply ({}). It is kept and will be saved when storage recovers.",
+                        sanitize_error(&failure.to_string())
+                    )),
+                );
+                return;
+            }
+        };
         let message = persisted.unwrap_or(ChatMessage {
             id: active.assistant_id,
             role: "assistant".into(),
@@ -557,36 +663,51 @@ impl ChatState {
         crate::delegation::on_generation_finished(db, app, generation_id, state, &final_text, final_error.as_deref());
     }
 
-    fn ensure_session(
-        &mut self,
-        db: &mut rusqlite::Connection,
-        supervisor: &mut Supervisor,
+    /// The binding a session would have for these inputs, carrying the thinking level over a
+    /// rebind so a snapshot taken before the next `session.open` never reports a stale level.
+    fn session_binding(
+        &self,
+        supervisor: &Supervisor,
         conversation: &ConversationInfo,
         connection: &ConnectionRow,
         model_id: &str,
         secret: Option<&Secret>,
-    ) -> Result<(), String> {
-        supervisor.ensure_worker()?;
-        // Carry the session's thinking level across a rebind so a snapshot taken before
-        // the next session.open does not report a stale level.
-        let known_level = self
-            .sessions
-            .get(&conversation.id)
-            .and_then(|binding| binding.thinking_level.clone());
-        let binding = SessionBinding {
+    ) -> SessionBinding {
+        SessionBinding {
             worker_epoch: supervisor.worker_epoch(),
             connection_id: connection.id.clone(),
             provider_id: connection.provider_id.clone(),
             model_id: model_id.to_string(),
             session_path: conversation.session_path.clone(),
-            thinking_level: known_level,
+            thinking_level: self
+                .sessions
+                .get(&conversation.id)
+                .and_then(|binding| binding.thinking_level.clone()),
             credential_hash: if connection.provider_id == "chatgpt" {
                 use sha2::{Digest, Sha256};
                 secret.map(|secret| format!("{:x}", Sha256::digest(&**secret)))
-            } else { None },
-        };
+            } else {
+                None
+            },
+        }
+    }
+
+    /// Dispatch `session.open` when the conversation is not already bound to this worker.
+    /// Returns the round trip so the caller can wait for it without the host mutex held.
+    fn begin_session(
+        &mut self,
+        db: &rusqlite::Connection,
+        supervisor: &mut Supervisor,
+        conversation: &ConversationInfo,
+        connection: &ConnectionRow,
+        model_id: &str,
+        secret: Option<&Secret>,
+        continuation: Continuation,
+    ) -> Result<Option<Deferred>, String> {
+        supervisor.ensure_worker()?;
+        let binding = self.session_binding(supervisor, conversation, connection, model_id, secret);
         if self.sessions.get(&conversation.id) == Some(&binding) {
-            return Ok(());
+            return Ok(None);
         }
         // `baseUrl` is part of the private worker extension documented alongside the
         // contract's provider/model/apiKey/sessionPath parameters.
@@ -614,9 +735,21 @@ impl ChatState {
         let child = storage::conversation_is_delegated(db, &conversation.id).unwrap_or(true);
         params["delegation"] = json!(!scheduled && !child);
         params["skills"] = crate::skills::for_conversation(db, &supervisor.data, conversation);
-        let result = supervisor
-            .request("session.open", params, SESSION_TIMEOUT)
-            .map_err(|error| error.to_string())?;
+        dispatch(supervisor, "session.open", params, continuation)
+    }
+
+    /// Record an opened session. The worker answers with bounded metadata only, so a long
+    /// transcript can never arrive as one oversized frame.
+    fn finish_session(
+        &mut self,
+        db: &mut rusqlite::Connection,
+        supervisor: &mut Supervisor,
+        conversation: &ConversationInfo,
+        connection: &ConnectionRow,
+        model_id: &str,
+        result: Value,
+    ) -> Result<(), String> {
+        let binding = self.session_binding(supervisor, conversation, connection, model_id, None);
         let session_id = result
             .get("sessionId")
             .and_then(Value::as_str)
@@ -634,8 +767,19 @@ impl ChatState {
             session_path.as_deref(),
         )
         .map_err(|error| error.to_string())?;
-        if let Some(messages) = result.get("messages") {
-            if let Ok(messages) = serde_json::from_value::<Vec<ChatMessage>>(messages.clone()) {
+        let projected = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE conversation_id=?1)",
+                [&conversation.id],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap_or(true);
+        let saved = result
+            .get("messageCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        if !projected && saved > 0 {
+            if let Ok(messages) = session_history(supervisor, &conversation.id) {
                 let _ = storage::import_messages_if_empty(db, &conversation.id, &messages);
             }
         }
@@ -654,37 +798,16 @@ impl ChatState {
         Ok(())
     }
 
-    /// Push a thinking level onto the conversation's open session and record the effective
-    /// value. Unlike the user-facing command this has no generation guard: the worker router
-    /// applies routed levels to a child before its first prompt.
-    fn session_thinking(
-        &mut self,
-        supervisor: &mut Supervisor,
-        conversation_id: &str,
-        level: &str,
-    ) -> Result<String, String> {
-        let result = supervisor
-            .request(
-                "session.thinking",
-                json!({"conversationId": conversation_id, "level": level}),
-                SESSION_TIMEOUT,
-            )
-            .map_err(|error| {
-                if error.is_timeout() {
-                    "Changing thinking timed out".to_string()
-                } else {
-                    sanitize_error(&error.to_string())
-                }
-            })?;
-        let effective = result
-            .get("level")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "Pi worker did not return a thinking level".to_string())?
-            .to_string();
+    fn thinking_level(&self, conversation_id: &str) -> Option<String> {
+        self.sessions
+            .get(conversation_id)
+            .and_then(|binding| binding.thinking_level.clone())
+    }
+
+    fn set_thinking_level(&mut self, conversation_id: &str, level: String) {
         if let Some(binding) = self.sessions.get_mut(conversation_id) {
-            binding.thinking_level = Some(effective.clone());
+            binding.thinking_level = Some(level);
         }
-        Ok(effective)
     }
 
     fn fail_live(
@@ -808,6 +931,19 @@ fn storage_error(error: storage::Error) -> String {
     error.to_string()
 }
 
+/// Drive a command's worker round trips: wait with no host mutex held, apply with it held.
+fn drive_shared(app: &AppHandle, shared: &Shared, deferred: Option<Deferred>) -> Result<(), String> {
+    let mut next = deferred;
+    while let Some(current) = next {
+        let (continuation, epoch, reply) = current.wait();
+        let mut host = shared
+            .lock()
+            .map_err(|_| "Talo state is unavailable".to_string())?;
+        next = continuation.apply(app, &mut host, epoch, reply)?;
+    }
+    Ok(())
+}
+
 /// Puts each turn's images back on the message that carried them. Rows are keyed by the
 /// generation id, which survives a projection rebuild, so a reopened chat still shows them.
 fn attach_images(db: &rusqlite::Connection, conversation_id: &str, messages: &mut [ChatMessage]) {
@@ -915,6 +1051,32 @@ fn load_connection(
     Ok((connection, selection.model_id.clone()))
 }
 
+/// Read a saved Pi transcript in bounded pages. Opening a session returns metadata only, so
+/// the host never asks the worker for one frame it might refuse.
+fn session_history(supervisor: &mut Supervisor, conversation_id: &str) -> Result<Vec<ChatMessage>, String> {
+    let mut messages = Vec::new();
+    let mut offset = 0u64;
+    loop {
+        let page = supervisor
+            .request(
+                "session.history",
+                json!({"conversationId": conversation_id, "offset": offset}),
+                SESSION_TIMEOUT,
+            )
+            .map_err(|error| error.to_string())?;
+        let batch = page
+            .get("messages")
+            .ok_or_else(|| "Pi worker returned invalid history".to_string())?;
+        let batch = serde_json::from_value::<Vec<ChatMessage>>(batch.clone())
+            .map_err(|_| "Pi worker returned invalid history".to_string())?;
+        messages.extend(batch);
+        match page.get("nextOffset").and_then(Value::as_u64) {
+            Some(next) if next > offset => offset = next,
+            _ => return Ok(messages),
+        }
+    }
+}
+
 fn decrypt_secret(db: &rusqlite::Connection, supervisor: &mut Supervisor, connection: &ConnectionRow) -> Result<Option<Secret>, String> {
     if connection.provider_id == "chatgpt" {
         return crate::chatgpt::access(db, supervisor, connection).map(Some);
@@ -924,16 +1086,6 @@ fn decrypt_secret(db: &rusqlite::Connection, supervisor: &mut Supervisor, connec
         .as_ref()
         .map(|secret| credentials::unprotect(secret))
         .transpose()
-}
-
-/// Best-effort wipe of the ephemeral key copy held in a JSON params object.
-fn wipe_secret_param(params: &mut Value) {
-    if let Some(Value::String(secret)) = params.get_mut("apiKey") {
-        unsafe {
-            secret.as_bytes_mut().fill(0);
-        }
-        secret.clear();
-    }
 }
 
 fn title_from(text: &str) -> Option<String> {
@@ -1049,10 +1201,8 @@ pub(crate) fn conversation_snapshot_inner(
 ) -> Result<ConversationSnapshot, String> {
     if !host.chat.has_active_for(&conversation.id) {
         if let Some(path) = &conversation.session_path {
-            match crate::library::transcript(path) {
-                Ok(messages) => {
-                    crate::library::rebuild_projection(&mut host.db, &conversation.id, &messages)?;
-                }
+            match crate::library::sync_projection(&mut host.db, &conversation.id, path) {
+                Ok(()) => {}
                 Err(error) => {
                     let mut result = snapshot(&host.db, &host.chat, conversation)?;
                     result.error = Some(error);
@@ -1091,7 +1241,7 @@ fn conversation_thinking_inner(
     host: &mut Host,
     conversation_id: String,
     level: String,
-) -> Result<String, String> {
+) -> Result<Option<Deferred>, String> {
     let level = level.trim().to_ascii_lowercase();
     if !THINKING_LEVELS.contains(&level.as_str()) {
         return Err("Invalid thinking level".into());
@@ -1103,16 +1253,28 @@ fn conversation_thinking_inner(
         storage::get_conversation(&host.db, &conversation_id).map_err(storage_error)?;
     let (connection, model_id) = load_connection(&host.db, &conversation)?;
     let secret = decrypt_secret(&host.db, &mut host.supervisor, &connection)?;
-    host.chat.ensure_session(
-        &mut host.db,
+    let opened = host.chat.begin_session(
+        &host.db,
         &mut host.supervisor,
         &conversation,
         &connection,
         &model_id,
         secret.as_ref(),
+        Continuation::Thinking {
+            conversation_id: conversation_id.clone(),
+            level: level.clone(),
+        },
     )?;
-    let effective = host.chat.session_thinking(&mut host.supervisor, &conversation_id, &level)?;
-    Ok(effective)
+    if opened.is_some() {
+        return Ok(opened);
+    }
+    // The session is already open, so only the level round trip is left.
+    dispatch(
+        &mut host.supervisor,
+        "session.thinking",
+        json!({"conversationId": conversation_id, "level": level}),
+        Continuation::ThinkingApplied { conversation_id },
+    )
 }
 
 /// An image the composer attached to a message. `data` is base64 without the data: prefix.
@@ -1125,6 +1287,438 @@ pub struct AttachmentInput {
     pub name: Option<String>,
 }
 
+/// The step that applies a deferred worker reply. Every variant either finishes the turn or
+/// hands back the next round trip, so a command can release the host mutex between them.
+pub(crate) enum Continuation {
+    /// The session opened; send the user's turn.
+    Send {
+        conversation_id: String,
+        generation_id: String,
+        text: String,
+        background: bool,
+        images: Vec<Value>,
+    },
+    /// The session opened; replay the failed turn.
+    Retry {
+        conversation_id: String,
+        generation_id: String,
+        user_text: String,
+        had_session: bool,
+    },
+    /// The session opened; deliver persisted child results to the parent.
+    Deliver {
+        conversation_id: String,
+        generation_id: String,
+        text: String,
+    },
+    /// The session opened; apply the routed thinking level, then send the task.
+    Child {
+        conversation_id: String,
+        generation_id: String,
+        task_id: String,
+        text: String,
+        thinking_level: Option<String>,
+    },
+    ChildPrompt {
+        conversation_id: String,
+        generation_id: String,
+        task_id: String,
+        text: String,
+    },
+    /// The session opened; push the requested thinking level.
+    Thinking {
+        conversation_id: String,
+        level: String,
+    },
+    ThinkingApplied {
+        conversation_id: String,
+    },
+    /// The prompt was accepted; only a hard failure changes anything.
+    Accepted {
+        generation_id: String,
+    },
+}
+
+/// A dispatched worker request plus the step that applies its reply. The host mutex is not held
+/// while waiting for it, so one chat's session startup cannot stall the pump or another chat.
+pub(crate) struct Deferred {
+    reply: supervisor::PendingReply,
+    continuation: Continuation,
+    epoch: u64,
+}
+
+impl Deferred {
+    /// Wait for the reply. Call this without holding the host mutex.
+    pub(crate) fn wait(self) -> (Continuation, u64, Result<Value, supervisor::Error>) {
+        let Deferred {
+            reply,
+            continuation,
+            epoch,
+        } = self;
+        (continuation, epoch, reply.wait(SESSION_TIMEOUT))
+    }
+}
+
+fn session_error(error: supervisor::Error) -> String {
+    if error.is_timeout() {
+        "Opening this chat timed out".to_string()
+    } else {
+        sanitize_error(&error.to_string())
+    }
+}
+
+fn dispatch(
+    supervisor: &mut Supervisor,
+    method: &str,
+    params: Value,
+    continuation: Continuation,
+) -> Result<Option<Deferred>, String> {
+    let epoch = supervisor.worker_epoch();
+    let reply = supervisor
+        .dispatch(method, params)
+        .map_err(|error| session_error(error))?;
+    Ok(Some(Deferred {
+        reply,
+        continuation,
+        epoch,
+    }))
+}
+
+/// Wait for one deferred reply and apply it. Internal callers settle inline; commands wait on
+/// `Deferred::wait` first so the host mutex stays free.
+pub(crate) fn drive(app: &AppHandle, host: &mut Host, deferred: Option<Deferred>) -> Result<(), String> {
+    let mut next = deferred;
+    while let Some(current) = next {
+        let (continuation, epoch, reply) = current.wait();
+        next = continuation.apply(app, host, epoch, reply)?;
+    }
+    Ok(())
+}
+
+/// A dispatch that never reached the worker ends the turn instead of unwinding a command.
+fn dispatch_for_turn(
+    host: &mut Host,
+    app: &AppHandle,
+    generation_id: &str,
+    dispatched: Result<Option<Deferred>, String>,
+) -> Result<Option<Deferred>, String> {
+    match dispatched {
+        Ok(deferred) => Ok(deferred),
+        Err(error) => {
+            host.chat.fail_live(&mut host.db, app, generation_id, error);
+            Ok(None)
+        }
+    }
+}
+
+/// Apply a `session.open` reply to a turn that is still live.
+fn accept_session(
+    app: &AppHandle,
+    host: &mut Host,
+    epoch: u64,
+    conversation_id: &str,
+    generation_id: Option<&str>,
+    reply: Result<Value, supervisor::Error>,
+) -> Result<bool, String> {
+    let fail = |host: &mut Host, message: String| match generation_id {
+        Some(generation_id) => {
+            host.chat.fail_live(&mut host.db, app, generation_id, message);
+            Ok(false)
+        }
+        None => Err(message),
+    };
+    if let Some(generation_id) = generation_id {
+        // A stop or a worker exit may have finalized this turn while the session opened.
+        if !host.chat.active.contains_key(generation_id) {
+            return Ok(false);
+        }
+    }
+    if host.supervisor.worker_epoch() != epoch {
+        return fail(host, "The Pi worker restarted while opening this chat".into());
+    }
+    let result = match reply {
+        Ok(result) => result,
+        Err(error) => return fail(host, session_error(error)),
+    };
+    let applied = (|| {
+        let conversation =
+            storage::get_conversation(&host.db, conversation_id).map_err(storage_error)?;
+        let (connection, model_id) = load_connection(&host.db, &conversation)?;
+        host.chat.finish_session(
+            &mut host.db,
+            &mut host.supervisor,
+            &conversation,
+            &connection,
+            &model_id,
+            result,
+        )
+    })();
+    match applied {
+        Ok(()) => Ok(true),
+        Err(error) => fail(host, error),
+    }
+}
+
+fn child_prompt(
+    app: &AppHandle,
+    host: &mut Host,
+    task_id: &str,
+    conversation_id: &str,
+    generation_id: &str,
+    text: &str,
+) -> Result<Option<Deferred>, String> {
+    let conversation =
+        storage::get_conversation(&host.db, conversation_id).map_err(storage_error)?;
+    if let Err(error) = crate::delegation::set_generation(&host.db, task_id, generation_id, "running") {
+        host.chat.fail_live(&mut host.db, app, generation_id, error);
+        return Ok(None);
+    }
+    let mut context = child_context(&host.db, &conversation);
+    context.push_str(&agent_context(&host.db, &conversation, text));
+    context.truncate(context.floor_char_boundary(4096));
+    let params = json!({
+        "conversationId": conversation_id,
+        "generationId": generation_id,
+        "text": text,
+        "context": context,
+        "capabilities": crate::agent::capabilities_for(&host.db, &conversation.workspace_id),
+        "skills": crate::skills::for_conversation(&host.db, &host.supervisor.data, &conversation),
+        "delegation": false,
+    });
+    let dispatched = dispatch(
+        &mut host.supervisor,
+        "session.prompt",
+        params,
+        Continuation::Accepted {
+            generation_id: generation_id.to_string(),
+        },
+    );
+    dispatch_for_turn(host, app, generation_id, dispatched)
+}
+
+impl Continuation {
+    pub(crate) fn apply(
+        self,
+        app: &AppHandle,
+        host: &mut Host,
+        epoch: u64,
+        reply: Result<Value, supervisor::Error>,
+    ) -> Result<Option<Deferred>, String> {
+        match self {
+            Continuation::Send {
+                conversation_id,
+                generation_id,
+                text,
+                background,
+                images,
+            } => {
+                if !accept_session(app, host, epoch, &conversation_id, Some(&generation_id), reply)? {
+                    return Ok(None);
+                }
+                let conversation = storage::get_conversation(&host.db, &conversation_id)
+                    .map_err(storage_error)?;
+                let params = json!({
+                    "conversationId": conversation_id,
+                    "generationId": generation_id,
+                    "text": text,
+                    "context": agent_context(&host.db, &conversation, &text),
+                    "capabilities": crate::agent::capabilities_for(&host.db, &conversation.workspace_id),
+                    "skills": crate::skills::for_conversation(&host.db, &host.supervisor.data, &conversation),
+                    "images": images,
+                    "background": background,
+                });
+                let dispatched = dispatch(
+                    &mut host.supervisor,
+                    "session.prompt",
+                    params,
+                    Continuation::Accepted {
+                        generation_id: generation_id.clone(),
+                    },
+                );
+                dispatch_for_turn(host, app, &generation_id, dispatched)
+            }
+            Continuation::Retry {
+                conversation_id,
+                generation_id,
+                user_text,
+                had_session,
+            } => {
+                if !accept_session(app, host, epoch, &conversation_id, Some(&generation_id), reply)? {
+                    return Ok(None);
+                }
+                let conversation = storage::get_conversation(&host.db, &conversation_id)
+                    .map_err(storage_error)?;
+                let reference_context = agent_context(&host.db, &conversation, &user_text);
+                let capabilities =
+                    json!(crate::agent::capabilities_for(&host.db, &conversation.workspace_id));
+                let skills = crate::skills::for_conversation(
+                    &host.db,
+                    &host.supervisor.data,
+                    &conversation,
+                );
+                let images = images_for_generation(&host.db, &conversation_id, &generation_id);
+                let params = if had_session {
+                    json!({"conversationId":conversation_id,"generationId":generation_id,"context":reference_context,"capabilities":capabilities,"skills":skills,"images":images})
+                } else {
+                    json!({"conversationId":conversation_id,"generationId":generation_id,"text":user_text,"context":reference_context,"capabilities":capabilities,"skills":skills,"images":images})
+                };
+                let dispatched = dispatch(
+                    &mut host.supervisor,
+                    if had_session {
+                        "session.retry"
+                    } else {
+                        "session.prompt"
+                    },
+                    params,
+                    Continuation::Accepted {
+                        generation_id: generation_id.clone(),
+                    },
+                );
+                dispatch_for_turn(host, app, &generation_id, dispatched)
+            }
+            Continuation::Deliver {
+                conversation_id,
+                generation_id,
+                text,
+            } => {
+                if !accept_session(app, host, epoch, &conversation_id, Some(&generation_id), reply)? {
+                    return Ok(None);
+                }
+                let conversation = storage::get_conversation(&host.db, &conversation_id)
+                    .map_err(storage_error)?;
+                let params = json!({
+                    "conversationId": conversation_id,
+                    "generationId": generation_id,
+                    "text": text,
+                    "context": agent_context(&host.db, &conversation, &text),
+                    "capabilities": crate::agent::capabilities_for(&host.db, &conversation.workspace_id),
+                    "skills": crate::skills::for_conversation(&host.db, &host.supervisor.data, &conversation),
+                    "delegation": true,
+                });
+                let dispatched = dispatch(
+                    &mut host.supervisor,
+                    "session.deliver",
+                    params,
+                    Continuation::Accepted {
+                        generation_id: generation_id.clone(),
+                    },
+                );
+                dispatch_for_turn(host, app, &generation_id, dispatched)
+            }
+            Continuation::Child {
+                conversation_id,
+                generation_id,
+                task_id,
+                text,
+                thinking_level,
+            } => {
+                if !accept_session(app, host, epoch, &conversation_id, Some(&generation_id), reply)? {
+                    return Ok(None);
+                }
+                match thinking_level {
+                    Some(level) => dispatch(
+                        &mut host.supervisor,
+                        "session.thinking",
+                        json!({"conversationId": conversation_id, "level": level}),
+                        Continuation::ChildPrompt {
+                            conversation_id,
+                            generation_id,
+                            task_id,
+                            text,
+                        },
+                    ),
+                    None => child_prompt(
+                        app,
+                        host,
+                        &task_id,
+                        &conversation_id,
+                        &generation_id,
+                        &text,
+                    ),
+                }
+            }
+            Continuation::ChildPrompt {
+                conversation_id,
+                generation_id,
+                task_id,
+                text,
+            } => {
+                let level = match reply {
+                    Ok(result) => result
+                        .get("level")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    Err(error) => {
+                        if host.chat.active.contains_key(&generation_id) {
+                            host.chat.fail_live(
+                                &mut host.db,
+                                app,
+                                &generation_id,
+                                session_error(error),
+                            );
+                        }
+                        return Ok(None);
+                    }
+                };
+                if let Some(level) = level {
+                    host.chat.set_thinking_level(&conversation_id, level);
+                }
+                child_prompt(
+                    app,
+                    host,
+                    &task_id,
+                    &conversation_id,
+                    &generation_id,
+                    &text,
+                )
+            }
+            Continuation::Thinking {
+                conversation_id,
+                level,
+            } => {
+                if !accept_session(app, host, epoch, &conversation_id, None, reply)? {
+                    return Ok(None);
+                }
+                dispatch(
+                    &mut host.supervisor,
+                    "session.thinking",
+                    json!({"conversationId": conversation_id, "level": level}),
+                    Continuation::ThinkingApplied { conversation_id },
+                )
+            }
+            Continuation::ThinkingApplied { conversation_id } => {
+                let result = reply.map_err(|error| {
+                    if error.is_timeout() {
+                        "Changing thinking timed out".to_string()
+                    } else {
+                        sanitize_error(&error.to_string())
+                    }
+                })?;
+                let effective = result
+                    .get("level")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "Pi worker did not return a thinking level".to_string())?;
+                host.chat.set_thinking_level(&conversation_id, effective.to_string());
+                Ok(None)
+            }
+            Continuation::Accepted { generation_id } => {
+                // A worker that acknowledges prompts only at completion is still streaming.
+                if let Err(error) = reply {
+                    if !error.is_timeout() && host.chat.active.contains_key(&generation_id) {
+                        host.chat.fail_live(
+                            &mut host.db,
+                            app,
+                            &generation_id,
+                            sanitize_error(&error.to_string()),
+                        );
+                    }
+                }
+                Ok(None)
+            }
+        }
+    }
+}
+
 pub(crate) fn chat_send_inner(
     app: &AppHandle,
     host: &mut Host,
@@ -1132,7 +1726,7 @@ pub(crate) fn chat_send_inner(
     generation_id: String,
     text: String,
     attachments: Vec<AttachmentInput>,
-) -> Result<(), String> {
+) -> Result<Option<Deferred>, String> {
     let background = host.db.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE generation_id=?1 AND status IN ('running','awaiting_approval'))",[&generation_id],|r|r.get::<_,bool>(0)).unwrap_or(false);
     if !background && crate::automation::current(host).is_some() {
         return Err("A scheduled task is running. Cancel it in Tasks before sending a message.".into());
@@ -1162,7 +1756,7 @@ pub(crate) fn chat_send_inner(
         storage::enqueue_turn(db, &generation_id, &conversation_id, "user", &text)
             .map_err(storage_error)?;
         emit_queue(app, db, &conversation_id);
-        return Ok(());
+        return Ok(None);
     }
     // Validate before the generation row exists so a bad image never leaves a stuck turn.
     let validated = attachments::validate(
@@ -1242,46 +1836,38 @@ pub(crate) fn chat_send_inner(
         Ok(secret) => secret,
         Err(error) => {
             chat.fail_live(db, &app, &generation_id, error);
-            return Ok(());
+            return Ok(None);
         }
     };
-    if let Err(error) = chat.ensure_session(
+    match chat.begin_session(
         db,
         supervisor,
         &conversation,
         &connection,
         &model_id,
         secret.as_ref(),
+        Continuation::Send {
+            conversation_id,
+            generation_id: generation_id.clone(),
+            text,
+            background,
+            images: stored
+                .iter()
+                .map(|image| json!({
+                    "name": image.name,
+                    "mimeType": image.mime_type,
+                    "data": image.data,
+                    "path": image.path.to_string_lossy(),
+                }))
+                .collect(),
+        },
     ) {
-        chat.fail_live(db, &app, &generation_id, error);
-        return Ok(());
+        Ok(deferred) => Ok(deferred),
+        Err(error) => {
+            chat.fail_live(db, &app, &generation_id, error);
+            Ok(None)
+        }
     }
-    let params = json!({
-        "conversationId": conversation_id,
-        "generationId": generation_id,
-        "text": text,
-        "context": agent_context(db, &conversation, &text),
-        "capabilities": crate::agent::capabilities_for(db, &conversation.workspace_id),
-        "skills": crate::skills::for_conversation(db, &supervisor.data, &conversation),
-        "images": stored
-            .iter()
-            .map(|image| json!({
-                "name": image.name,
-                "mimeType": image.mime_type,
-                "data": image.data,
-                "path": image.path.to_string_lossy(),
-            }))
-            .collect::<Vec<_>>(),
-    });
-    let mut params = params;
-    params["background"] = json!(background);
-    match supervisor.request("session.prompt", params, PROMPT_TIMEOUT) {
-        Ok(_) => {}
-        // A worker that acknowledges prompts only at completion is still streaming events.
-        Err(error) if error.is_timeout() => {}
-        Err(error) => chat.fail_live(db, &app, &generation_id, error.to_string()),
-    }
-    Ok(())
 }
 
 pub(crate) fn emit_queue(app: &AppHandle, db: &rusqlite::Connection, conversation_id: &str) {
@@ -1325,7 +1911,7 @@ pub(crate) fn chat_child_send_inner(
     app: &AppHandle,
     host: &mut Host,
     task: &crate::delegation::DelegationTask,
-) -> Result<(), String> {
+) -> Result<Option<Deferred>, String> {
     let Host {
         db,
         supervisor,
@@ -1335,7 +1921,7 @@ pub(crate) fn chat_child_send_inner(
     let conversation =
         storage::get_conversation(db, &task.child_conversation_id).map_err(storage_error)?;
     if chat.has_active_for(&conversation.id) {
-        return Ok(());
+        return Ok(None);
     }
     let (connection, model_id) = load_connection(db, &conversation)?;
     let generation_id = uuid::Uuid::new_v4().to_string();
@@ -1382,48 +1968,30 @@ pub(crate) fn chat_child_send_inner(
         Ok(secret) => secret,
         Err(error) => {
             chat.fail_live(db, app, &generation_id, error);
-            return Ok(());
+            return Ok(None);
         }
     };
-    if let Err(error) = chat.ensure_session(
+    match chat.begin_session(
         db,
         supervisor,
         &conversation,
         &connection,
         &model_id,
         secret.as_ref(),
+        Continuation::Child {
+            conversation_id: conversation.id.clone(),
+            generation_id: generation_id.clone(),
+            task_id: task.id.clone(),
+            text,
+            thinking_level: task.thinking_level.clone(),
+        },
     ) {
-        chat.fail_live(db, app, &generation_id, error);
-        return Ok(());
-    }
-    if let Some(level) = task.thinking_level.as_deref() {
-        if let Err(error) = chat.session_thinking(supervisor, &conversation.id, level) {
-            chat.fail_live(db, app, &generation_id, sanitize_error(&error));
-            return Ok(());
+        Ok(deferred) => Ok(deferred),
+        Err(error) => {
+            chat.fail_live(db, app, &generation_id, error);
+            Ok(None)
         }
     }
-    if let Err(error) = crate::delegation::set_generation(db, &task.id, &generation_id, "running") {
-        chat.fail_live(db, app, &generation_id, error);
-        return Ok(());
-    }
-    let mut context = child_context(db, &conversation);
-    context.push_str(&agent_context(db, &conversation, &text));
-    context.truncate(context.floor_char_boundary(4096));
-    let params = json!({
-        "conversationId": conversation.id,
-        "generationId": generation_id,
-        "text": text,
-        "context": context,
-        "capabilities": crate::agent::capabilities_for(db, &conversation.workspace_id),
-        "skills": crate::skills::for_conversation(db, &supervisor.data, &conversation),
-        "delegation": false,
-    });
-    match supervisor.request("session.prompt", params, PROMPT_TIMEOUT) {
-        Ok(_) => {}
-        Err(error) if error.is_timeout() => {}
-        Err(error) => chat.fail_live(db, app, &generation_id, sanitize_error(&error.to_string())),
-    }
-    Ok(())
 }
 
 /// Resume a parent from persisted child outcomes. The text reaches Pi as a hidden custom
@@ -1434,7 +2002,7 @@ pub(crate) fn chat_delivery_send_inner(
     conversation_id: &str,
     generation_id: &str,
     text: &str,
-) -> Result<(), String> {
+) -> Result<Option<Deferred>, String> {
     let Host {
         db,
         supervisor,
@@ -1488,35 +2056,28 @@ pub(crate) fn chat_delivery_send_inner(
         Ok(secret) => secret,
         Err(error) => {
             chat.fail_live(db, app, &generation_id, error);
-            return Ok(());
+            return Ok(None);
         }
     };
-    if let Err(error) = chat.ensure_session(
+    match chat.begin_session(
         db,
         supervisor,
         &conversation,
         &connection,
         &model_id,
         secret.as_ref(),
+        Continuation::Deliver {
+            conversation_id: conversation.id.clone(),
+            generation_id: generation_id.to_string(),
+            text: text.to_string(),
+        },
     ) {
-        chat.fail_live(db, app, generation_id, error);
-        return Ok(());
+        Ok(deferred) => Ok(deferred),
+        Err(error) => {
+            chat.fail_live(db, app, generation_id, error);
+            Ok(None)
+        }
     }
-    let params = json!({
-        "conversationId": conversation.id,
-        "generationId": generation_id,
-        "text": text,
-        "context": agent_context(db, &conversation, text),
-        "capabilities": crate::agent::capabilities_for(db, &conversation.workspace_id),
-        "skills": crate::skills::for_conversation(db, &supervisor.data, &conversation),
-        "delegation": true,
-    });
-    match supervisor.request("session.deliver", params, PROMPT_TIMEOUT) {
-        Ok(_) => {}
-        Err(error) if error.is_timeout() => {}
-        Err(error) => chat.fail_live(db, app, generation_id, sanitize_error(&error.to_string())),
-    }
-    Ok(())
 }
 
 /// Start the oldest queued turn whose conversation is idle.
@@ -1537,6 +2098,7 @@ pub(crate) fn drain_queue_inner(app: &AppHandle, host: &mut Host) {
                 &turn.generation_id,
                 &turn.text,
             )
+            .and_then(|deferred| drive(app, host, deferred))
         } else {
             chat_send_inner(
                 app,
@@ -1546,6 +2108,7 @@ pub(crate) fn drain_queue_inner(app: &AppHandle, host: &mut Host) {
                 turn.text.clone(),
                 vec![],
             )
+            .and_then(|deferred| drive(app, host, deferred))
         };
         if let Err(error) = result {
             fail_queued_turn(app, host, &turn, &sanitize_error(&error));
@@ -1619,7 +2182,7 @@ fn chat_retry_inner(
     host: &mut Host,
     conversation_id: String,
     generation_id: String,
-) -> Result<(), String> {
+) -> Result<Option<Deferred>, String> {
     let scheduled=host.db.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE generation_id=?1)",[&generation_id],|r|r.get::<_,bool>(0)).unwrap_or(false);
     if scheduled { return Err("Review this scheduled run before creating a new task; automatic replay is disabled.".into()); }
     let Host {
@@ -1677,51 +2240,32 @@ fn chat_retry_inner(
         Ok(secret) => secret,
         Err(error) => {
             chat.fail_live(db, &app, &generation_id, error);
-            return Ok(());
+            return Ok(None);
         }
     };
     let had_sqlite_session = conversation.session_path.is_some();
-    if let Err(error) = chat.ensure_session(
+    // A retry after the first prompt never reached Pi must replay the user turn. Once a
+    // durable session exists, Pi's own retry keeps context without duplicating it here.
+    match chat.begin_session(
         db,
         supervisor,
         &conversation,
         &connection,
         &model_id,
         secret.as_ref(),
+        Continuation::Retry {
+            conversation_id,
+            generation_id: generation_id.clone(),
+            user_text: plan.user_text,
+            had_session: had_sqlite_session,
+        },
     ) {
-        chat.fail_live(db, &app, &generation_id, error);
-        return Ok(());
+        Ok(deferred) => Ok(deferred),
+        Err(error) => {
+            chat.fail_live(db, &app, &generation_id, error);
+            Ok(None)
+        }
     }
-    // A retry after the first prompt never reached Pi must replay the user turn. Once a
-    // durable session exists, Pi's own retry keeps context without duplicating it here.
-    let reference_context =
-        agent_context(db, &conversation, &plan.user_text);
-    let capabilities = json!(crate::agent::capabilities_for(db, &conversation.workspace_id));
-    let skills = crate::skills::for_conversation(db, &supervisor.data, &conversation);
-    let params = if had_sqlite_session {
-        json!({"conversationId": conversation_id, "generationId": generation_id, "context":reference_context, "capabilities":capabilities, "skills":skills, "images": images_for_generation(db, &conversation_id, &generation_id)})
-    } else {
-        json!({
-            "conversationId": conversation_id,
-            "generationId": generation_id,
-            "text": plan.user_text,
-            "context": reference_context,
-            "capabilities": capabilities,
-            "skills": skills,
-            "images": images_for_generation(db, &conversation_id, &generation_id),
-        })
-    };
-    let method = if had_sqlite_session {
-        "session.retry"
-    } else {
-        "session.prompt"
-    };
-    match supervisor.request(method, params, PROMPT_TIMEOUT) {
-        Ok(_) => {}
-        Err(error) if error.is_timeout() => {}
-        Err(error) => chat.fail_live(db, &app, &generation_id, error.to_string()),
-    }
-    Ok(())
 }
 
 pub(crate) fn chat_stop_inner(app: &AppHandle, host: &mut Host, generation_id: String) -> Result<(), String> {
@@ -1790,19 +2334,23 @@ fn provider_list_inner(host: &mut Host) -> Result<Vec<ConnectionInfo>, String> {
     storage::list_connections(&host.db).map_err(storage_error)
 }
 
-/// Connect a provider after a real authenticated probe, then seal the key with DPAPI.
-///
-/// `baseUrl` is a host-side extension to the public chat contract (which only lists
-/// providerId/name/apiKey/modelId). It is needed for OpenAI-compatible custom endpoints and
-/// endpoint overrides; the UI's custom provider is currently a documented placeholder.
-fn provider_connect_inner(
+/// A validated provider probe that has not returned yet. The key stays in host memory only.
+struct ProviderProbe {
+    provider_id: String,
+    name: String,
+    model_id: Option<String>,
+    base_url: Option<String>,
+    key: Option<Secret>,
+}
+
+fn provider_connect_start(
     host: &mut Host,
     provider_id: String,
     name: String,
     api_key: Option<String>,
     model_id: Option<String>,
     base_url: Option<String>,
-) -> Result<ConnectionInfo, String> {
+) -> Result<(supervisor::PendingReply, ProviderProbe), String> {
     if host.chat.any_active() {
         return Err("Stop the current response before changing provider connections".into());
     }
@@ -1845,12 +2393,47 @@ fn provider_connect_inner(
     if let Some(key) = key.as_ref().and_then(|key| key.as_str().ok()) {
         params["apiKey"] = Value::String(key.to_string());
     }
-    let result = host
+    // The supervisor wipes its copy of the params after serializing them.
+    let reply = host
         .supervisor
-        .request("provider.validate", params.clone(), SESSION_TIMEOUT);
-    // The clone passed to the supervisor is wiped after serialization by the supervisor.
-    wipe_secret_param(&mut params);
-    let result = result.map_err(|error| {
+        .dispatch("provider.validate", params)
+        .map_err(|error| {
+            if error.is_timeout() {
+                "Provider validation timed out".to_string()
+            } else {
+                sanitize_error(&error.to_string())
+            }
+        })?;
+    Ok((
+        reply,
+        ProviderProbe {
+            provider_id,
+            name,
+            model_id,
+            base_url,
+            key,
+        },
+    ))
+}
+
+/// Connect a provider after a real authenticated probe, then seal the key with DPAPI.
+///
+/// `baseUrl` is a host-side extension to the public chat contract (which only lists
+/// providerId/name/apiKey/modelId). It is needed for OpenAI-compatible custom endpoints and
+/// endpoint overrides; the UI's custom provider is currently a documented placeholder.
+fn provider_connect_finish(
+    host: &mut Host,
+    probe: ProviderProbe,
+    reply: Result<Value, supervisor::Error>,
+) -> Result<ConnectionInfo, String> {
+    let ProviderProbe {
+        provider_id,
+        name,
+        model_id,
+        base_url,
+        key,
+    } = probe;
+    let result = reply.map_err(|error| {
         if error.is_timeout() {
             "Provider validation timed out".to_string()
         } else {
@@ -1905,11 +2488,11 @@ fn provider_disconnect_inner(host: &mut Host, connection_id: String) -> Result<O
     Ok(None)
 }
 
-fn provider_models_inner(
+fn provider_models_start(
     host: &mut Host,
-    connection_id: String,
-) -> Result<Vec<ProviderModelInfo>, String> {
-    let connection = storage::get_connection(&host.db, &connection_id).map_err(storage_error)?;
+    connection_id: &str,
+) -> Result<supervisor::PendingReply, String> {
+    let connection = storage::get_connection(&host.db, connection_id).map_err(storage_error)?;
     let secret = decrypt_secret(&host.db, &mut host.supervisor, &connection)?;
     host.supervisor.ensure_worker()?;
     let mut params = json!({
@@ -1920,11 +2503,21 @@ fn provider_models_inner(
     if let Some(secret) = secret.as_ref().and_then(|secret| secret.as_str().ok()) {
         params["apiKey"] = Value::String(secret.to_string());
     }
-    let result = host
-        .supervisor
-        .request("models.list", params.clone(), SESSION_TIMEOUT);
-    wipe_secret_param(&mut params);
-    let result = result.map_err(|error| {
+    host.supervisor
+        .dispatch("models.list", params)
+        .map_err(|error| {
+            if error.is_timeout() {
+                "Listing models timed out".to_string()
+            } else {
+                sanitize_error(&error.to_string())
+            }
+        })
+}
+
+fn provider_models_finish(
+    reply: Result<Value, supervisor::Error>,
+) -> Result<Vec<ProviderModelInfo>, String> {
+    let result = reply.map_err(|error| {
         if error.is_timeout() {
             "Listing models timed out".to_string()
         } else {
@@ -2013,17 +2606,27 @@ pub async fn conversation_thinking(
     level: String,
 ) -> Result<String, String> {
     run_blocking(app, move |app| {
-        let shared = app.state::<Shared>();
-        let mut host = shared
+        let shared = Arc::clone(app.state::<Shared>().inner());
+        let deferred = {
+            let mut host = shared
+                .lock()
+                .map_err(|_| "Talo state is unavailable".to_string())?;
+            conversation_thinking_inner(&mut host, conversation_id.clone(), level)?
+        };
+        drive_shared(app, &shared, deferred)?;
+        let host = shared
             .lock()
             .map_err(|_| "Talo state is unavailable".to_string())?;
-        conversation_thinking_inner(&mut host, conversation_id, level)
+        host.chat
+            .thinking_level(&conversation_id)
+            .ok_or_else(|| "Pi worker did not return a thinking level".to_string())
     })
     .await
 }
 
 /// `chat_send` is async so Pi startup, session opening and the prompt acknowledgement never
-/// run on WebView2's dispatch thread. The host lock is held inside the blocking task only.
+/// run on WebView2's dispatch thread. Worker round trips are awaited without the host mutex,
+/// so the event pump and other chats keep running while this chat's session opens.
 #[tauri::command]
 pub async fn chat_send(
     app: AppHandle,
@@ -2033,18 +2636,21 @@ pub async fn chat_send(
     attachments: Option<Vec<AttachmentInput>>,
 ) -> Result<(), String> {
     run_blocking(app, move |app| {
-        let shared = app.state::<Shared>();
-        let mut host = shared
-            .lock()
-            .map_err(|_| "Talo state is unavailable".to_string())?;
-        chat_send_inner(
-            app,
-            &mut host,
-            conversation_id,
-            generation_id,
-            text,
-            attachments.unwrap_or_default(),
-        )
+        let shared = Arc::clone(app.state::<Shared>().inner());
+        let deferred = {
+            let mut host = shared
+                .lock()
+                .map_err(|_| "Talo state is unavailable".to_string())?;
+            chat_send_inner(
+                app,
+                &mut host,
+                conversation_id,
+                generation_id,
+                text,
+                attachments.unwrap_or_default(),
+            )?
+        };
+        drive_shared(app, &shared, deferred)
     })
     .await
 }
@@ -2056,11 +2662,14 @@ pub async fn chat_retry(
     generation_id: String,
 ) -> Result<(), String> {
     run_blocking(app, move |app| {
-        let shared = app.state::<Shared>();
-        let mut host = shared
-            .lock()
-            .map_err(|_| "Talo state is unavailable".to_string())?;
-        chat_retry_inner(app, &mut host, conversation_id, generation_id)
+        let shared = Arc::clone(app.state::<Shared>().inner());
+        let deferred = {
+            let mut host = shared
+                .lock()
+                .map_err(|_| "Talo state is unavailable".to_string())?;
+            chat_retry_inner(app, &mut host, conversation_id, generation_id)?
+        };
+        drive_shared(app, &shared, deferred)
     })
     .await
 }
@@ -2099,11 +2708,26 @@ pub async fn provider_connect(
     base_url: Option<String>,
 ) -> Result<ConnectionInfo, String> {
     run_blocking(app, move |app| {
-        let shared = app.state::<Shared>();
+        let shared = Arc::clone(app.state::<Shared>().inner());
+        let (reply, probe) = {
+            let mut host = shared
+                .lock()
+                .map_err(|_| "Talo state is unavailable".to_string())?;
+            provider_connect_start(
+                &mut host,
+                provider_id,
+                name,
+                api_key,
+                model_id,
+                base_url,
+            )?
+        };
+        // The authenticated probe can take tens of seconds; other work keeps the lock.
+        let reply = reply.wait(SESSION_TIMEOUT);
         let mut host = shared
             .lock()
             .map_err(|_| "Talo state is unavailable".to_string())?;
-        provider_connect_inner(&mut host, provider_id, name, api_key, model_id, base_url)
+        provider_connect_finish(&mut host, probe, reply)
     })
     .await
 }
@@ -2126,11 +2750,14 @@ pub async fn provider_models(
     connection_id: String,
 ) -> Result<Vec<ProviderModelInfo>, String> {
     run_blocking(app, move |app| {
-        let shared = app.state::<Shared>();
-        let mut host = shared
-            .lock()
-            .map_err(|_| "Talo state is unavailable".to_string())?;
-        provider_models_inner(&mut host, connection_id)
+        let shared = Arc::clone(app.state::<Shared>().inner());
+        let reply = {
+            let mut host = shared
+                .lock()
+                .map_err(|_| "Talo state is unavailable".to_string())?;
+            provider_models_start(&mut host, &connection_id)?
+        };
+        provider_models_finish(reply.wait(SESSION_TIMEOUT))
     })
     .await
 }
@@ -2164,6 +2791,60 @@ mod tests {
         let long = "x".repeat(900);
         assert!(sanitize_error(&long).chars().count() <= MAX_ERROR_CHARS + 1);
         assert_eq!(sanitize_error("\n\t "), "The request failed");
+    }
+
+    #[test]
+    fn a_failed_terminal_write_keeps_the_reply_recoverable() {
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("../../../services/memory/schema.sql"))
+            .unwrap();
+        storage::init(&db).unwrap();
+        crate::agent::init(&db).unwrap();
+        storage::create_conversation(&db, "c", "Failure", None).unwrap();
+        storage::start_generation(
+            &mut db,
+            NewGeneration {
+                id: "g",
+                conversation_id: "c",
+                assistant_id: "a",
+                text: "question",
+                title: None,
+            },
+        )
+        .unwrap();
+        let mut chat = ChatState::default();
+        chat.active.insert(
+            "g".into(),
+            ActiveGeneration {
+                conversation_id: "c".into(),
+                state: GenerationState::Generating,
+                sequence: 1,
+                text: "answer".into(),
+                reasoning: String::new(),
+                assistant_id: "a".into(),
+                cancel_requested: false,
+                worker_sequence: 0,
+                journal_bytes: 0,
+                checkpoint_bytes: 64 * 1024,
+            },
+        );
+        let app = tauri::Builder::default()
+            .any_thread()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        // A write failure must not announce a completion the database never saw.
+        db.execute_batch("PRAGMA query_only=1").unwrap();
+        chat.finish(&mut db, app.handle(), "g", GenerationState::Completed, None, None, None);
+        assert!(chat.has_active_for("c"), "an unsaved reply must stay live");
+        assert_eq!(storage::get_generation(&db, "g").unwrap().state, "generating");
+        assert_eq!(storage::list_messages(&db, "c").unwrap()[1].status, "generating");
+        db.execute_batch("PRAGMA query_only=0").unwrap();
+        chat.retry_pending(&mut db, app.handle());
+        assert!(!chat.has_active_for("c"));
+        assert_eq!(storage::get_generation(&db, "g").unwrap().state, "completed");
+        let messages = storage::list_messages(&db, "c").unwrap();
+        assert_eq!(messages[1].status, "completed");
+        assert_eq!(messages[1].text, "answer");
     }
 
     #[test]

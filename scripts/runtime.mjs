@@ -11,7 +11,7 @@ export function runtimePath(root = path.resolve('vendor')) {
     const file = path.resolve(root, candidate);
     if (fs.existsSync(file)) return file;
   }
-  throw new Error('Bundled runtime is missing; run npm run vendor');
+  throw new Error('Bundled runtime is missing; run bun run vendor');
 }
 
 /** Bun must never resolve a missing module by installing it inside a packaged app. */

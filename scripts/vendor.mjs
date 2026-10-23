@@ -27,7 +27,7 @@ if(!await exists(bunLicense)){
 }
 const browserInfo=JSON.parse(await readFile('node_modules/playwright-core/browsers.json','utf8')).browsers.find(b=>b.name==='chromium');
 if(!await exists(path.join(runtime,'chromium/chrome-win64/chrome.exe'))){
-  // Playwright owns the revision and download URLs; package-lock pins the installer.
+  // Playwright owns the revision and download URLs; bun.lock pins the installer.
   execFileSync(process.execPath,['node_modules/playwright/cli.js','install','chromium','--no-shell'],{stdio:'inherit',windowsHide:true,env:{...process.env,PLAYWRIGHT_BROWSERS_PATH:path.join(runtime,'playwright')}});
   await cp(path.join(runtime,'playwright',`chromium-${browserInfo.revision}`),path.join(runtime,'chromium'),{recursive:true});
 }

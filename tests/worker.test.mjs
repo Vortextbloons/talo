@@ -182,7 +182,11 @@ test('real Pi streaming, authenticated provider validation, cancellation, and re
     }, 40_000);
     assert.ok(opened.sessionId);
     assert.match(opened.path, /\.jsonl$/i);
-    assert.deepEqual(opened.messages, []);
+    assert.equal(opened.messageCount, 0);
+    assert.equal(opened.messages, undefined, 'session.open must not return the transcript');
+    const history = await worker.request('history-empty', 'session.history', { conversationId: 'c1' });
+    assert.deepEqual(history.messages, []);
+    assert.equal(history.nextOffset, null);
 
     const firstMark = worker.mark();
     await worker.request('send', 'session.prompt', {
@@ -235,6 +239,10 @@ test('real Pi streaming, authenticated provider validation, cancellation, and re
     assert.equal(unicodeDone.event.text, 'unicode ok');
     snapshot = await worker.request('snap1b', 'session.snapshot', { conversationId: 'c1' });
     assert.equal(snapshot.messages[2].text, 'Hello world');
+
+    const page = await worker.request('history-page', 'session.history', { conversationId: 'c1', offset: 1, limit: 1 });
+    assert.deepEqual(page.messages.map(message => message.text), ['Hello from mock']);
+    assert.equal(page.nextOffset, 2);
 
     // Credentials must never be written to Talo data or echoed through protocol events.
     for (const file of await filesUnder(data)) {

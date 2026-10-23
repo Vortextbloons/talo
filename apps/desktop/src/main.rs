@@ -189,6 +189,7 @@ impl Host {
             self.chat.on_worker_intentionally_stopped(app);
         }
         if self.last_maintenance.elapsed() >= Duration::from_secs(2) {
+            self.chat.retry_pending(&mut self.db, app);
             if let Err(_) = automation::tick(self, app) {
                 automation::event(self, None, "scheduler_error");
             }
@@ -619,6 +620,7 @@ fn main() {
             } else {
                 app.path().resource_dir()?
             };
+            crate::runtime::set_root(root.clone());
             let status_cache = RuntimeStatusCache::new(json!({
                 "database":"ready",
                 "services":{"pi":"stopped","browser":"stopped","web":"stopped"},

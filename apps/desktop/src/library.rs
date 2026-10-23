@@ -271,8 +271,12 @@ fn action(db: &mut Connection, operation: &str, p: &Value) -> Result<Value> {
             let mut unavailable = Vec::new();
             for c in conversations {
                 if let Some(path) = c.session_path {
+                    let stamp = transcript_stamp(&path);
                     match transcript(&path) {
-                        Ok(messages) => rebuild_projection(db, &c.id, &messages)?,
+                        Ok(messages) => {
+                            rebuild_projection(db, &c.id, &messages)?;
+                            let _ = storage::set_transcript_stamp(db, &c.id, stamp.as_deref());
+                        }
                         Err(_) => unavailable.push(c.id),
                     }
                 }
@@ -373,14 +377,29 @@ pub fn context(
     if setting(db, "memory_enabled", "true") != "true" || scope == "off" {
         return Ok(brief);
     }
-    let memories = list_memory(db, &json!({"workspaceId":conversation.workspace_id,"scope":if scope == "workspace" { "workspace" } else { "all" }}))?;
+    let memory_scope = if scope == "workspace" { "workspace" } else { "all" };
+    // The newest entries keep the profile current. The search index also contributes older
+    // facts that match this request, so a relevant memory is never excluded by recency alone.
+    let recent = list_memory(db, &json!({"workspaceId":conversation.workspace_id,"scope":memory_scope}))?;
+    let relevant = list_memory(db, &json!({"workspaceId":conversation.workspace_id,"scope":memory_scope,"query":query}))?;
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut items = recent
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(relevant.as_array().into_iter().flatten())
+        .filter(|m| match m["id"].as_str() {
+            Some(id) => seen_ids.insert(id.to_owned()),
+            None => false,
+        })
+        .filter(|m| m["approved"] == true || m["personal"] == false)
+        .cloned()
+        .collect::<Vec<_>>();
     let terms = query
         .to_lowercase()
         .split_whitespace()
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    let mut items = memories.as_array().cloned().unwrap_or_default();
-    items.retain(|m| m["approved"] == true || m["personal"] == false);
     items.sort_by_key(|m| {
         std::cmp::Reverse(
             terms
@@ -449,74 +468,78 @@ pub trait RolloverPolicy {
 }
 
 /// Reconstruct the display/search projection from original JSONL, including pre-compaction history.
+/// Parsing runs in the Bun worker. This function only returns the messages Rust commits.
 /// Never repair or overwrite a damaged source file.
 pub fn transcript(path: &str) -> Result<Vec<storage::ChatMessage>> {
-    use std::io::BufRead;
-    let file = std::fs::File::open(path).map_err(|_| {
-        "Saved history is missing or unavailable. The conversation has been preserved."
-    })?;
-    let mut messages = Vec::new();
-    let mut header = false;
-    for line in std::io::BufReader::new(file).lines() {
-        let line = line.map_err(|_| "Saved history could not be read")?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let entry: Value = serde_json::from_str(&line)
-            .map_err(|_| "Saved history is damaged. The original file has been preserved.")?;
-        if entry["type"] == "session" {
-            header = true;
-        }
-        if entry["type"] != "message" {
-            continue;
-        }
-        let m = &entry["message"];
-        let role = m["role"].as_str().unwrap_or("");
-        if !["user", "assistant"].contains(&role) {
-            continue;
-        }
-        let mut text = String::new();
-        let mut reasoning = String::new();
-        if let Some(s) = m["content"].as_str() {
-            text = s.into();
-        }
-        for block in m["content"].as_array().into_iter().flatten() {
-            if block["type"] == "text" {
-                text.push_str(block["text"].as_str().unwrap_or(""));
-            }
-            if block["type"] == "thinking" {
-                reasoning.push_str(block["thinking"].as_str().unwrap_or(""));
-            }
-        }
-        let id = entry["id"]
-            .as_str()
-            .ok_or("Saved history has an invalid message")?
-            .to_string();
-        let status = match m["stopReason"].as_str() {
-            Some("error") => "failed",
-            Some("aborted") => "cancelled",
-            _ => "completed",
-        };
-        messages.push(storage::ChatMessage {
-            id,
-            role: role.into(),
-            text,
-            reasoning: if reasoning.is_empty() {
-                None
-            } else {
-                Some(reasoning)
-            },
-            status: status.into(),
-            generation_id: None,
-            error: None,
-            attachments: None,
+    let root = crate::runtime::root();
+    let runtime = crate::runtime::Runtime::require(&root)?;
+    let bundled = root.join("bundle/workers/pi/src/transcript.js");
+    let script = if bundled.is_file() {
+        bundled
+    } else {
+        root.join("../workers/pi/src/transcript.ts")
+    };
+    let output = runtime
+        .command(&script)
+        .arg(path)
+        .output()
+        .map_err(|_| "Saved history could not be read")?;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr);
+        let message = message.trim();
+        return Err(if message.is_empty() {
+            "Saved history is damaged. The original file has been preserved.".into()
+        } else {
+            message.to_string()
         });
     }
-    if !header {
-        return Err("Saved history is damaged. The original file has been preserved.".into());
-    }
-    Ok(messages)
+    serde_json::from_slice(&output.stdout)
+        .map_err(|_| "Saved history is damaged. The original file has been preserved.".into())
 }
+/// Fingerprint of a JSONL transcript. Rebrowsing a conversation whose file has not changed
+/// must not rewrite its projection or its search index.
+pub fn transcript_stamp(path: &str) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    Some(format!("{}:{}", meta.len(), modified.as_nanos()))
+}
+
+/// Rebuild a conversation's projection only when its transcript actually changed.
+pub fn sync_projection(db: &mut Connection, id: &str, path: &str) -> Result<()> {
+    let stamp = transcript_stamp(path);
+    if stamp.is_some() && storage::transcript_stamp(db, id).map_err(|e| e.to_string())? == stamp {
+        return Ok(());
+    }
+    let messages = transcript(path)?;
+    rebuild_projection(db, id, &messages)?;
+    storage::set_transcript_stamp(db, id, stamp.as_deref()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Stable projection row id for a transcript message. Pi entry ids are unique within a
+/// session, so a rebuild matches rows by id instead of repeatedly comparing text.
+fn projection_key(conversation_id: &str, message_id: &str) -> String {
+    let prefix = format!("{conversation_id}:");
+    if message_id.starts_with(&prefix) {
+        message_id.to_string()
+    } else {
+        format!("{prefix}{message_id}")
+    }
+}
+
+fn same_projected_row(old: &storage::ChatMessage, new: &storage::ChatMessage) -> bool {
+    old.role == new.role
+        && old.text == new.text
+        && old.reasoning == new.reasoning
+        && old.status == new.status
+        && old.generation_id == new.generation_id
+        && old.error == new.error
+}
+
 pub fn rebuild_projection(
     db: &mut Connection,
     id: &str,
@@ -525,14 +548,15 @@ pub fn rebuild_projection(
     let existing = storage::list_messages(db, id).map_err(|e| e.to_string())?;
     let last = storage::last_generation(db, id).map_err(|e| e.to_string())?;
     let mut projected = messages.to_vec();
-    let mut used = std::collections::HashSet::new();
+    let by_id = existing
+        .iter()
+        .map(|old| (old.id.as_str(), old))
+        .collect::<std::collections::HashMap<_, _>>();
     for m in &mut projected {
-        if let Some((index, old)) = existing
-            .iter()
-            .enumerate()
-            .find(|(index, old)| !used.contains(index) && old.role == m.role && old.text == m.text)
-        {
-            used.insert(index);
+        let key = projection_key(id, &m.id);
+        // Imported projections may keep Pi's raw id; either form is a stable match.
+        let old = by_id.get(key.as_str()).or_else(|| by_id.get(m.id.as_str()));
+        if let Some(old) = old {
             m.generation_id = old.generation_id.clone();
             m.error = old.error.clone();
         }
@@ -571,18 +595,50 @@ pub fn rebuild_projection(
             }
         }
     }
+    let keys = projected
+        .iter()
+        .map(|m| projection_key(id, &m.id))
+        .collect::<Vec<_>>();
+    // A conversation that only grew keeps its existing rows untouched: no delete, no insert and
+    // therefore no search-index rewrite for history the user did not change.
+    let prefix = (0..existing.len().min(projected.len()))
+        .take_while(|&index| {
+            existing[index].id == keys[index] && same_projected_row(&existing[index], &projected[index])
+        })
+        .count();
+    if prefix == existing.len() {
+        let tx = sql(db.transaction())?;
+        for (m, key) in projected[prefix..].iter().zip(keys[prefix..].iter()) {
+            insert_projected_row(&tx, key, id, m)?;
+        }
+        sql(tx.commit())?;
+        return Ok(());
+    }
+    if prefix == projected.len() {
+        let tx = sql(db.transaction())?;
+        for old in &existing[prefix..] {
+            sql(tx.execute("DELETE FROM chat_messages WHERE id=?1", [&old.id]))?;
+        }
+        sql(tx.commit())?;
+        return Ok(());
+    }
+    // A rewrite (compaction, or a changed message) cannot preserve rowid order in place.
     let tx = sql(db.transaction())?;
     sql(tx.execute("DELETE FROM chat_messages WHERE conversation_id=?1", [id]))?;
-    for m in projected {
-        // Ids remain stable across rebuilds even if the host execution row used a different id.
-        let key = if m.id.starts_with(&format!("{id}:")) {
-            m.id.clone()
-        } else {
-            format!("{id}:{}", m.id)
-        };
-        sql(tx.execute("INSERT INTO chat_messages(id,conversation_id,role,text,reasoning,status,generation_id,error,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",params![key,id,m.role,m.text,m.reasoning,m.status,m.generation_id,m.error]))?;
+    for (m, key) in projected.iter().zip(keys.iter()) {
+        insert_projected_row(&tx, key, id, m)?;
     }
     sql(tx.commit())?;
+    Ok(())
+}
+
+fn insert_projected_row(
+    tx: &rusqlite::Transaction<'_>,
+    key: &str,
+    id: &str,
+    m: &storage::ChatMessage,
+) -> Result<()> {
+    sql(tx.execute("INSERT INTO chat_messages(id,conversation_id,role,text,reasoning,status,generation_id,error,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",params![key,id,m.role,m.text,m.reasoning,m.status,m.generation_id,m.error]))?;
     Ok(())
 }
 
@@ -807,6 +863,71 @@ mod tests {
             1
         );
     }
+    #[test]
+    fn projection_rebuild_writes_only_new_messages() {
+        let mut db = database();
+        storage::create_conversation(&db, "c", "History", None).unwrap();
+        let message = |id: &str, text: &str| storage::ChatMessage {
+            id: id.into(),
+            role: "user".into(),
+            text: text.into(),
+            reasoning: None,
+            status: "completed".into(),
+            generation_id: None,
+            error: None,
+            attachments: None,
+        };
+        let one = message("one", "first");
+        let two = message("two", "second");
+        rebuild_projection(&mut db, "c", std::slice::from_ref(&one)).unwrap();
+        db.execute_batch(
+            "CREATE TEMP TABLE projection_writes(n INTEGER);
+             CREATE TEMP TRIGGER projection_count AFTER INSERT ON chat_messages
+             BEGIN INSERT INTO projection_writes VALUES(1); END;",
+        )
+        .unwrap();
+        let writes = |db: &Connection| {
+            db.query_row("SELECT count(*) FROM projection_writes", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap()
+        };
+        rebuild_projection(&mut db, "c", std::slice::from_ref(&one)).unwrap();
+        assert_eq!(writes(&db), 0, "an unchanged transcript must not be rewritten");
+        rebuild_projection(&mut db, "c", &[one, two]).unwrap();
+        assert_eq!(writes(&db), 1, "an appended turn must not rewrite earlier ones");
+        assert_eq!(storage::list_messages(&db, "c").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn context_reaches_older_matching_memories_through_the_search_index() {
+        let mut db = database();
+        let c = storage::create_conversation(&db, "c", "Context", None).unwrap();
+        save_memory(
+            &mut db,
+            &json!({"scope":"global","content":"The launch code is violet-orchid","personal":false}),
+            false,
+        )
+        .unwrap();
+        for index in 0..205 {
+            save_memory(
+                &mut db,
+                &json!({"scope":"global","content":format!("Filler preference {index}"),"personal":false}),
+                false,
+            )
+            .unwrap();
+        }
+        let listed = list_memory(&db, &json!({"workspaceId":"general","scope":"all"})).unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 200);
+        assert!(!listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["content"] == "The launch code is violet-orchid"));
+        let text = context(&db, &c, "what is the launch code? violet-orchid").unwrap();
+        assert!(text.contains("violet-orchid"), "{text}");
+    }
+
     #[test]
     fn context_is_bounded_scoped_deduplicated_and_disabled() {
         let mut db = database();

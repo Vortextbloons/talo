@@ -23,6 +23,8 @@ use std::{
 /// after roughly two minutes without app activity.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 const READY_TIMEOUT: Duration = Duration::from_secs(25);
+/// Matches the worker's own write budget. A frame over this is rejected, not silently dropped.
+const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum Error {
@@ -322,7 +324,7 @@ impl Supervisor {
         let runtime = crate::runtime::Runtime::require(&self.root)?;
         let script = self.root.join("bundle/workers/pi/src/main.js");
         if !script.is_file() {
-            return Err("Bundled Pi worker is missing; run npm run prepare:bundle".into());
+            return Err("Bundled Pi worker is missing; run bun run prepare:bundle".into());
         }
         let logs = self.data.join("logs");
         fs::create_dir_all(&logs).map_err(|error| error.to_string())?;
@@ -566,9 +568,16 @@ impl Supervisor {
     pub fn request(
         &mut self,
         method: &str,
-        mut params: Value,
+        params: Value,
         timeout: Duration,
     ) -> Result<Value, Error> {
+        self.dispatch(method, params)?.wait(timeout)
+    }
+
+    /// Send a request without waiting for its reply. The caller can drop the host mutex, wait
+    /// on the returned handle, and reacquire it to apply the result, so one chat's session
+    /// startup never stalls the event pump or another chat's cancellation.
+    pub fn dispatch(&mut self, method: &str, mut params: Value) -> Result<PendingReply, Error> {
         let worker = self.pi.as_mut().ok_or(Error::NotRunning)?;
         let id = uuid::Uuid::new_v4().to_string();
         let (sender, receiver) = mpsc::sync_channel(1);
@@ -594,12 +603,30 @@ impl Supervisor {
             return Err(Error::Io(error.to_string()));
         }
         worker.last_activity = Instant::now();
-        match receiver.recv_timeout(timeout) {
+        Ok(PendingReply {
+            id,
+            receiver,
+            pending: Arc::clone(&worker.pending),
+        })
+    }
+}
+
+/// A dispatched request whose reply has not arrived yet. It borrows nothing from the
+/// supervisor, so waiting for it can happen outside the host mutex.
+pub struct PendingReply {
+    id: String,
+    receiver: mpsc::Receiver<Reply>,
+    pending: Arc<Mutex<HashMap<String, SyncSender<Reply>>>>,
+}
+
+impl PendingReply {
+    pub fn wait(self, timeout: Duration) -> Result<Value, Error> {
+        match self.receiver.recv_timeout(timeout) {
             Ok(Reply::Result(value)) => Ok(value),
             Ok(Reply::Error(message)) => Err(Error::Worker(message)),
             Err(RecvTimeoutError::Timeout) => {
-                if let Ok(mut pending) = worker.pending.lock() {
-                    pending.remove(&id);
+                if let Ok(mut pending) = self.pending.lock() {
+                    pending.remove(&self.id);
                 }
                 Err(Error::Timeout)
             }
@@ -639,7 +666,14 @@ fn read_worker(
     };
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
-        if line.len() > 4 * 1024 * 1024 {
+        if line.len() > MAX_FRAME_BYTES {
+            // Rejecting the frame fails the waiting request instead of letting it time out.
+            let _ = writeln!(log, "{}", json!({"type":"oversized_frame","bytes":line.len()}));
+            let _ = log.flush();
+            fail_pending(
+                &pending,
+                "Pi worker sent a message larger than the 4 MiB protocol limit",
+            );
             continue;
         }
         let Ok(value) = serde_json::from_str::<Value>(&line) else {

@@ -5,6 +5,21 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
+
+static INSTALLED_ROOT: OnceLock<PathBuf> = OnceLock::new();
+
+/// The running app's vendor root. Debug builds and tests fall back to the repo's `vendor/`.
+pub fn set_root(root: PathBuf) {
+    let _ = INSTALLED_ROOT.set(root);
+}
+
+pub fn root() -> PathBuf {
+    INSTALLED_ROOT
+        .get()
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vendor"))
+}
 
 const BUN: &str = "runtime/bun/bun.exe";
 const NODE: &str = "runtime/node/node.exe";
@@ -23,7 +38,7 @@ impl Runtime {
     }
 
     pub fn require(root: &Path) -> Result<Self, String> {
-        Self::locate(root).ok_or_else(|| "Bundled runtime is missing; run npm run vendor".to_string())
+        Self::locate(root).ok_or_else(|| "Bundled runtime is missing; run bun run vendor".to_string())
     }
 
     /// A command that runs `script` on this runtime. A packaged app has no network, so Bun

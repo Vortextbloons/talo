@@ -55,7 +55,7 @@ pub fn init(db: &Connection) -> Result<()> {
     if has_reasoning == 0 {
         db.execute_batch("ALTER TABLE chat_messages ADD COLUMN reasoning TEXT")?;
     }
-    for column in ["delegation_parent_id", "delegation_task_id"] {
+    for column in ["delegation_parent_id", "delegation_task_id", "transcript_stamp"] {
         let exists: i64 = db.query_row(
             "SELECT count(*) FROM pragma_table_info('chat_conversations') WHERE name=?1",
             [column],
@@ -576,6 +576,31 @@ pub fn active_generation(db: &Connection, conversation_id: &str) -> Result<Optio
     Ok(db
         .query_row(&sql, params![conversation_id], generation_from_row)
         .optional()?)
+}
+
+/// Fingerprint of the JSONL file the projection was last built from. A conversation whose
+/// transcript has not changed skips the rebuild entirely.
+pub fn transcript_stamp(db: &Connection, conversation_id: &str) -> Result<Option<String>> {
+    Ok(db
+        .query_row(
+            "SELECT transcript_stamp FROM chat_conversations WHERE id=?1",
+            params![conversation_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten())
+}
+
+pub fn set_transcript_stamp(
+    db: &Connection,
+    conversation_id: &str,
+    stamp: Option<&str>,
+) -> Result<()> {
+    db.execute(
+        "UPDATE chat_conversations SET transcript_stamp=?2 WHERE id=?1",
+        params![conversation_id, stamp],
+    )?;
+    Ok(())
 }
 
 pub fn last_generation(db: &Connection, conversation_id: &str) -> Result<Option<GenerationRow>> {

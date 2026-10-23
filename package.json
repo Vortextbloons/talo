@@ -9,25 +9,23 @@
     "services/browser",
     "packages/contracts"
   ],
-  "engines": {
-    "node": ">=24.0.0 <27"
-  },
+  "packageManager": "bun@1.4.3",
   "scripts": {
-    "dev": "tauri dev --config apps/desktop/tauri.conf.json",
-    "dev:ui": "npm run dev -w @talo/ui",
-    "build:ui": "npm run build -w @talo/ui",
-    "build:workers": "node node_modules/@typescript/native/bin/tsc -p tsconfig.workers.json",
-    "check": "npm run check -w @talo/ui && node node_modules/@typescript/native/bin/tsc -p tsconfig.workers.json --noEmit",
-    "test": "node --test tests/*.test.mjs",
-    "vendor": "node scripts/vendor.mjs",
-    "prepare:bundle": "npm run build:workers && node scripts/bundle.mjs && npm run verify:bundle",
-    "verify:bundle": "node scripts/verify-pi-bundle.mjs",
-    "package": "npm run vendor && npm run prepare:bundle && tauri build --config apps/desktop/tauri.conf.json",
-    "package:offline": "npm run vendor && npm run prepare:bundle && tauri build --config apps/desktop/tauri.conf.json --config apps/desktop/tauri.offline.conf.json",
+    "dev": "bun run build:workers && bun scripts/bundle.mjs --code-only && bun run tauri -- dev --config apps/desktop/tauri.conf.json",
+    "dev:ui": "bun --bun --filter @talo/ui dev",
+    "build:ui": "bun --bun --filter @talo/ui build",
+    "build:workers": "bun scripts/build-workers.mjs && bun node_modules/@typescript/native/bin/tsc -p tsconfig.workers.json",
+    "check": "bun --bun --filter @talo/ui check && bun node_modules/@typescript/native/bin/tsc -p tsconfig.workers.json --noEmit",
+    "test": "bun test --timeout 180000 tests",
+    "vendor": "bun scripts/vendor.mjs",
+    "prepare:bundle": "bun run build:workers && bun scripts/bundle.mjs && bun run verify:bundle",
+    "verify:bundle": "bun scripts/verify-pi-bundle.mjs",
+    "package": "bun run vendor && bun run prepare:bundle && bun run tauri -- build --config apps/desktop/tauri.conf.json",
+    "package:offline": "bun run vendor && bun run prepare:bundle && bun run tauri -- build --config apps/desktop/tauri.conf.json --config apps/desktop/tauri.offline.conf.json",
     "host:check": "cargo check --manifest-path apps/desktop/Cargo.toml",
     "tauri": "tauri",
-    "version:set": "node scripts/version.mjs",
-    "package:release": "npm run vendor && npm run prepare:bundle && tauri build --config apps/desktop/tauri.conf.json --config apps/desktop/tauri.release.conf.json"
+    "version:set": "bun scripts/version.mjs",
+    "package:release": "bun run vendor && bun run prepare:bundle && bun run tauri -- build --config apps/desktop/tauri.conf.json --config apps/desktop/tauri.release.conf.json"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.4",
