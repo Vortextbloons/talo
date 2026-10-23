@@ -16,6 +16,8 @@
   import ChildTaskView from './ChildTaskView.svelte';
   import DelegationCalls from './DelegationCalls.svelte';
   import { asksFor } from '../lib/agent.svelte';
+  import { tools } from '../lib/tools.svelte';
+  import { approvals } from '../lib/approvals.svelte';
   import { browser, openBrowser, closeBrowser, selectBrowserSession, setBrowserWorkspaceVisible } from '../lib/browser.svelte';
   import {
     chat,
@@ -41,7 +43,7 @@
     routing,
   } from '../lib/chat.svelte';
 
-  let { onOpenSettings, name, tagline, showReasoning, agentName = 'Talo', onRenameAgent }: { onOpenSettings: () => void; name: string; tagline: string; showReasoning?: boolean; agentName?: string; onRenameAgent: (name: string) => Promise<void> } = $props();
+  let { onOpenSettings, onOpenMemory, name, tagline, showReasoning, agentName = 'Talo', onRenameAgent }: { onOpenSettings: (tab?: string) => void; onOpenMemory: () => void; name: string; tagline: string; showReasoning?: boolean; agentName?: string; onRenameAgent: (name: string) => Promise<void> } = $props();
 
   let showArchived = $state(false);
   let confirmingDelete = $state<string | null>(null);
@@ -98,9 +100,45 @@
   });
   const queued = $derived(chat.active?.queued ?? []);
   const working = $derived(chat.active?.state === 'generating' || chat.active?.state === 'cancelling');
-  const activeTasks = $derived(delegations.filter(task => ['queued', 'running', 'waiting'].includes(task.state)).length);
-  const primaryStatus = $derived(primaryWaiting ? 'Needs your answer' : primary && working ? 'Working on your request' : primary && activeTasks ? `Working on ${activeTasks} ${activeTasks === 1 ? 'task' : 'tasks'}` : 'Your ongoing conversation');
   const cancelling = $derived(chat.active?.state === 'cancelling');
+  const activeTasks = $derived(delegations.filter(task => ['queued', 'running', 'waiting'].includes(task.state)).length);
+  const openTask = $derived(delegations.find(task => task.state === 'running') ?? delegations.find(task => task.state === 'queued'));
+  const pendingApprovals = $derived.by(() => {
+    const conversationId = active?.conversation.id;
+    const mine = (items: { conversationId?: string }[]) => items.filter(item => !item.conversationId || item.conversationId === conversationId).length;
+    return mine(tools.state.pending) + mine(approvals.google) + mine(browser.approvals);
+  });
+  const awaitingAnswer = $derived(asksFor(active?.conversation.id).length > 0);
+  const waiting = $derived(awaitingAnswer || pendingApprovals > 0);
+  const chatState = $derived(waiting ? 'input' : working || activeTasks ? 'working' : messages.some(message => message.role === 'assistant' && message.status === 'completed') ? 'done' : 'ready');
+  const chatStateLabel = $derived(chatState === 'working' ? 'Working' : chatState === 'input' ? 'Needs your input' : chatState === 'done' ? 'Done' : 'Ready');
+  function activityLabel(tool: string): string {
+    if (tool === 'web_search') return 'Searching the web';
+    if (tool.startsWith('browser_')) return 'Using the browser';
+    if (tool === 'web_fetch') return 'Reading a page';
+    if (tool === 'web_crawl') return 'Reading a site';
+    if (tool === 'skill') return 'Using a saved skill';
+    return 'Working';
+  }
+  const currentAction = $derived.by(() => {
+    if (pendingApprovals) return 'Waiting for your permission';
+    if (awaitingAnswer) return 'Waiting for your answer';
+    if (cancelling) return 'Stopping';
+    const research = active?.generationId ? chat.research[active.generationId] ?? [] : [];
+    if (working) {
+      const running = [...research].reverse().find(item => item.state === 'running');
+      if (openTask?.currentActivity) return openTask.currentActivity;
+      if (running) return activityLabel(running.tool);
+      const last = messages[messages.length - 1];
+      if (last?.role === 'assistant' && last.reasoning && !last.text) return 'Thinking it through';
+      return 'Writing a reply';
+    }
+    if (openTask?.state === 'queued') return 'Waiting to start';
+    if (openTask?.currentActivity) return openTask.currentActivity;
+    if (activeTasks) return `Finishing ${activeTasks === 1 ? 'a task' : `${activeTasks} tasks`}`;
+    return '';
+  });
+  const primaryStatus = $derived(primary ? chatStateLabel : primaryWaiting ? 'Needs your input' : 'Your ongoing conversation');
   const connected = $derived(chat.connections.filter(connection => connection.connected));
   const selection = $derived(chat.active?.conversation.selection ?? chat.draftSelection);
   const selectionAvailable = $derived(isSelectionAvailable(selection));
@@ -117,6 +155,15 @@
     ),
   );
   const greeting = $derived(name ? `Hello, ${name}.` : 'Hello, you.');
+  const SAMPLE_TASK = 'Plan a realistic week for me. I work from home, have three meetings, and want two hours of focused work each day.';
+  async function trySample(): Promise<void> {
+    if (chat.sending || chat.preview || !connected.length) return;
+    if (await sendMessage(SAMPLE_TASK)) {
+      pinned = true;
+      await tick();
+      if (logEl) logEl.scrollTop = logEl.scrollHeight;
+    }
+  }
   const pickerGroups = $derived.by(() => {
     const groups: PickerGroup[] = [];
     for (const group of modelGroups) {
@@ -194,14 +241,14 @@
     return thinkingOptions.includes('medium') ? 'medium' : thinkingOptions[0] ?? '';
   });
   const composerHint = $derived(
-    !connected.length ? 'Connect a provider to begin'
+    !connected.length ? 'Add a model key to begin'
       : !selection ? 'Choose a model below'
         : !selectionAvailable ? 'Choose a connected model'
           : working ? 'Talo is replying — new messages queue'
             : '',
   );
   const placeholder = $derived(
-    !connected.length ? 'Connect a provider to start'
+    !connected.length ? 'Add a model key to start'
       : !selection ? 'Choose a model below'
         : !selectionAvailable ? 'Choose a connected model below'
           : 'What is on your mind?',
@@ -646,7 +693,7 @@
         <span class="primary-avatar"><img src={mascot} alt="" /><span class:busy={primary && (working || activeTasks > 0)}></span></span>
         <span class="primary-copy"><strong>{agentName}</strong><small>{primaryStatus}</small></span>
       </button>
-      <LibrarySidebar bind:showArchived />
+      <LibrarySidebar bind:showArchived {onOpenMemory} />
       <div class="threads-head">
         <span>Other chats</span>
         <div class="threads-actions">
@@ -710,8 +757,11 @@
     <div class="conversation-head">
       <div class="conversation-lead">
         <div class="conversation-title">
-          <strong>{primary ? agentName : active?.conversation.title || 'A new conversation'}</strong>
-          <span>{primary ? primaryStatus : selection ? selectionLabel(selection) : 'No model chosen yet'}</span>
+          <div class="title-line">
+            <strong>{primary ? agentName : active?.conversation.title || 'A new conversation'}</strong>
+            <span class="status-pill tone-{chatState}"><span class="status-dot" aria-hidden="true"></span>{chatStateLabel}</span>
+          </div>
+          <span class="detail" aria-live="polite">{currentAction || (selection ? selectionLabel(selection) : 'No model chosen yet')}</span>
         </div>
       </div>
 
@@ -744,33 +794,36 @@
         <h2>Your conversations did not open.</h2>
         <p>The desktop app is still running. Try once more, or check Settings if this keeps happening.</p>
         <button class="primary" onclick={() => { void retryChat(); }}>Try again</button>
-        <button class="secondary" onclick={onOpenSettings}>Open Settings</button>
+        <button class="secondary" onclick={() => onOpenSettings()}>Open Settings</button>
       </div>
     {:else if !connected.length && messages.length === 0}
       <div class="welcome connect">
         <img src={mascot} alt="Talo, a rounded yellow companion with two black eyes" />
-        <h2>Let's get you connected.</h2>
-        <p>Add a provider key in Settings, then choose a model.<br />Your side of the conversation is waiting.</p>
-        <button class="primary" disabled={chat.preview} onclick={onOpenSettings}>Connect a provider</button>
-        <small>Keys are sent once to the desktop app and are never kept in this window.</small>
+        <h2>One step before we talk.</h2>
+        <p>Connect a model so Talo can answer. You paste one key from a provider you already use.<br />That provider bills you for what Talo uses; free options cost nothing.</p>
+        <button class="primary" disabled={chat.preview} onclick={() => onOpenSettings('Models')}>Add a model key</button>
+        <p class="sample-echo">A good first ask: “Plan a realistic week for me — I work from home, have three meetings, and want two hours of focus each day.”</p>
+        <small>Windows keeps the key for this account. It never appears in a chat.<br />Already pay for ChatGPT? You can sign in with that plan instead of pasting a key.</small>
       </div>
     {:else if messages.length === 0}
       <div class="welcome">
         <img src={mascot} alt="Talo, a rounded yellow companion with two black eyes" />
-        <h2>Here when you need a hand.</h2>
-        <p>A thought, a question, a place to begin.<br />Your assistant will meet you here.</p>
+        <h2>Hi, I’m here. What are we working on?</h2>
+        <p>Describe it in your own words, or let me show you with one small task.</p>
+        <button class="primary sample" disabled={chat.sending || !connected.length} onclick={() => void trySample()}>Try a sample task</button>
+        <p class="sample-hint">Or start from one of these:</p>
         <div class="suggestions">
-          <button onclick={() => useSuggestion('Help me think through something on my mind.')}>
-            <span>Think together</span>
-            <small>Make room for your next idea.</small>
+          <button onclick={() => useSuggestion('Summarize this in plain language:\n\n')}>
+            <span>Explain something</span>
+            <small>Paste an email or a document and get the short version.</small>
           </button>
-          <button onclick={() => useSuggestion('Can you help me find my bearings on this?')}>
-            <span>Find your bearings</span>
-            <small>Bring a little clarity to your day.</small>
+          <button onclick={() => useSuggestion('Turn this into a simple plan for my week:\n\n')}>
+            <span>Make a plan</span>
+            <small>Share your list and get clear next steps.</small>
           </button>
-          <button onclick={() => useSuggestion('Let’s pick up the thread from where I left off.')}>
-            <span>Pick up the thread</span>
-            <small>Keep what matters close.</small>
+          <button onclick={() => useSuggestion('Draft a short, friendly email about: ')}>
+            <span>Draft a message</span>
+            <small>Tell me who it is for and what to say.</small>
           </button>
         </div>
       </div>
@@ -1006,7 +1059,7 @@
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.8 13.5 8l4.2 1.5-4.2 1.5L12 15.2l-1.5-4.2L6.3 9.5 10.5 8 12 3.8Z"/><path d="M17.4 15.2l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8Z"/></svg><span>Save as skill</span>
           </button>
-          <button type="button" class="browser-chip" class:browser-active={browser.status.state === 'connected'} aria-label="Open browser preview" aria-expanded={browser.view !== 'closed'} disabled={chat.preview} onclick={() => browser.view === 'side' ? closeBrowser() : void openBrowser('side')} title="Watch the browser without interrupting Pi">
+          <button type="button" class="browser-chip" class:browser-active={browser.status.state === 'connected'} aria-label="Open browser preview" aria-expanded={browser.view !== 'closed'} disabled={chat.preview} onclick={() => browser.view === 'side' ? closeBrowser() : void openBrowser('side')} title="Watch the browser without interrupting Talo">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></svg><span>Browser</span>{#if browser.status.busy}<span class="browser-dot"></span>{/if}
           </button>
           {#if composerHint}<span class="composer-hint">{composerHint}</span>{/if}
@@ -1156,8 +1209,16 @@
   .conversation-lead{display:flex;align-items:flex-start;gap:12px;min-width:0}
   .threads-reopen{align-self:center;padding:6px 10px;font-size:11px;color:var(--muted);gap:8px}
   .conversation-title{min-width:0}
-  .conversation-title strong{display:block;font-size:15px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .conversation-title span{display:block;font-size:11px;color:var(--muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .title-line{display:flex;align-items:center;gap:9px;min-width:0}
+  .status-pill{display:inline-flex;align-items:center;gap:5px;flex-shrink:0;border:1px solid var(--line);border-radius:20px;padding:2px 8px;font-size:9.5px;letter-spacing:.04em;color:var(--muted);white-space:nowrap}
+  .status-dot{width:5px;height:5px;border-radius:50%;background:currentColor;flex-shrink:0}
+  .status-pill.tone-working{color:var(--yellow-deep);border-color:#4e4324;background:#211f16}
+  .status-pill.tone-working .status-dot{background:var(--yellow);animation:pulse 1.4s ease-in-out infinite}
+  .status-pill.tone-input{color:var(--text);border-color:var(--yellow-deep);background:#26241a}
+  .status-pill.tone-input .status-dot{background:var(--yellow)}
+  .status-pill.tone-done .status-dot{background:#9fb398}
+  .conversation-title strong{display:block;min-width:0;font-size:15px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .conversation-title span.detail{display:block;font-size:11px;color:var(--muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .chat-message{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 13px;border-radius:9px;font-size:12.5px;margin-bottom:12px;line-height:1.5}
   .chat-message.error{background:var(--error-bg);border:1px solid var(--error-line);color:var(--error-text)}
   .chat-message.notice{background:#211f16;border:1px solid #4e4324;color:#e8d59e}
@@ -1168,6 +1229,10 @@
   .welcome h2{font-size:23px;letter-spacing:-.6px;font-weight:550;margin:0 0 12px}
   .welcome p{color:var(--muted);font-size:14.5px;line-height:1.7;margin:0 0 21px}
   .welcome small{display:block;margin-top:18px;color:var(--faint);font-size:11px;line-height:1.6}
+  .welcome .primary{background:var(--yellow);border:1px solid var(--yellow);color:var(--black);font-weight:600;padding:11px 18px;border-radius:9px;font-size:13px}
+  .welcome .primary:hover:not(:disabled){background:#ffdd7f;border-color:#ffdd7f}
+  .welcome .sample-hint{margin:24px 0 0;font-size:11.5px;color:var(--faint);line-height:1.5}
+  .welcome .sample-echo{margin:18px 0 0;max-width:430px;padding:10px 14px;border:1px dashed var(--line-strong);border-radius:10px;font-size:11.5px;line-height:1.6;color:var(--muted);text-align:left}
   .secondary{background:transparent;margin-left:8px}
   .loading-dot{display:block;width:7px;height:7px;border-radius:50%;background:var(--yellow);margin:0 auto 18px;animation:pulse 1.4s ease-in-out infinite}
   .suggestions{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:26px;text-align:left;width:100%}

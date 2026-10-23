@@ -12,6 +12,7 @@ export interface McpServerDefinition {
 }
 export interface ToolPermission {
   id: string; action: string; scope: string; summary: string;
+  conversationId?: string; generationId?: string;
 }
 export interface ToolsState {
   servers: (Omit<McpServerDefinition, 'credential'> & { hasCredential?: boolean; state?: string; tools?: ManagedTool[]; error?: string })[];

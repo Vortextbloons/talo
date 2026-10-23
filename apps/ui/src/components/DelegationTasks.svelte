@@ -16,7 +16,7 @@
   function label(state: DelegationTask['state']): string {
     return state === 'waiting' ? 'Needs you'
       : state === 'running' ? 'Working'
-        : state === 'queued' ? 'Queued'
+        : state === 'queued' ? 'Starting'
           : state === 'interrupted' ? 'Interrupted'
             : 'Failed';
   }
@@ -24,14 +24,14 @@
   function current(task: DelegationTask): string {
     if (task.state === 'waiting') return 'Waiting for your answer';
     if (task.state === 'queued') return 'Waiting to start';
-    return task.currentActivity || 'Starting work';
+    return task.currentActivity || 'Working on it';
   }
 </script>
 
 {#if shown.length}
-  <section class="delegations" aria-label="Active subagents">
+  <section class="delegations" aria-label="Tasks Talo is working on">
     <header>
-      <span>Subagents</span>
+      <span>Tasks in progress</span>
       {#if active.length > 1}
         <button type="button" class="cancel-all" onclick={onCancelAll}>Cancel all</button>
       {/if}

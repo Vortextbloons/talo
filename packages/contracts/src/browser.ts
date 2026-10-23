@@ -3,6 +3,14 @@
 export type BrowserSessionId = string;
 export type BrowserOwner = 'agent' | 'human' | 'paused';
 export type BrowserControlAction = 'open' | 'watch' | 'take_over' | 'return' | 'pause' | 'stop';
+export interface BrowserApproval {
+  id: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  page?: { url?: string; title?: string };
+  conversationId?: string;
+  generationId?: string;
+}
 export interface BrowserStatus {
   sessionId?: BrowserSessionId;
   state: 'stopped' | 'starting' | 'connected' | 'crashed';

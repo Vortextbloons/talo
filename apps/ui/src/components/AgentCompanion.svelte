@@ -3,6 +3,7 @@
   import BrowserPreview from './BrowserPreview.svelte';
   import DelegationTasks from './DelegationTasks.svelte';
   import { chat, cancelAllDelegations, cancelDelegation, openDelegationTask } from '../lib/chat.svelte';
+  import { asksFor } from '../lib/agent.svelte';
   import { browser } from '../lib/browser.svelte';
 
   let { name = 'Talo', onRename }: { name?: string; onRename: (name: string) => Promise<void> } = $props();
@@ -12,11 +13,13 @@
   let error = $state('');
   const working = $derived(chat.active?.state === 'generating' || chat.active?.state === 'cancelling');
   const approvals = $derived(browser.approvals.length);
+  const asking = $derived(asksFor(chat.active?.conversation.id).length > 0);
+  const workingTask = $derived((chat.active?.delegations ?? []).find(task => task.state === 'running' || task.state === 'queued'));
   const agents = $derived((chat.active?.delegations ?? []).filter(task => task.state !== 'completed' && task.state !== 'cancelled'));
-  const activity = $derived(browser.status.state === 'crashed' ? 'Browser needs reconnecting' : approvals ? 'Waiting on you' : chat.active?.state === 'cancelling' ? 'Stopping' : chat.worker.state === 'starting' ? 'Waking up' : browser.status.busy ? 'Exploring the web' : working ? 'Thinking it through' : chat.worker.state === 'failed' ? 'Connection needs attention' : browser.status.owner === 'paused' ? 'Browser paused' : 'Here when you need me');
+  const activity = $derived(browser.status.state === 'crashed' ? 'Browser needs reconnecting' : approvals || asking ? 'Needs your input' : chat.active?.state === 'cancelling' ? 'Stopping' : chat.worker.state === 'starting' ? 'Waking up' : working ? 'Working' : chat.worker.state === 'failed' ? 'Connection needs attention' : browser.status.owner === 'paused' ? 'Browser paused' : 'Here when you need me');
   const mood = $derived.by(() => {
     if (browser.status.state === 'crashed') return 'crashed';
-    if (approvals) return 'attention';
+    if (approvals || asking) return 'attention';
     if (chat.active?.state === 'cancelling') return 'stopping';
     if (chat.worker.state === 'starting') return 'waking';
     if (browser.status.busy) return 'browsing';
@@ -25,7 +28,13 @@
     if (browser.status.owner === 'paused') return 'paused';
     return 'idle';
   });
-  const runtime = $derived(chat.preview ? 'Interface preview' : chat.worker.state === 'starting' ? 'Starting the local agent' : working ? 'Working on your request' : chat.worker.state === 'failed' ? 'Check your connection in Settings' : 'Ready for your next message');
+  const runtime = $derived(chat.preview ? 'Interface preview'
+    : chat.worker.state === 'starting' ? 'Getting ready'
+      : approvals ? 'Waiting for your permission'
+        : asking ? 'Waiting for your answer'
+          : working ? workingTask?.currentActivity || (browser.status.busy ? 'Using the browser' : 'Writing a reply')
+            : chat.worker.state === 'failed' ? 'Check your connection in Settings'
+              : 'Ready for your next message');
 
 
   let stageEl = $state<HTMLDivElement>();

@@ -243,7 +243,9 @@ pub(crate) fn startup_state(h: &crate::Host) -> Result<Value, String> {
             "id": id,
             "action": message["params"]["action"],
             "scope": message["params"]["scope"],
-            "summary": message["params"]["summary"]
+            "summary": message["params"]["summary"],
+            "conversationId": message["params"]["conversationId"],
+            "generationId": message["params"]["generationId"]
         }))
         .collect::<Vec<_>>());
     Ok(state)

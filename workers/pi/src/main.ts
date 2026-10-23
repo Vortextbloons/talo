@@ -1171,7 +1171,11 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
     });
     await loader.reload().catch(async error=>{await toolsExtension.close();throw error;});
     let referenceContext = '';
-    loader.getSystemPrompt = () => TALO_SYSTEM_PROMPT + referenceContext;
+    let currentModelName = selectedModel?.id ?? desiredModelId;
+    loader.getSystemPrompt = () => TALO_SYSTEM_PROMPT
+      + `\n\nCurrent date: ${new Intl.DateTimeFormat('en-CA').format(new Date())}`
+      + `\nCurrent model: ${currentModelName || 'unknown'}`
+      + referenceContext;
     let advertisedSkills = approvedSkills(params.skills);
     loader.getSkills = () => ({ skills: advertisedSkills, diagnostics: [] });
 
@@ -1198,6 +1202,7 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
       }), () => capabilities.files, sessionAuthorize),
       ...(selectedModel ? { model: selectedModel } : {}),
     }).catch(async error=>{await toolsExtension.close();throw error;});
+    currentModelName = session.model?.id ?? currentModelName;
     session.setAutoCompactionEnabled(true);
     const activeTools = () => ['tools', ...(capabilities.files ? ['read', 'write', 'edit'] : [])];
     const applyCapabilities = (value: unknown) => {

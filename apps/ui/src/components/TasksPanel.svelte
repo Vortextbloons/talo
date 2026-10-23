@@ -39,7 +39,7 @@
   });
 </script>
 
-<div class="automation-bar"><div><span class="lamp" class:paused></span><strong>{paused?'Automation paused':'Automation on'}</strong><small>Pi {runtime} · One task at a time</small></div><button disabled={busy||!isTauri()} onclick={()=>action('pause_automation',{paused:!paused})}>{paused?'Resume automation':'Pause automation'}</button><button class="primary" disabled={!isTauri()} onclick={create}>Create task</button></div>
+<div class="automation-bar"><div><span class="lamp" class:paused></span><strong>{paused?'Automation paused':'Automation on'}</strong><small>Talo {runtime} · One task at a time</small></div><button disabled={busy||!isTauri()} onclick={()=>action('pause_automation',{paused:!paused})}>{paused?'Resume automation':'Pause automation'}</button><button class="primary" disabled={!isTauri()} onclick={create}>Create task</button></div>
 {#if resources}<p class="hint">Local processes · {(resources.memoryBytes/1048576).toFixed(0)} MB RAM · {resources.cpuPercent.toFixed(1)}% CPU (100% = one core)</p>{/if}
 {#if !isTauri()}<p>Open Talo on Windows to schedule tasks.</p>{/if}
 {#if error}<p class="error" role="alert">{error}</p>{/if}
@@ -62,7 +62,7 @@
 {#snippet runRow(run:Run)}
   <article class:focused={run.id===focusRun}><div><strong>{run.title}</strong><p><span class="status">{run.status.replaceAll('_',' ')}</span> · {date(run.startedAt)}{#if run.finishedAt&&run.startedAt} · {run.finishedAt-run.startedAt}s{/if}</p>{#if run.usage}<p>{run.usage.tokens.toLocaleString()} tokens · ${run.usage.cost.toFixed(4)} estimated · {run.usage.toolCalls} tool checks</p>{/if}{#if run.error}<p class="error">{run.error}</p>{/if}</div><div class="actions">{#if run.conversationId}<button onclick={()=>open(run)}>View conversation</button>{/if}{#if ['running','awaiting_approval'].includes(run.status)}<button disabled={busy} onclick={()=>action('cancel',{id:run.id})}>Cancel run</button>{/if}</div></article>
 {/snippet}
-<section><h2>Running <span>{running.length}</span></h2>{#each running as run (run.id)}{@render runRow(run)}{:else}<p class="hint">Nothing running. Pi rests after two idle minutes.</p>{/each}</section>
+<section><h2>Running <span>{running.length}</span></h2>{#each running as run (run.id)}{@render runRow(run)}{:else}<p class="hint">Nothing running. Talo rests after two idle minutes.</p>{/each}</section>
 <section><h2>Needs attention <span>{attention.length}</span></h2>{#each attention as run (run.id)}{@render runRow(run)}{:else}<p class="hint">No tasks need attention.</p>{/each}</section>
 <section><h2>Execution history</h2>{#each history as run (run.id)}{@render runRow(run)}{:else}<p class="hint">Completed and interrupted runs appear here.</p>{/each}</section>
 <style>

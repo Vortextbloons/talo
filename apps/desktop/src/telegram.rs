@@ -541,7 +541,7 @@ fn callback_action(h: &mut Host, app: &tauri::AppHandle, data: &str) -> Result<S
                 return Err("This action is no longer running.".into());
             }
             crate::resolve_permission_inner(h, id, *decision == "y")?;
-            let _=app.emit("browser-approvals",h.browser_approvals.iter().map(|(id,(m,_,_))|json!({"id":id,"tool":m["params"]["name"],"arguments":m["params"]["arguments"]})).collect::<Vec<_>>());
+            let _=app.emit("browser-approvals",h.browser_approvals.iter().map(|(id,(m,_,_))|json!({"id":id,"tool":m["params"]["name"],"arguments":m["params"]["arguments"],"page":m["params"]["page"],"conversationId":m["params"]["sessionId"],"generationId":m["params"]["generationId"]})).collect::<Vec<_>>());
             Ok(if *decision == "y" {
                 "Approved once."
             } else {

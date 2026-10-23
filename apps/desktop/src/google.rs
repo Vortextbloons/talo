@@ -359,6 +359,8 @@ pub(crate) fn approvals(h: &Host) -> Value {
             "tool": approval.tool,
             "summary": approval.summary,
             "arguments": approval.arguments,
+            "conversationId": approval.conversation,
+            "generationId": approval.generation,
         }))
         .collect::<Vec<_>>())
 }

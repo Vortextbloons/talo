@@ -23,18 +23,18 @@
       {:else if manual}<button class="primary" disabled={browser.busy} onclick={() => void controlBrowser('return')}>Return Control</button>
       {:else}<button class="primary" disabled={browser.busy} onclick={() => void controlBrowser('take_over')}>Take Over</button>{#if browser.status.owner === 'paused'}<button disabled={browser.busy} onclick={() => void controlBrowser('return')}>Return Control</button>{:else}<button disabled={browser.busy} onclick={() => void controlBrowser('pause')}>Pause</button>{/if}{/if}
       {#if connected}<button disabled={browser.busy} onclick={() => void controlBrowser('stop')}>Stop</button>{/if}
-      {#if !pageView}<button class="close" onclick={() => void openBrowser('side')} aria-label="Close browser view" title="Close view. Pi can keep browsing.">&times;</button>{/if}
+      {#if !pageView}<button class="close" onclick={() => void openBrowser('side')} aria-label="Close browser view" title="Close view. Talo can keep browsing.">&times;</button>{/if}
     </div>
   </div>
   <div class="page-bar">
     <button disabled={!manual || browser.busy} onclick={() => void sendBrowserInput({ type: 'back' })} aria-label="Go back">&#8592;</button>
     <button disabled={!manual || browser.busy} onclick={() => void sendBrowserInput({ type: 'forward' })} aria-label="Go forward">&#8594;</button>
     <button disabled={!manual || browser.busy} onclick={() => void sendBrowserInput({ type: 'reload' })} aria-label="Reload page">&#8635;</button>
-    <form onsubmit={navigate}><input aria-label="Website address" readonly={!manual} bind:value={address} placeholder={current?.url && current.url !== 'about:blank' ? current.url : manual ? 'Enter a website address' : 'Pi will open a page here'} autocomplete="off" spellcheck="false" /></form>
+    <form onsubmit={navigate}><input aria-label="Website address" readonly={!manual} bind:value={address} placeholder={current?.url && current.url !== 'about:blank' ? current.url : manual ? 'Enter a website address' : 'Talo will open a page here'} autocomplete="off" spellcheck="false" /></form>
   </div>
-  {#if pageView && browser.view === 'closed'}<div class="landing"><strong>A window into what Pi is doing.</strong><p>Open the browser to watch. Take Over when you want to interact.</p><button class="primary" disabled={browser.busy || !isTauri()} onclick={() => void openBrowser('large')}>Open Browser</button></div>
+  {#if pageView && browser.view === 'closed'}<div class="landing"><strong>A window into what Talo is doing.</strong><p>Open the browser to watch. Take Over when you want to interact.</p><button class="primary" disabled={browser.busy || !isTauri()} onclick={() => void openBrowser('large')}>Open Browser</button></div>
   {:else}<BrowserSurface />{/if}
-  <div class="browser-foot"><span>{current?.title || 'Talo browser'}</span><span>{manual ? 'Click the page to type or browse' : 'Watch only - Pi keeps working'}</span></div>
+  <div class="browser-foot"><span>{current?.title || 'Talo browser'}</span><span>{manual ? 'Click the page to type or browse' : 'Watch only - Talo keeps working'}</span></div>
   {#if browser.status.error || browser.error}<p class="error" role="alert">{browser.error || browser.status.error}</p>{/if}
 {/snippet}
 
@@ -49,14 +49,14 @@
 {#if browser.approvals.length}
   {@const approval = browser.approvals[0]}
   <dialog class="approval-dialog" aria-labelledby="browser-approval-title" oncancel={event => { event.preventDefault(); void resolveBrowserApproval(approval.id, false); }} {@attach element => { element.showModal(); return () => element.close(); }}>
-    <span class="eyebrow">Browser permission &middot; {browser.approvals.length} pending</span>
-    <h2 id="browser-approval-title">Allow this browser action?</h2>
-    <p>Review the action before Pi continues.</p>
+    <span class="eyebrow">Your permission &middot; {browser.approvals.length} pending</span>
+    <h2 id="browser-approval-title">Talo wants to do something in its browser</h2>
+    <p>Check the action, then decide. Talo waits until you answer.</p>
     <strong>{approval.tool.replace('browser_', '').replaceAll('_', ' ')}</strong>
     {#if approval.page?.url}<p>{approval.page.title} &middot; {approval.page.url}</p>{/if}
     <pre>{JSON.stringify(approval.arguments, null, 2)}</pre>
-    <p class="hint">This action only. Approval expires after 90 seconds.</p>
-    <div class="browser-actions"><button disabled={browser.busy} onclick={() => void resolveBrowserApproval(approval.id, false)}>Deny</button><button class="primary" disabled={browser.busy} onclick={() => void resolveBrowserApproval(approval.id, true)}>Allow once</button><button disabled={browser.busy} onclick={async () => { await resolveBrowserApproval(approval.id, false); await openBrowser('large'); await controlBrowser('take_over'); }}>Take Over</button></div>
+    <p class="hint">Nothing happens unless you allow it. This approval expires after 90 seconds and covers only this action.</p>
+    <div class="browser-actions"><button disabled={browser.busy} onclick={() => void resolveBrowserApproval(approval.id, false)}>Don’t allow</button><button class="primary" disabled={browser.busy} onclick={() => void resolveBrowserApproval(approval.id, true)}>Allow once</button><button disabled={browser.busy} onclick={async () => { await resolveBrowserApproval(approval.id, false); await openBrowser('large'); await controlBrowser('take_over'); }}>Take Over</button></div>
   </dialog>
 {/if}
 

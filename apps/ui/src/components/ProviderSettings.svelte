@@ -128,7 +128,8 @@
 </script>
 
 <section class="card providers">
-  <h2>Model providers</h2>
+  <h2>Connect a model</h2>
+  <p class="lede">Talo writes with a model from one of these providers. You connect your own account and pay that provider for what Talo uses; Talo never charges you. Free tiers and local servers cost nothing. Already paying for ChatGPT? Choose <strong>ChatGPT plan</strong> and sign in through your browser — there is no key to copy.</p>
 
   {#if chat.error}
     <div class="settings-message error" role="alert">
@@ -144,7 +145,7 @@
   {/if}
   {#if connected.length}
     <div class="connected-list">
-      <h3>Connected</h3>
+      <h3>Ready to use</h3>
       {#each connected as connection (connection.id)}
         <div class="connection">
           <div class="connection-main">
@@ -169,12 +170,12 @@
       {/each}
     </div>
   {:else}
-    <p class="empty-line">No providers connected.</p>
+    <p class="empty-line">No model connected yet. Choose a provider and paste one key to get started.</p>
   {/if}
 
 
   <details class="connect-details" open={connected.length === 0}>
-    <summary>{connected.length ? 'Add another provider' : 'Add a provider'}</summary>
+    <summary>{connected.length ? 'Connect another model' : 'Connect a model'}</summary>
   <form class="connect-form" onsubmit={connect} aria-busy={pending}>
     {#if localError}
       <div class="settings-message error form-error" role="alert">{localError}</div>
@@ -230,8 +231,8 @@
         {#if pending}<button type="button" onclick={cancelChatGPT}>Cancel sign-in</button>{/if}
       </div>
     {:else}
-      {#if descriptor.keysUrl}<p class="provider-note">Get a key: <span class="link">{descriptor.keysUrl}</span></p>{/if}
-      <label for="connection-key">API key
+      {#if descriptor.keysUrl}<p class="provider-note">Get a key from <span class="link">{descriptor.keysUrl}</span></p>{/if}
+      <label for="connection-key">Key <span>(stays on this PC)</span>
         <input
           id="connection-key"
           type="password"
@@ -245,7 +246,7 @@
         />
       </label>
       <div class="field-row">
-        <label for="connection-model">Starting model <span>(optional)</span>
+        <label for="connection-model">Model to start with <span>(optional)</span>
           {#if descriptor.suggestedModels.length}
             <select id="connection-model" bind:value={modelId} disabled={pending}>
               <option value="">First available model</option>
@@ -266,7 +267,7 @@
   </details>
 
   <details class="catalog">
-    <summary>What Talo supports</summary>
+    <summary>Which providers Talo works with</summary>
     <ul>
       {#each PROVIDER_CHOICES as choice (choice.id)}
         <li>
@@ -281,6 +282,7 @@
 <style>
   .providers{padding:24px 26px}
   .providers h2{font-size:17px;letter-spacing:-.4px;font-weight:550;margin:0 0 6px}
+  .lede{font-size:12.5px;line-height:1.65;color:var(--muted);margin:0 0 4px;max-width:74ch}
   .providers h3{font-size:13px}
   .form-error{margin:12px 0 2px}
   .pending{display:flex;align-items:flex-start;gap:11px;padding:12px 14px;margin:14px 0 4px;border:1px solid #4e4324;border-radius:9px;background:#211f16;color:#e8d59e}

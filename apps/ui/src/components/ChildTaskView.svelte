@@ -17,8 +17,8 @@
 
   const working = $derived(snapshot.state === 'generating' || snapshot.state === 'cancelling');
   const stateLabel = $derived(
-    task?.state === 'waiting' ? 'Needs an answer'
-      : task?.state === 'queued' ? 'Queued'
+    task?.state === 'waiting' ? 'Needs your input'
+      : task?.state === 'queued' ? 'Starting'
       : task?.state === 'running' ? 'Working'
       : task?.state === 'completed' ? 'Done'
       : task?.state === 'cancelled' ? 'Cancelled'

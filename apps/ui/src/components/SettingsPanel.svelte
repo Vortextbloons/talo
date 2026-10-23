@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { isTauri } from '@tauri-apps/api/core';
   import ProviderSettings from './ProviderSettings.svelte';
   import ToolsSettings from './ToolsSettings.svelte';
@@ -12,18 +12,20 @@
   import type { Onboarding, RuntimeStatus, ServiceId } from '../../../../packages/contracts/src/index';
 
   let {
-    settings, status, busy,
-    onPersist, onService, onBrowserStart, onAutostart, onMemory, onOpenChat, onRerunSetup,
+    settings, status, busy, openTab = '',
+    onPersist, onService, onBrowserStart, onAutostart, onMemory, onOpenChat, onOpenMemory, onRerunSetup,
   }: {
     settings: Onboarding;
     status: RuntimeStatus | null;
     busy: boolean;
+    openTab?: string;
     onPersist: (patch: Partial<Onboarding>) => Promise<void>;
     onService: (id: ServiceId, start: boolean) => Promise<void>;
     onBrowserStart: () => Promise<void>;
     onAutostart: (enabled: boolean) => Promise<void>;
     onMemory: (enabled: boolean) => Promise<void>;
     onOpenChat: () => void;
+    onOpenMemory: () => void;
     onRerunSetup: () => void;
   } = $props();
 
@@ -37,14 +39,15 @@
     Advanced: { label: 'App & updates', icon: 'M4 4h16v12H4V4Zm4 16h8m-4-4v4' },
   };
   const TAB_KEY = 'talo.settings.tab';
-  function initialTab(): Tab {
+  function initialTab(preferred?: string): Tab {
+    if (preferred && (TABS as readonly string[]).includes(preferred)) return preferred as Tab;
     try {
       const saved = localStorage.getItem(TAB_KEY);
       if (saved && (TABS as readonly string[]).includes(saved)) return saved as Tab;
     } catch { /* storage can be unavailable */ }
     return 'You';
   }
-  let tab = $state<Tab>(initialTab());
+  let tab = $state<Tab>(untrack(() => initialTab(openTab)));
   function selectTab(next: Tab): void {
     tab = next;
     try { localStorage.setItem(TAB_KEY, next); } catch { /* storage can be unavailable */ }
@@ -227,8 +230,9 @@
         <h2>Memory</h2>
         <div class="rows">
           <div class="row">
-            <div class="what"><strong>Remember between chats</strong></div>
+            <div class="what"><strong>Remember between chats</strong><small>Project notes and preferences Talo can carry into later conversations.</small></div>
             <div class="how">
+              <button class="quiet" onclick={onOpenMemory}>Review memory</button>
               <button class="switch" role="switch" aria-checked={library.memoryEnabled} aria-label="Remember between chats" onclick={() => void onMemory(!library.memoryEnabled)}></button>
             </div>
           </div>
@@ -251,30 +255,31 @@
     <div class="tabpanel cols">
       <ProviderSettings />
       <section class="group full">
-        <h2>Which model answers</h2>
+        <h2>How answers are chosen</h2>
+        <p class="group-note">Talo does not bill you. Your provider charges your own account for the model time Talo uses; free tiers and local servers cost nothing.</p>
         <div class="rows">
           <div class="row">
-            <div class="what"><strong>Chat model</strong></div>
+            <div class="what"><strong>Chat model</strong><small>The model that writes your replies.</small></div>
             <div class="how">
               <span class="value">{selection || 'Chosen when you send your first message'}</span>
               <button class="quiet" onclick={onOpenChat}>Choose in Chat</button>
             </div>
           </div>
           <div class="row">
-            <div class="what"><strong>AI performance</strong></div>
+            <div class="what"><strong>Everyday or best</strong><small>Everyday spends less of your provider budget. Best costs more and works harder on difficult requests.</small></div>
             <div class="how">
-              <div class="seg" role="group" aria-label="AI performance">
+              <div class="seg" role="group" aria-label="Model quality">
                 <button aria-pressed={settings.performance === 'economy'} onclick={() => void onPersist({ performance: 'economy' })}>{tierLabels.economy}</button>
                 <button aria-pressed={settings.performance !== 'economy'} onclick={() => void onPersist({ performance: 'recommended' })}>{tierLabels.recommended}</button>
               </div>
             </div>
           </div>
           <div class="row">
-            <div class="what"><strong>Model selection</strong></div>
+            <div class="what"><strong>Who picks the model</strong><small>Let Talo choose the model that fits each request, or pick one yourself in the chat.</small></div>
             <div class="how">
-              <div class="seg" role="group" aria-label="Model selection">
-                <button aria-pressed={settings.routing !== 'manual'} onclick={() => void onPersist({ routing: 'auto' })}>Auto</button>
-                <button aria-pressed={settings.routing === 'manual'} onclick={() => void onPersist({ routing: 'manual' })}>Manual</button>
+              <div class="seg" role="group" aria-label="Who picks the model">
+                <button aria-pressed={settings.routing !== 'manual'} onclick={() => void onPersist({ routing: 'auto' })}>Let Talo pick</button>
+                <button aria-pressed={settings.routing === 'manual'} onclick={() => void onPersist({ routing: 'manual' })}>I’ll pick</button>
               </div>
             </div>
           </div>
@@ -376,6 +381,12 @@
             <div class="what"><strong>Closing the window</strong></div>
             <div class="how"><span class="value muted">Minimize to tray</span></div>
           </div>
+          <div class="row">
+            <div class="what"><strong>Keep WebView loaded in tray</strong><small>Keep your current screen ready for a faster return. Turn this off to release it and rebuild it when Talo opens again.</small></div>
+            <div class="how">
+              <button class="switch" role="switch" aria-checked={settings.keepWebviewInTray === true} aria-label="Keep WebView loaded in tray" onclick={() => void onPersist({ keepWebviewInTray: settings.keepWebviewInTray !== true })}></button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -464,6 +475,7 @@
   .group{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:22px 24px 6px}
   .group>h2{font-size:15px;font-weight:600;color:var(--text);margin:0 0 17px;letter-spacing:-.2px}
   .tool-total{font-size:12px;color:var(--muted);margin:-8px 0 18px}
+  .group-note{font-size:12px;color:var(--muted);line-height:1.65;margin:-8px 0 18px;max-width:72ch}
   .after{font-size:11.5px;color:var(--muted);line-height:1.65;margin:0 0 17px;max-width:74ch}
   .rows{border-top:1px solid var(--line)}
   .row{display:flex;align-items:center;gap:20px;padding:15px 0;border-bottom:1px solid var(--line);min-height:64px;flex-wrap:wrap}

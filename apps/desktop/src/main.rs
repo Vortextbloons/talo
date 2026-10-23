@@ -29,7 +29,12 @@ use permissions::Permissions;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::{
-    sync::{Arc, Mutex, TryLockError},
+    fs::OpenOptions,
+    io::Write,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, TryLockError,
+    },
     time::{Duration, Instant},
 };
 use supervisor::Supervisor;
@@ -52,7 +57,22 @@ struct Host {
 
     agent_asks: std::collections::HashMap<String, agent::PendingAsk>,
 }
+
+static WEBVIEW_SUSPEND_GENERATION: AtomicU64 = AtomicU64::new(0);
+static KEEP_WEBVIEW_IN_TRAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+const WEBVIEW_SUSPEND_DELAY: Duration = Duration::from_secs(30);
 type Shared = Arc<Mutex<Host>>;
+
+#[cfg(windows)]
+fn log_webview_suspend(message: &str) {
+    if let Ok(mut log) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("talo-webview-suspend.log"))
+    {
+        let _ = writeln!(log, "[DEBUG-suspend30] {message}");
+    }
+}
 
 
 
@@ -174,7 +194,7 @@ impl Host {
                 if owner == epoch { self.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Browser approval expired or activity was cancelled."}})); }
             }
         }
-        let pending: Vec<_> = self.browser_approvals.iter().map(|(id,(message,_,_))| json!({"id":id,"tool":message["params"]["name"],"arguments":message["params"]["arguments"],"page":message["params"]["page"]})).collect();
+        let pending: Vec<_> = self.browser_approvals.iter().map(|(id,(message,_,_))| json!({"id":id,"tool":message["params"]["name"],"arguments":message["params"]["arguments"],"page":message["params"]["page"],"conversationId":message["params"]["sessionId"],"generationId":message["params"]["generationId"]})).collect();
         if self.last_maintenance.elapsed() >= Duration::from_secs(2) { let _ = app.emit("browser-approvals", pending); }
         self.supervisor.refresh();
         for lifecycle in self.supervisor.drain_lifecycle() {
@@ -211,10 +231,113 @@ fn warm_worker_after_first_frame(app: tauri::AppHandle) {
     warm_worker(&app);
 }
 
+#[cfg(windows)]
+fn suspend_webview(window: &tauri::WebviewWindow, generation: u64) {
+    use webview2_com::{
+        Microsoft::Web::WebView2::Win32::ICoreWebView2_3,
+        TrySuspendCompletedHandler,
+    };
+    use windows::core::Interface;
+
+    let visibility_window = window.clone();
+    let queued = window.with_webview(move |webview| {
+        let visible = visibility_window.is_visible().unwrap_or(true);
+        let current_generation = WEBVIEW_SUSPEND_GENERATION.load(Ordering::SeqCst);
+        log_webview_suspend(&format!(
+            "suspend callback generation={generation} current={current_generation} visible={visible}"
+        ));
+        if current_generation != generation || visible {
+            return;
+        }
+        unsafe {
+            let controller = webview.controller();
+            let mut controller_visible = windows::core::BOOL(0);
+            let visibility = controller.IsVisible(&mut controller_visible);
+            log_webview_suspend(&format!(
+                "controller visibility before suspend {:?} visible={}",
+                visibility,
+                controller_visible.as_bool()
+            ));
+            let visibility = controller.SetIsVisible(false);
+            log_webview_suspend(&format!("controller hide before suspend {visibility:?}"));
+            if let Err(error) = visibility {
+                log_webview_suspend(&format!("controller hide failed {error:?}"));
+                return;
+            }
+            match controller
+                .CoreWebView2()
+                .and_then(|core| core.cast::<ICoreWebView2_3>()) {
+                Ok(core) => {
+                    let handler = TrySuspendCompletedHandler::create(Box::new(|result, suspended| {
+                        log_webview_suspend(&format!(
+                            "suspend completed result={result:?} suspended={suspended}"
+                        ));
+                        Ok(())
+                    }));
+                    let result = core.TrySuspend(&handler);
+                    log_webview_suspend(&format!("TrySuspend returned {result:?}"));
+                }
+                Err(error) => log_webview_suspend(&format!("CoreWebView2_3 unavailable {error:?}")),
+            }
+        }
+    });
+    log_webview_suspend(&format!("suspend callback queued {queued:?}"));
+}
+
+#[cfg(not(windows))]
+fn suspend_webview(_window: &tauri::WebviewWindow, _generation: u64) {}
+
+#[cfg(windows)]
+fn resume_webview(window: &tauri::WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_3;
+    use windows::core::Interface;
+
+    let _ = window.with_webview(|webview| unsafe {
+        let controller = webview.controller();
+        let visible = controller.SetIsVisible(true);
+        log_webview_suspend(&format!("controller show on resume {visible:?}"));
+        if let Ok(core) = controller
+            .CoreWebView2()
+            .and_then(|core| core.cast::<ICoreWebView2_3>())
+        {
+            let result = core.Resume();
+            log_webview_suspend(&format!("Resume returned {result:?}"));
+        } else {
+            log_webview_suspend("ICoreWebView2_3 unavailable during resume");
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn resume_webview(_window: &tauri::WebviewWindow) {}
+
+fn schedule_webview_suspend(app: tauri::AppHandle, generation: u64) {
+    std::thread::spawn(move || {
+        log_webview_suspend(&format!("suspend timer started generation={generation}"));
+        std::thread::sleep(WEBVIEW_SUSPEND_DELAY);
+        if WEBVIEW_SUSPEND_GENERATION.load(Ordering::SeqCst) != generation {
+            log_webview_suspend(&format!("suspend timer cancelled generation={generation}"));
+            return;
+        }
+        let Some(window) = app.get_webview_window("main") else {
+            log_webview_suspend(&format!("suspend timer missing window generation={generation}"));
+            return;
+        };
+        if window.is_visible().unwrap_or(true) {
+            log_webview_suspend(&format!("suspend timer found visible window generation={generation}"));
+            return;
+        }
+        log_webview_suspend(&format!("suspend timer firing generation={generation}"));
+        suspend_webview(&window, generation);
+    });
+}
+
 
 fn open_main(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        WEBVIEW_SUSPEND_GENERATION.fetch_add(1, Ordering::SeqCst);
         let _ = window.show();
+        resume_webview(&window);
         let _ = window.set_focus();
         return;
     }
@@ -233,12 +356,14 @@ fn open_main(app: &tauri::AppHandle) {
         {
             Ok(window) => {
                 let _ = window.show();
+                resume_webview(&window);
                 let _ = window.set_focus();
             }
 
             Err(error) => match handle.get_webview_window("main") {
                 Some(window) => {
                     let _ = window.show();
+                    resume_webview(&window);
                     let _ = window.set_focus();
                 }
                 None => eprintln!("Unable to restore the Talo window: {error}"),
@@ -338,7 +463,9 @@ async fn startup_snapshot(app: tauri::AppHandle) -> Result<Value, String> {
                     "id": id,
                     "tool": message["params"]["name"],
                     "arguments": message["params"]["arguments"],
-                    "page": message["params"]["page"]
+                    "page": message["params"]["page"],
+                    "conversationId": message["params"]["sessionId"],
+                    "generationId": message["params"]["generationId"]
                 })
             })
             .collect();
@@ -372,6 +499,7 @@ async fn save_settings(app: tauri::AppHandle, settings: Value) -> Result<(), Str
             "performance",
             "memory",
             "complete",
+            "keepWebviewInTray",
         ];
         let obj = settings.as_object().ok_or("Expected settings object")?;
         if obj.keys().any(|k| !allowed.contains(&k.as_str())) || settings.to_string().len() > 8192 {
@@ -407,6 +535,11 @@ async fn save_settings(app: tauri::AppHandle, settings: Value) -> Result<(), Str
             Some(_) => return Err("Invalid reasoning flag".into()),
             None => false,
         };
+        let keep_webview_in_tray = match obj.get("keepWebviewInTray") {
+            Some(Value::Bool(value)) => *value,
+            Some(_) => return Err("Invalid tray WebView setting".into()),
+            None => false,
+        };
         let shared = app.state::<Shared>();
         let h = shared.lock().map_err(|e| e.to_string())?;
         let previous_memory = library::setting(&h.db,"onboarding","{}");
@@ -418,6 +551,7 @@ async fn save_settings(app: tauri::AppHandle, settings: Value) -> Result<(), Str
             }
         }
         h.db.execute("INSERT INTO settings(key,value) VALUES('onboarding',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[settings.to_string()]).map_err(|e|e.to_string())?;
+        KEEP_WEBVIEW_IN_TRAY.store(keep_webview_in_tray, Ordering::SeqCst);
 
         let projection =
             json!({"provider":provider,"model":model,"baseUrl":base_url,"reasoning":reasoning});
@@ -593,6 +727,32 @@ fn main() {
 
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            let Some(main) = window.app_handle().get_webview_window("main") else {
+                return;
+            };
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    let generation =
+                        WEBVIEW_SUSPEND_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+                    log_webview_suspend(&format!("close requested generation={generation}"));
+                    if KEEP_WEBVIEW_IN_TRAY.load(Ordering::SeqCst) {
+                        api.prevent_close();
+                        let _ = main.hide();
+                        schedule_webview_suspend(window.app_handle().clone(), generation);
+                    }
+                }
+                tauri::WindowEvent::Focused(true) => {
+                    WEBVIEW_SUSPEND_GENERATION.fetch_add(1, Ordering::SeqCst);
+                    log_webview_suspend("window focused");
+                    resume_webview(&main);
+                }
+                _ => {}
+            }
+        })
         .register_asynchronous_uri_scheme_protocol("attachment", |context, request, responder| {
             let app = context.app_handle().clone();
             let allowed = context.webview_label() == "main";
@@ -663,6 +823,13 @@ fn main() {
 
             db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
             db.execute_batch(include_str!("../../../services/memory/schema.sql"))?;
+            KEEP_WEBVIEW_IN_TRAY.store(
+                saved_settings(&db)?
+                    .get("keepWebviewInTray")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                Ordering::SeqCst,
+            );
 
 
             storage::init(&db)?;

@@ -1,8 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { BrowserStatus, BrowserFrame, BrowserInput, BrowserControlAction } from '../../../../packages/contracts/src/browser';
+import type { BrowserStatus, BrowserFrame, BrowserInput, BrowserControlAction, BrowserApproval } from '../../../../packages/contracts/src/browser';
 
-export interface BrowserApproval { id: string; tool: string; arguments: Record<string, unknown>; page?: { url?: string; title?: string } }
 const stopped = (sessionId: string): BrowserStatus => ({sessionId, state: 'stopped', owner: 'agent', tabs: [], busy: false});
 export const browser = $state({
   sessionId: 'primary', sessions: {} as Record<string, BrowserStatus>,

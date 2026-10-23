@@ -46,7 +46,7 @@
   onpaste={paste} oncompositionend={event => { if (manual && event.data) void sendBrowserInput({ type: 'text', text: event.data }); }}
   oncontextmenu={event => event.preventDefault()}>
   {#if browser.frame}<img src={'data:image/jpeg;base64,' + browser.frame.data} alt="Current browser page" draggable="false" />
-  {:else}<div class="empty-page"><span class="page-mark" aria-hidden="true">↗</span><strong>{browser.busy || browser.status.state === 'starting' ? 'Opening your browser…' : browser.status.state === 'crashed' ? 'The browser disconnected' : browser.status.state === 'connected' ? 'Connecting to the page…' : 'Your browser lives here'}</strong><span>{browser.status.state === 'stopped' ? 'Open it when you want to browse or watch Pi.' : 'The page stays separate from your conversation.'}</span></div>{/if}
+  {:else}<div class="empty-page"><span class="page-mark" aria-hidden="true">↗</span><strong>{browser.busy || browser.status.state === 'starting' ? 'Opening your browser…' : browser.status.state === 'crashed' ? 'The browser disconnected' : browser.status.state === 'connected' ? 'Connecting to the page…' : 'Your browser lives here'}</strong><span>{browser.status.state === 'stopped' ? 'Open it when you want to browse or watch Talo.' : 'The page stays separate from your conversation.'}</span></div>{/if}
 </div>
 
 <style>

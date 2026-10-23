@@ -38,4 +38,6 @@ export interface GoogleApproval {
   tool: string;
   summary: string;
   arguments: unknown;
+  conversationId?: string;
+  generationId?: string;
 }

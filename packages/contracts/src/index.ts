@@ -2,6 +2,7 @@ import type { ChatBootstrap } from './chat.js';
 import type { AgentState, WorkspaceBundle } from './agent.js';
 import type { GoogleApproval } from './google.js';
 import type { ToolPermission } from './tools.js';
+import type { BrowserApproval } from './browser.js';
 
 export * from './providers.js';
 export * from './chat.js';
@@ -20,13 +21,13 @@ export interface StartupSnapshot {
   approvals: {
     tools: ToolPermission[];
     google: GoogleApproval[];
-    browser: { id: string; tool: string; arguments: Record<string, unknown>; page?: { url?: string; title?: string } }[];
+    browser: BrowserApproval[];
   };
 }
 export type ServiceId = 'pi' | 'browser' | 'web';
 export type ServiceState = 'stopped' | 'starting' | 'running' | 'failed';
 export type SensitiveAction = 'provider.connect' | 'browser.start' | 'web.request' | 'memory.write' | 'extension.load' | 'mcp.connect' | 'task.execute' | 'autostart.change';
-export interface Onboarding { name: string;   agentName?: string; personality: string; provider: string; model: string;   baseUrl?: string;   reasoning?: boolean;   showReasoning?: boolean; memory: 'off' | 'workspace' | 'global'; complete: boolean;   routing?: 'auto' | 'manual';   performance?: 'economy' | 'recommended'; }
+export interface Onboarding { name: string;   agentName?: string; personality: string; provider: string; model: string;   baseUrl?: string;   reasoning?: boolean;   showReasoning?: boolean; memory: 'off' | 'workspace' | 'global'; complete: boolean;   routing?: 'auto' | 'manual';   performance?: 'economy' | 'recommended'; keepWebviewInTray?: boolean; }
 export interface RuntimeStatus { database: string; services: Record<ServiceId, ServiceState>; dependencies: Record<string, boolean>; browser?: import('./browser.js').BrowserStatus; browserSessions?: Record<string, import('./browser.js').BrowserStatus>; }
 export interface MemoryRecord { id: string; scope: 'global' | 'workspace'; workspaceId: string | null; content: string; createdAt: string; }
 export interface MemoryStore { search(query: string, workspaceId?: string): Promise<MemoryRecord[]>; put(record: MemoryRecord): Promise<void>; forget(id: string): Promise<void>; }

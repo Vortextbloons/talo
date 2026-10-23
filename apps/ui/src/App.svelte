@@ -15,14 +15,21 @@
   import { CUSTOM_BASE_URL_EXAMPLE, DEFAULT_PREFERENCE, PROVIDERS, parseProviderPreference, providerDescriptor } from '../../../packages/contracts/src/index';
   import { tools } from './lib/tools.svelte';
   import type { Onboarding, RuntimeStatus, ServiceId, StartupSnapshot } from '../../../packages/contracts/src/index';
-  const pages = ['Chat', 'Inbox', 'Workspaces', 'Skills', 'Tasks', 'Settings'] as const;
+  const pages = ['Chat', 'Inbox', 'Workspaces', 'Memory', 'Skills', 'Tasks', 'Settings'] as const;
   type Page = typeof pages[number];
+  const labels: Record<Page, string> = { Chat: 'Chat', Inbox: 'Inbox', Workspaces: 'Projects', Memory: 'Memory', Skills: 'Skills', Tasks: 'Tasks', Settings: 'Settings' };
+  const primaryPages: readonly Page[] = ['Chat', 'Inbox', 'Workspaces', 'Memory'];
+  const advancedPages: readonly Page[] = ['Skills', 'Tasks'];
   let page = $state<Page>('Chat');
+  let advancedOpen = $state(false);
+  $effect(() => { if (advancedPages.includes(page)) advancedOpen = true; });
 
   const inboxCount = $derived(agent.asks.length + agent.drafts.length + agent.skillProposals.length);
   let taskFocus = $state('');
+  let settingsTab = $state('');
   function openPrimary(): void { navigatePage('Chat'); void openConversation(PRIMARY_CONVERSATION_ID); }
-  function navigatePage(next: Page) { if (page !== next) closeBrowser(); page = next; }
+  function openSettings(tab?: string): void { settingsTab = tab ?? ''; navigatePage('Settings'); }
+  function navigatePage(next: Page) { if (page !== next) { closeBrowser(); if (next !== 'Settings') settingsTab = ''; } page = next; }
 
   const PIN_KEY = 'talo.nav.pinned';
   function initialPinned(): boolean {
@@ -40,12 +47,13 @@
   let startup = $state.raw<StartupSnapshot | null>(null);
   let editing = $state(false);
   let step = $state(0);
+  let preferChatGPT = $state(false);
   let status = $state<RuntimeStatus | null>(null);
   let error = $state('');
   let busy = $state(false);
   let pending = $state<{id:string; action:string; resource:string; run:(id:string)=>Promise<void>} | null>(null);
   const descriptions:Record<Page,string> = {
-    Chat:'A little space to think things through.',Inbox:'What Talo has asked, proposed or left for you.',Workspaces:'One Talo, with conversations and context organized by project.',Skills:'Ways of working Talo saved once they worked.',Tasks:'A home for the things you want to come back to.',Settings:'Make yourself at home.'
+    Chat:'One continuing chat with Talo. Ask in plain words; it handles the rest.',Inbox:'What Talo has asked, proposed or left for you.',Workspaces:'One Talo, with conversations and context organized by project.',Memory:'What Talo remembers about each project, ready to correct or remove.',Skills:'Ways of working Talo saved once they worked.',Tasks:'A home for the things you want to come back to.',Settings:'Make yourself at home.'
   };
   async function refresh() { if(isTauri()) { status = await invoke<RuntimeStatus>('runtime_status'); applyRuntimeStatus(status); } }
   onMount(() => {
@@ -108,7 +116,6 @@
     routing.mode = next.routing ?? 'auto';
     routing.tier = next.performance ?? 'recommended';
   }
-  async function save() { try {busy=true;await saveSettings(settings);editing=false;void refreshLibrary();}catch(e){error=String(e);}finally{busy=false;} }
 
   async function persist(patch: Partial<Onboarding>): Promise<void> {
     const next = { ...settings, ...patch };
@@ -143,12 +150,26 @@
     editing=false;void refreshLibrary();
   }
 
+  async function connectKeyNow(){
+    if(busy)return;
+    try{await saveSettings(settings);}catch(e){error=String(e);return;}
+    editing=false;void refreshLibrary();
+    openSettings('Models');
+  }
+
+  const PERMISSION_COPY: Record<string,{title:string;body:string}> = {
+    'browser.start':{title:'Open the browser?',body:'Talo opens a separate browser window that it controls. Your own browser and its sign-ins are not used.'},
+    'autostart.change':{title:'Start Talo with Windows?',body:'Windows will launch Talo when you sign in, so it is already running when you need it.'},
+  };
+  const permissionCopy = $derived(PERMISSION_COPY[pending?.action ?? ''] ?? {title:'Allow this action?',body:'Talo needs your permission for this.'});
+
 
   function onKeydown(event:KeyboardEvent):void{
     if(!loaded||!settings.complete||editing)return;
     if(!event.ctrlKey||event.altKey||event.shiftKey||event.metaKey)return;
-    if(event.key>='1'&&event.key<='6'){
-      const item=pages[Number(event.key)-1];
+    if(event.key>='1'&&event.key<='9'){
+      const index=Number(event.key);
+      const item=index<=pages.length?pages[index-1]:undefined;
       if(item){event.preventDefault();if(item==='Chat')openPrimary();else navigatePage(item);}
       return;
     }
@@ -174,21 +195,27 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 17v4"/><path d="M9 3h6l-1 6 3 3H7l3-3-1-6Z"/></svg>
         </button>
       </div>
-      <nav>{#each pages as item (item)}
-        <button class:selected={page===item} class:thinking={item==='Chat' && (chat.active?.state==='generating'||chat.active?.state==='cancelling')} onclick={()=>navigatePage(item)} title={item === 'Workspaces' ? 'Projects' : item} aria-current={page===item?'page':undefined}>
+      {#snippet navButton(item: Page)}
+        <button class:selected={page===item} class:thinking={item==='Chat' && (chat.active?.state==='generating'||chat.active?.state==='cancelling')} onclick={()=>navigatePage(item)} title={item === 'Chat' ? (settings.agentName || 'Talo') : labels[item]} aria-current={page===item?'page':undefined}>
           <span class="nav-icon"><NavIcon name={item} working={item==='Chat' && (chat.active?.state==='generating'||chat.active?.state==='cancelling')} /></span>
-          <span class="nav-label">{item === 'Workspaces' ? 'Projects' : item}</span>
+          <span class="nav-label">{item === 'Chat' ? (settings.agentName || 'Talo') : labels[item]}</span>
           {#if item==='Inbox' && inboxCount}<span class="nav-badge" aria-label={`${inboxCount} waiting`}>{inboxCount}</span>{/if}
         </button>
-      {/each}</nav>
+      {/snippet}
+      <nav>{#each primaryPages as item (item)}{@render navButton(item)}{/each}<button class="more-toggle" class:open={advancedOpen} class:selected={advancedPages.includes(page)} aria-expanded={advancedOpen} aria-controls="rail-more" title={advancedOpen ? 'Hide Skills and Tasks' : 'Skills and Tasks'} onclick={()=>advancedOpen=!advancedOpen}>
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" focusable="false"><circle cx="5.6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18.4" cy="12" r="1.3"/></svg></span>
+        <span class="nav-label">More</span>
+        <svg class="more-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9.5 6 6 6-6"/></svg>
+      </button>{#if advancedOpen}<div class="rail-more" id="rail-more">{#each advancedPages as item (item)}{@render navButton(item)}{/each}</div>{/if}{@render navButton('Settings')}
+      </nav>
       <div class="rail-foot"><span class="presence"></span><span class="foot-label">Talo is here</span></div>
     </div>
   </aside>
   <main>
-    <header><span class="crumbs">{page === 'Workspaces' ? 'Projects' : page}</span></header>
+    <header><span class="crumbs">{labels[page]}</span></header>
     {#if error}<div class="error" role="alert">{error}<button aria-label="Dismiss error" onclick={()=>error=''}>×</button></div>{/if}
     <div class="content" class:chat-mode={page==='Chat'} class:settings-mode={page==='Settings'}>
-      {#if page!=='Chat' && page!=='Settings'}<div class="page-heading"><h1>{page === 'Workspaces' ? 'Projects' : page}</h1><p>{descriptions[page]}</p></div>{/if}
+      {#if page!=='Chat' && page!=='Settings'}<div class="page-heading"><h1>{labels[page]}</h1><p>{descriptions[page]}</p></div>{/if}
       {#if browser.view === 'large' || browser.approvals.length}
         {#await import('./components/BrowserPanel.svelte') then { default: BrowserPanel }}
           <BrowserPanel />
@@ -205,8 +232,8 @@
           <p class="error" role="alert">This page could not be loaded. Close and reopen Talo to try again.</p>
         {/await}
       {:else if page==='Chat'}
-        <ChatView onOpenSettings={()=>{navigatePage('Settings');}} name={settings.name} tagline={descriptions.Chat} showReasoning={settings.showReasoning === true} agentName={settings.agentName || 'Talo'} onRenameAgent={renameAgent} />
-      {:else if page==='Workspaces'}
+        <ChatView onOpenSettings={(tab)=>openSettings(tab)} onOpenMemory={()=>navigatePage('Memory')} name={settings.name} tagline={descriptions.Chat} showReasoning={settings.showReasoning === true} agentName={settings.agentName || 'Talo'} onRenameAgent={renameAgent} />
+      {:else if page==='Workspaces' || page==='Memory'}
         {#await import('./components/LibraryPanel.svelte')}
           <p role="status">Loading...</p>
         {:then { default: LibraryPanel }}
@@ -222,12 +249,14 @@
             {settings}
             {status}
             {busy}
+            openTab={settingsTab}
             onPersist={persist}
             onService={control}
             onBrowserStart={browserStart}
             onAutostart={setAutostart}
             onMemory={setMemory}
             onOpenChat={()=>navigatePage('Chat')}
+            onOpenMemory={()=>navigatePage('Memory')}
             onRerunSetup={()=>{editing=true;step=0;}}
           />
         {:catch}
@@ -257,13 +286,28 @@
 </div>
 <svelte:window onkeydown={onKeydown} />
 {#if loaded && (!settings.complete || editing)}
-  <div class="overlay"><dialog open class="onboarding" aria-modal="true" aria-labelledby="setup-title"><img src={mascot} alt="Talo"/><div class="steps">Getting acquainted · {step+1} of 2</div><h2 id="setup-title">{step===0?'A little introduction.':'Choose your intelligence.'}</h2>
-    {#if step===0}<label>Your name <span>(optional)</span><input bind:value={settings.name} maxlength="80" placeholder="What should Talo call you?"/></label><label>How it should sound<select bind:value={settings.personality}><option>Thoughtful and direct</option><option>Warm and encouraging</option><option>Brief and practical</option></select></label>
-    {:else}<label>Starting provider<select bind:value={settings.provider}>{#each PROVIDERS as item (item)}<option value={item.id}>{item.name}</option>{/each}</select></label>{#if settings.provider==='custom'}<label>Base URL<input bind:value={settings.baseUrl} maxlength="2048" placeholder={CUSTOM_BASE_URL_EXAMPLE}/></label><label>Model ID<input bind:value={settings.model} maxlength="200" placeholder="llama3.3"/></label><label class="check"><input type="checkbox" bind:checked={settings.reasoning}/> <span>This endpoint supports reasoning</span></label><p class="setup-note">Talo writes this endpoint to Pi's models.json. Reasoning adds Pi's thinking levels to the model. Local servers need no key.</p>{:else}<p class="setup-note">{provider.tagline} Pick a starting provider now. You will connect its key in Settings → Models before your first message.</p>{/if}{/if}
-    <div class="setup-actions">{#if step>0}<button onclick={()=>step--}>Back</button>{:else}<button onclick={()=>{void skipSetup();}}>Skip for now</button>{/if}{#if step<1}<button class="primary" onclick={()=>step++}>Continue</button>{:else}<button class="primary" disabled={busy} onclick={save}>Make yourself at home</button>{/if}</div>
+  <div class="overlay"><dialog open class="onboarding" aria-modal="true" aria-labelledby="setup-title"><img src={mascot} alt="Talo"/><div class="steps">{step===0?'Getting acquainted':'Choosing a model'} · {step+1} of 2</div><h2 id="setup-title">{step===0?'Hi, I’m Talo.':'Where should answers come from?'}</h2>
+    {#if step===0}
+      <p class="setup-lead">One companion and one continuing chat. I remember what matters in each project, tell you what I’m doing while I work, and bring results back to the chat you started in.</p>
+      <label>Your name <span>(optional)</span><input bind:value={settings.name} maxlength="80" placeholder="What should Talo call you?"/></label><label>How it should sound<select bind:value={settings.personality}><option>Thoughtful and direct</option><option>Warm and encouraging</option><option>Brief and practical</option></select></label>
+    {:else}
+      <p class="setup-lead">Talo thinks with a model from a provider you choose. You connect your own account and that provider bills you for what Talo uses. Talo never charges you.</p>
+      <label>Provider<select value={preferChatGPT ? 'chatgpt' : settings.provider} onchange={(event) => { const value = event.currentTarget.value; preferChatGPT = value === 'chatgpt'; if (!preferChatGPT) settings.provider = value; }}><option value="chatgpt">ChatGPT plan — sign in, no key</option>{#each PROVIDERS as item (item)}<option value={item.id}>{item.name}</option>{/each}</select></label>
+      {#if preferChatGPT}
+        <p class="provider-card"><strong>ChatGPT plan</strong><span>Use the plan you already pay for. Sign-in opens in your browser, plan limits apply, and there is no key to copy.</span></p>
+        <p class="setup-note">Talo opens the ChatGPT sign-in on the next screen. You can switch providers any time in Settings → Models.</p>
+      {:else if settings.provider==='custom'}
+        <label>Base URL<input bind:value={settings.baseUrl} maxlength="2048" placeholder={CUSTOM_BASE_URL_EXAMPLE}/></label><label>Model ID<input bind:value={settings.model} maxlength="200" placeholder="llama3.3"/></label><label class="check"><input type="checkbox" bind:checked={settings.reasoning}/> <span>This endpoint supports reasoning</span></label>
+        <p class="setup-note">Ollama, LM Studio, vLLM or any OpenAI-compatible server. Local servers need no key and cost nothing to run. Custom endpoints are finished in Settings → Models.</p>
+      {:else}
+        <p class="provider-card"><strong>{provider.name}</strong><span>{provider.tagline}</span></p>
+        <p class="setup-note">Next, paste a key from {provider.name}. Windows holds the key, never a chat. You can change this later in Settings → Models.</p>
+      {/if}
+    {/if}
+    <div class="setup-actions">{#if step>0}<button onclick={()=>step--}>Back</button>{:else}<button onclick={()=>{void skipSetup();}}>Skip for now</button>{/if}{#if step<1}<button class="primary" onclick={()=>step++}>Continue</button>{:else}<span class="setup-right"><button disabled={busy} onclick={()=>{void skipSetup();}}>I’ll add a key later</button><button class="primary" disabled={busy} onclick={()=>{void connectKeyNow();}}>{preferChatGPT?'Use my ChatGPT plan':settings.provider==='custom'?'Open model settings':'Add my key'}</button></span>{/if}</div>
   </dialog></div>
 {/if}
-{#if pending}<div class="overlay"><dialog open class="onboarding" aria-modal="true" aria-labelledby="permission-title"><h2 id="permission-title">Allow this action?</h2><p>{pending.action==='browser.start'?'Open Chromium with Talo’s dedicated persistent profile?':'Change whether Talo starts when you sign in to Windows?'}</p><p class="detail">{pending.resource} · This action only</p><div class="setup-actions"><button onclick={()=>resolve(false)}>Deny</button><button class="primary" onclick={()=>resolve(true)}>Allow once</button></div></dialog></div>{/if}
+{#if pending}<div class="overlay"><dialog open class="onboarding" aria-modal="true" aria-labelledby="permission-title"><span class="permission-eyebrow">Your permission</span><h2 id="permission-title">{permissionCopy.title}</h2><p>{permissionCopy.body}</p><p class="detail">{pending.resource} · This time only. Nothing happens unless you allow it.</p><div class="setup-actions"><button onclick={()=>resolve(false)}>Don’t allow</button><button class="primary" onclick={()=>resolve(true)}>Allow once</button></div></dialog></div>{/if}
 
 <ToolApprovals initial={startup?.approvals ?? null} {startupReady} />
 <style>
@@ -296,6 +340,12 @@
 
   nav button.selected::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:0 2px 2px 0;background:var(--yellow)}
   nav button.thinking{color:var(--yellow)}
+  .more-chevron{width:11px;height:11px;margin-left:auto;flex-shrink:0;opacity:0;transition:opacity .13s ease,transform .15s ease}
+  .rail:hover .more-chevron,.rail:focus-within .more-chevron,.rail-pinned .more-chevron{opacity:.6}
+  .more-toggle[aria-expanded="true"] .more-chevron{transform:rotate(180deg)}
+  .more-toggle.open{color:var(--text)}
+  .rail-more{display:grid;gap:2px;margin-left:18px;border-left:1px solid var(--line)}
+  .rail-more button{padding-left:12px}
   .nav-icon{--icon-opacity:.7;width:20px;height:20px;display:grid;place-items:center;flex-shrink:0}
   nav button:hover .nav-icon{--icon-opacity:.9}
   nav button.selected .nav-icon{--icon-opacity:1}
@@ -331,16 +381,23 @@
   button.primary{background:var(--yellow);border-color:var(--yellow);color:var(--black);font-weight:600;padding:11px 18px}
   button.primary:hover:not(:disabled){background:#ffdd7f;border-color:#ffdd7f}
   .overlay{position:fixed;inset:0;background:var(--overlay);backdrop-filter:blur(5px);display:grid;place-items:center;padding:24px;z-index:5}
-  .onboarding{position:relative;margin:auto;border:1px solid var(--line);color:var(--text);background:var(--paper);border-radius:24px;padding:36px;width:440px;max-width:100%;box-shadow:0 30px 90px rgba(0,0,0,.65)}
+  .onboarding{position:relative;margin:auto;border:1px solid var(--line);color:var(--text);background:var(--paper);border-radius:24px;padding:36px;width:440px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 30px 90px rgba(0,0,0,.65)}
   .onboarding>img{width:55px;margin-bottom:20px;filter:drop-shadow(0 0 26px rgba(255,212,92,.2))}
   .steps{font-size:11px;color:var(--muted);margin-bottom:14px}
-  .onboarding h2{font-size:26px;letter-spacing:-.7px;margin-bottom:24px}
+  .onboarding h2{font-size:26px;letter-spacing:-.7px;margin-bottom:16px}
+  .setup-lead{margin:0 0 6px;font-size:13px;line-height:1.7;color:var(--muted)}
+  .provider-card{display:grid;gap:5px;margin:16px 0 0;padding:13px 15px;border:1px solid var(--line);border-radius:11px;background:var(--soft)}
+  .provider-card strong{font-size:12.5px;font-weight:600;color:var(--text)}
+  .provider-card span{font-size:11.5px;color:var(--muted);line-height:1.6}
+  .permission-eyebrow{display:block;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--yellow)}
+  .detail{font-size:11.5px;color:var(--muted);line-height:1.6;margin:10px 0 0}
   label{display:block;font-size:13px;font-weight:550;margin:18px 0}
   label span{font-weight:400;color:var(--muted)}
   input,select{display:block;width:100%;padding:12px;border:1px solid var(--line-strong);border-radius:8px;margin-top:9px;background:var(--soft);color:var(--text)}
   input:hover,select:hover{border-color:#4a4a41}
-  .setup-note{font-size:12px;margin-top:20px}
-  .setup-actions{display:flex;justify-content:space-between;margin-top:30px;gap:12px}
+  .setup-note{font-size:12px;margin-top:20px;color:var(--muted);line-height:1.65}
+  .setup-actions{display:flex;justify-content:space-between;align-items:center;margin-top:30px;gap:12px;flex-wrap:wrap}
+  .setup-right{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto}
   label.check{display:flex;align-items:center;gap:10px;font-weight:400}
   label.check input{width:auto;margin:0;accent-color:var(--yellow)}
   ::-webkit-scrollbar{width:10px;height:10px}
