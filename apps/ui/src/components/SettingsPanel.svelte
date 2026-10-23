@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { isTauri } from '@tauri-apps/api/core';
   import ProviderSettings from './ProviderSettings.svelte';
   import ToolsSettings from './ToolsSettings.svelte';
@@ -29,6 +29,13 @@
 
   const TABS = ['You', 'Models', 'Capabilities', 'Integrations', 'Advanced'] as const;
   type Tab = typeof TABS[number];
+  const SECTIONS: Record<Tab, { label: string; icon: string }> = {
+    You: { label: 'Personalization', icon: 'M20 21v-2a7 7 0 0 0-14 0v2M13 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z' },
+    Models: { label: 'Models & providers', icon: 'm12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5' },
+    Capabilities: { label: 'Tools & permissions', icon: 'm12 3 8 4v5c0 5-8 9-8 9s-8-4-8-9V7l8-4Zm-4 9 3 3 5-6' },
+    Integrations: { label: 'Connected apps', icon: 'M9 7V3m6 4V3M7 7h10v5a5 5 0 0 1-10 0V7Zm5 10v4' },
+    Advanced: { label: 'App & updates', icon: 'M4 4h16v12H4V4Zm4 16h8m-4-4v4' },
+  };
   const TAB_KEY = 'talo.settings.tab';
   function initialTab(): Tab {
     try {
@@ -42,6 +49,17 @@
     tab = next;
     try { localStorage.setItem(TAB_KEY, next); } catch { /* storage can be unavailable */ }
   }
+  async function navigateTabs(event: KeyboardEvent, item: Tab): Promise<void> {
+    const directions: Record<string, number> = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
+    if (!(event.key in directions) && event.key !== 'Home' && event.key !== 'End') return;
+    event.preventDefault();
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? TABS.length - 1 : (TABS.indexOf(item) + directions[event.key] + TABS.length) % TABS.length;
+    selectTab(TABS[index]);
+    await tick();
+    document.getElementById(`settings-tab-${TABS[index]}`)?.focus();
+  }
+
+  const section = $derived(SECTIONS[tab]);
 
   const VOICES: Array<{ value: string; label: string }> = [
     { value: 'Thoughtful and direct', label: 'Thoughtful' },
@@ -61,7 +79,12 @@
 
   let editingName = $state(false);
   let draftName = $state('');
-  function beginName(): void { draftName = settings.name ?? ''; editingName = true; }
+  async function beginName(): Promise<void> {
+    draftName = settings.name ?? '';
+    editingName = true;
+    await tick();
+    document.getElementById('settings-name')?.focus();
+  }
   async function commitName(): Promise<void> {
     const next = draftName.trim().slice(0, 80);
     editingName = false;
@@ -80,15 +103,19 @@
     browser_open: 'Open a page', browser_tabs: 'Work with tabs', browser_snapshot: 'Read the page', browser_interact: 'Click and type',
     browser_ai: 'Work out an unfamiliar page', browser_handoff: 'Hand control to you', browser_screenshot: 'Screenshot the browser',
     browser_download: 'Download a file', read: 'Read a file', write: 'Write a file', edit: 'Change a file', mcp: 'Use a connected app',
+    google_gmail_list: 'Find emails', google_gmail_read: 'Read an email', google_gmail_draft: 'Draft an email', google_gmail_send: 'Send an email',
+    google_calendar_list: 'Read your calendar', google_calendar_read: 'Read an event', google_calendar_create: 'Add an event',
+    google_calendar_update: 'Change an event', google_calendar_delete: 'Delete an event',
+    google_drive_list: 'Find Drive files', google_drive_read: 'Read a Drive file', google_drive_create: 'Create a Drive file', google_drive_update: 'Update a Drive file',
   };
   const book = (id: string): string => TOOL_LABELS[id] ?? id.replace(/[_-]+/gu, ' ').replace(/^./u, c => c.toUpperCase());
 
-  const CATEGORY_COPY: Record<string, { label: string; hint: string }> = {
-    'Web Research': { label: 'Looking things up', hint: 'Search, read pages, and cite real sources.' },
-    'Browser': { label: 'Its own browser', hint: 'A private browser Talo drives for you. Changes ask first.' },
-    'Files': { label: 'Your files', hint: 'Only files you pick, one action at a time, with approval.' },
-    'Integrations': { label: 'Connected apps', hint: 'Apps you add below. They run on this PC.' },
-    'Memory': { label: 'Memory', hint: 'The things worth keeping between conversations.' },
+  const CATEGORY_COPY: Record<string, { label: string }> = {
+    'Web Research': { label: 'Looking things up' },
+    'Browser': { label: 'Its own browser' },
+    'Files': { label: 'Your files' },
+    'Integrations': { label: 'Connected apps' },
+    'Memory': { label: 'Memory' },
   };
   const ORDER = ['Web Research', 'Browser', 'Files', 'Integrations', 'Memory'];
   const groups = $derived.by(() => {
@@ -100,7 +127,7 @@
     }
     return [...byCategory.entries()]
       .sort((a, b) => ORDER.indexOf(a[0]) - ORDER.indexOf(b[0]))
-      .map(([category, list]) => ({ category, ...(CATEGORY_COPY[category] ?? { label: category, hint: '' }), tools: list }));
+      .map(([category, list]) => ({ category, ...(CATEGORY_COPY[category] ?? { label: category }), tools: list }));
   });
   const enabledTools = $derived(tools.state.tools.filter(tool => tool.availability !== 'disabled').length);
 
@@ -108,12 +135,12 @@
     runtime: 'Assistant engine', chromium: 'Browser engine', donsetch: 'Web research engine',
     pi: 'Assistant files', stagehand: 'Browser intelligence', mcpAdapter: 'App connections',
   };
-  const serviceState = (id: ServiceId): { text: string; running: boolean; note: string } => {
+  const serviceState = (id: ServiceId): { text: string; running: boolean } => {
     const value = status?.services?.[id];
-    if (!status) return { text: 'Desktop app required', running: false, note: '' };
-    if (value === 'running') return { text: 'Running', running: true, note: id === 'pi' ? 'Awake while you talk, then it rests.' : 'Open only while the browser is in use.' };
-    if (value === 'failed') return { text: 'Stopped unexpectedly', running: false, note: 'Open the app again to restart it.' };
-    return { text: id === 'pi' ? 'Resting' : 'Sleeping', running: false, note: id === 'pi' ? 'Starts when you send a message.' : 'Starts when you open the browser.' };
+    if (!status) return { text: 'Desktop app required', running: false };
+    if (value === 'running') return { text: 'Running', running: true };
+    if (value === 'failed') return { text: 'Stopped unexpectedly', running: false };
+    return { text: id === 'pi' ? 'Resting' : 'Sleeping', running: false };
   };
   const pi = $derived(serviceState('pi'));
   const browser = $derived(serviceState('browser'));
@@ -129,14 +156,14 @@
   const megabytes = (bytes: number): string => (bytes / (1024 * 1024)).toFixed(1);
   const downloaded = $derived(updates.total ? Math.min(100, Math.round((updates.received / updates.total) * 100)) : 0);
   const updateState = $derived(
-    updates.phase === 'available' ? 'A new version is ready to download.'
+    updates.phase === 'available' ? 'Update available.'
     : updates.phase === 'checking' ? 'Checking for updates…'
-    : updates.phase === 'current' ? 'Talo is up to date.'
+    : updates.phase === 'current' ? 'Up to date.'
     : updates.phase === 'preparing' ? 'Closing background services…'
     : updates.phase === 'downloading' ? `Downloading ${megabytes(updates.received)}${updates.total ? ` of ${megabytes(updates.total)} MB` : ''} MB…`
-    : updates.phase === 'installing' ? 'Installing. Talo will close and reopen itself.'
+    : updates.phase === 'installing' ? 'Installing…'
     : updates.phase === 'error' ? updates.error
-    : 'Talo checks quietly when you open the desktop app.'
+    : 'Checks automatically.'
   );
 
   async function toggleTool(id: string, enabled: boolean): Promise<void> {
@@ -145,27 +172,32 @@
 </script>
 
 <div class="settings">
-  <div class="tabs" role="tablist" aria-label="Settings sections">
-    {#each TABS as item (item)}
-      <button role="tab" aria-selected={tab === item} class:selected={tab === item} onclick={() => selectTab(item)} onkeydown={(event) => {
-        if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
-        event.preventDefault();
-        const index = TABS.indexOf(item) + (event.key === 'ArrowRight' ? 1 : TABS.length - 1);
-        selectTab(TABS[index % TABS.length]);
-      }}>{item}</button>
-    {/each}
-  </div>
-
+  <aside class="settings-sidebar" aria-label="Settings">
+    <div class="settings-title"><h1>Settings</h1></div>
+    <div class="tabs" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
+      {#each TABS as item (item)}
+        <button id={`settings-tab-${item}`} role="tab" aria-label={SECTIONS[item].label} title={SECTIONS[item].label} aria-selected={tab === item} aria-controls="settings-panel" tabindex={tab === item ? 0 : -1} class:selected={tab === item} onclick={() => selectTab(item)} onkeydown={event => void navigateTabs(event, item)}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d={SECTIONS[item].icon}/></svg>
+          <span>{SECTIONS[item].label}</span>
+          {#if item === 'Advanced' && updates.phase === 'available'}<span class="update-dot" aria-label="Update available"></span>{/if}
+        </button>
+      {/each}
+    </div>
+    <div class="sidebar-footer"><span class="app-emblem" aria-hidden="true">t</span><div><strong>Talo</strong><small>{appVersion ? `Version ${appVersion}` : 'Your desktop assistant'}</small></div></div>
+  </aside>
+  <div class="settings-content">
+    <div class="section-header"><h2>{section.label}</h2></div>
+    <div id="settings-panel" class="section-body" role="tabpanel" aria-labelledby={`settings-tab-${tab}`} tabindex="0">
   {#if tab === 'You'}
-    <div class="tabpanel cols" role="tabpanel" aria-label="You">
+    <div class="tabpanel cols personalization">
       <section class="group">
-        <h2>How it talks to you</h2>
+        <h2>Conversation style</h2>
         <div class="rows">
           <div class="row">
-            <div class="what"><strong>Your name</strong><small>Used when Talo greets you.</small></div>
+            <div class="what"><strong>Your name</strong></div>
             <div class="how">
               {#if editingName}
-                <input class="inline" bind:value={draftName} maxlength="80" placeholder="What should Talo call you?" onkeydown={nameKey} onblur={() => void commitName()} aria-label="Your name" />
+                <input id="settings-name" class="inline" bind:value={draftName} maxlength="80" placeholder="What should Talo call you?" onkeydown={nameKey} onblur={() => void commitName()} aria-label="Your name" />
               {:else}
                 <span class="value">{settings.name || 'Not set'}</span>
                 <button class="quiet" onclick={beginName}>Change</button>
@@ -173,7 +205,7 @@
             </div>
           </div>
           <div class="row">
-            <div class="what"><strong>Voice</strong><small>Its default tone in every reply.</small></div>
+            <div class="what"><strong>Response style</strong></div>
             <div class="how">
               <div class="seg" role="group" aria-label="Voice">
                 {#each VOICES as voice (voice.value)}
@@ -183,9 +215,9 @@
             </div>
           </div>
           <div class="row">
-            <div class="what"><strong>Show its thinking</strong><small>See the working, not just the answer.</small></div>
+            <div class="what"><strong>Show reasoning</strong></div>
             <div class="how">
-              <button class="switch" role="switch" aria-checked={settings.showReasoning === true} aria-label="Show its thinking" onclick={() => void onPersist({ showReasoning: !(settings.showReasoning === true) })}></button>
+              <button class="switch" role="switch" aria-checked={settings.showReasoning === true} aria-label="Show reasoning" onclick={() => void onPersist({ showReasoning: !(settings.showReasoning === true) })}></button>
             </div>
           </div>
         </div>
@@ -195,13 +227,12 @@
         <h2>Memory</h2>
         <div class="rows">
           <div class="row">
-            <div class="what"><strong>Remember between chats</strong><small>Kept on this PC. Nothing leaves the machine.</small></div>
+            <div class="what"><strong>Remember between chats</strong></div>
             <div class="how">
               <button class="switch" role="switch" aria-checked={library.memoryEnabled} aria-label="Remember between chats" onclick={() => void onMemory(!library.memoryEnabled)}></button>
             </div>
           </div>
         </div>
-        <p class="after">Talo surfaces what it remembers in your chats, when it is relevant.</p>
       </section>
 
       <details class="disclosure full">
@@ -217,20 +248,20 @@
   {/if}
 
   {#if tab === 'Models'}
-    <div class="tabpanel cols" role="tabpanel" aria-label="Models">
+    <div class="tabpanel cols">
       <ProviderSettings />
       <section class="group full">
         <h2>Which model answers</h2>
         <div class="rows">
           <div class="row">
-            <div class="what"><strong>Chat</strong><small>Used for every normal reply.</small></div>
+            <div class="what"><strong>Chat model</strong></div>
             <div class="how">
               <span class="value">{selection || 'Chosen when you send your first message'}</span>
               <button class="quiet" onclick={onOpenChat}>Choose in Chat</button>
             </div>
           </div>
           <div class="row">
-            <div class="what"><strong>AI performance</strong><small>{tierLabels.economy} keeps costs down; {tierLabels.recommended} favors quality.</small></div>
+            <div class="what"><strong>AI performance</strong></div>
             <div class="how">
               <div class="seg" role="group" aria-label="AI performance">
                 <button aria-pressed={settings.performance === 'economy'} onclick={() => void onPersist({ performance: 'economy' })}>{tierLabels.economy}</button>
@@ -239,7 +270,7 @@
             </div>
           </div>
           <div class="row">
-            <div class="what"><strong>Model selection</strong><small>Auto picks the model for the provider you choose; Manual picks models yourself.</small></div>
+            <div class="what"><strong>Model selection</strong></div>
             <div class="how">
               <div class="seg" role="group" aria-label="Model selection">
                 <button aria-pressed={settings.routing !== 'manual'} onclick={() => void onPersist({ routing: 'auto' })}>Auto</button>
@@ -253,22 +284,22 @@
   {/if}
 
   {#if tab === 'Capabilities'}
-    <div class="tabpanel cols" role="tabpanel" aria-label="Capabilities">
+    <div class="tabpanel cols">
       <section class="group full">
         <h2>What it can do</h2>
-        <p class="hint">{tools.state.tools.length ? `${enabledTools} of ${tools.state.tools.length} abilities are on. Anything that touches the outside world asks you first.` : 'These load with the desktop app. Anything that touches the outside world asks you first.'}</p>
+        {#if tools.state.tools.length}<p class="tool-total">{enabledTools} of {tools.state.tools.length} enabled</p>{/if}
         <div class="rows">
           {#each groups as group (group.category)}
             <details class="disclosure row-disclosure">
               <summary>
                 <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
-                <span class="summary-main"><strong>{group.label}</strong><small>{group.hint}</small></span>
+                <span class="summary-main"><strong>{group.label}</strong></span>
                 <span class="count">{group.tools.filter(tool => tool.availability !== 'disabled').length} of {group.tools.length} on</span>
               </summary>
               <div class="tool-list">
                 {#each group.tools as tool (tool.id)}
                   <div class="tool-row">
-                    <div class="tool-what"><strong>{book(tool.id)}</strong><small>{tool.description}</small></div>
+                    <div class="tool-what"><strong>{book(tool.id)}</strong></div>
                     <button class="switch small" role="switch" aria-checked={tool.availability !== 'disabled'} aria-label={book(tool.id)} onclick={() => void toggleTool(tool.id, tool.availability === 'disabled')}></button>
                   </div>
                 {/each}
@@ -277,8 +308,6 @@
           {/each}
         </div>
       </section>
-
-      <ToolsSettings />
 
       {#if tools.state.grants.length}
         <details class="disclosure full">
@@ -297,11 +326,11 @@
   {/if}
 
   {#if tab === 'Integrations'}
-    <div class="tabpanel" role="tabpanel" aria-label="Integrations"><IntegrationsSettings /></div>
+    <div class="tabpanel cols"><IntegrationsSettings /><ToolsSettings /></div>
   {/if}
 
   {#if tab === 'Advanced'}
-    <div class="tabpanel cols" role="tabpanel" aria-label="Advanced">
+    <div class="tabpanel cols">
       <section class="group full">
         <h2>Updates</h2>
         <div class="rows">
@@ -329,7 +358,7 @@
           </div>
         </div>
         {#if updates.phase === 'available' || updates.phase === 'downloading'}
-          <p class="after">Talo closes to install and reopens on the new version. Your chats, settings and memory are untouched.</p>
+          <p class="after">Talo restarts to install the update.</p>
         {/if}
       </section>
 
@@ -337,32 +366,31 @@
         <h2>App behaviour</h2>
         <div class="rows">
           <div class="row">
-            <div class="what"><strong>Start with Windows</strong><small>Wait quietly in the tray after you sign in.</small></div>
+            <div class="what"><strong>Start with Windows</strong></div>
             <div class="how">
               <button class="quiet" disabled={busy} onclick={() => void onAutostart(true)}>Turn on</button>
               <button class="quiet" disabled={busy} onclick={() => void onAutostart(false)}>Turn off</button>
             </div>
           </div>
           <div class="row">
-            <div class="what"><strong>Closing the window</strong><small>Closing hides Talo in the tray. Quit Talo from the tray menu to exit.</small></div>
-            <div class="how"><span class="value muted">Always on</span></div>
+            <div class="what"><strong>Closing the window</strong></div>
+            <div class="how"><span class="value muted">Minimize to tray</span></div>
           </div>
         </div>
       </section>
 
       <section class="group">
         <h2>Background services</h2>
-        <p class="hint">You never have to touch these. They start on demand and rest when idle.</p>
         <div class="rows">
           <div class="row">
-            <div class="what"><strong>Assistant engine</strong><small>{pi.note}</small></div>
+            <div class="what"><strong>Assistant engine</strong></div>
             <div class="how">
               <span class="state" class:live={pi.running}>{pi.text}</span>
               <button class="quiet" disabled={busy || !status} onclick={() => void onService('pi', !pi.running)}>{pi.running ? 'Stop' : 'Start'}</button>
             </div>
           </div>
           <div class="row">
-            <div class="what"><strong>Browser engine</strong><small>{browser.note}</small></div>
+            <div class="what"><strong>Browser engine</strong></div>
             <div class="how">
               <span class="state" class:live={browser.running}>{browser.text}</span>
               <button class="quiet" disabled={busy || !status} onclick={() => void (browser.running ? onService('browser', false) : onBrowserStart())}>{browser.running ? 'Stop' : 'Start'}</button>
@@ -373,7 +401,6 @@
 
       <section class="group full">
         <h2>Technical details</h2>
-        <p class="hint">Only useful when something looks broken.</p>
         <details class="disclosure">
           <summary><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>Bundled files</summary>
           <div class="facts">
@@ -400,46 +427,61 @@
         <details class="disclosure">
           <summary><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>Run setup again</summary>
           <div class="rerun">
-            <p class="hint">Reopens the two-step introduction. Your chats, connections and memory stay as they are.</p>
             <button class="quiet" onclick={onRerunSetup}>Open setup</button>
           </div>
         </details>
       </section>
     </div>
   {/if}
+    </div>
+  </div>
 </div>
 
 <style>
-  .settings{width:100%;max-width:none}
-  .tabpanel.cols{display:grid;gap:36px 52px;align-items:start}
+  .settings{width:100%;flex:1;min-height:0;display:grid;grid-template-columns:224px minmax(0,1fr)}
+  .settings-sidebar{display:flex;flex-direction:column;min-height:0;padding:30px 16px 20px;background:var(--paper);border-right:1px solid var(--line);overflow-y:auto}
+  .settings-title{padding:0 14px 28px}
+  .settings-title h1{font-size:23px;letter-spacing:-.8px;font-weight:620;margin:0 0 7px}
+  .tabs{display:flex;flex-direction:column;gap:5px}
+  .tabs button{position:relative;display:flex;align-items:center;gap:11px;width:100%;text-align:left;border:1px solid transparent;background:transparent;color:var(--muted);font-size:12.5px;font-weight:500;padding:12px 13px;border-radius:8px;min-height:44px}
+  .tabs button:hover{color:var(--text);background:var(--soft)}
+  .tabs button.selected{color:var(--text);background:var(--soft);border-color:var(--line-strong)}
+  .tabs button.selected svg{color:var(--yellow)}
+  .tabs svg{width:18px;height:18px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  .update-dot{width:6px;height:6px;background:var(--yellow);border-radius:50%;margin-left:auto;flex-shrink:0}
+  .sidebar-footer{margin-top:auto;padding:28px 14px 0;display:flex;align-items:center;gap:10px}
+  .app-emblem{display:grid;place-items:center;width:30px;height:30px;border:1px solid var(--line-strong);border-radius:9px;font-size:23px;font-weight:650;color:var(--yellow);line-height:1}
+  .sidebar-footer strong{display:block;font-size:12px;font-weight:550;color:var(--muted)}
+  .sidebar-footer small{display:block;font-size:10.5px;color:var(--faint);margin-top:3px}
+  .settings-content{min-width:0;min-height:0;display:flex;flex-direction:column;container:settings-content / inline-size}
+  .section-header{flex-shrink:0;padding:28px 36px;border-bottom:1px solid var(--line)}
+  .section-header h2{font-size:25px;letter-spacing:-.8px;font-weight:600;margin:0}
+  .section-body{overflow-y:auto;min-height:0;flex:1;padding:28px 36px 40px;scrollbar-gutter:stable}
+  .section-body:focus-visible{outline-offset:-3px}
+  .tabpanel.cols{display:grid;grid-template-columns:minmax(0,1fr);gap:22px;align-items:start}
   .tabpanel .full{grid-column:1/-1}
-  @media(min-width:1120px){.tabpanel.cols{grid-template-columns:repeat(2,minmax(0,1fr))}}
-  .tabs{display:flex;gap:0;border-bottom:1px solid var(--line);margin:22px 0 32px;flex-wrap:wrap}
-  .tabs button{position:relative;border:0;background:transparent;color:var(--muted);font-size:14px;padding:0 2px 13px;margin-right:32px;border-radius:0}
-  .tabs button:hover{color:var(--text);background:transparent}
-  .tabs button.selected{color:var(--text)}
-  .tabs button.selected::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--yellow);border-radius:2px 2px 0 0}
-
-  .tabpanel{display:block}
-  .group>h2{font-size:13.5px;font-weight:600;color:var(--text);margin:0 0 5px;letter-spacing:.01em}
-  .hint{font-size:12.5px;color:var(--faint);line-height:1.65;margin:4px 0 14px;max-width:74ch}
-  .after{font-size:12px;color:var(--faint);line-height:1.65;margin:12px 0 0;max-width:74ch}
+  .tabpanel{display:block;max-width:1440px;margin:0 auto;width:100%}
+  .group{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:22px 24px 6px}
+  .group>h2{font-size:15px;font-weight:600;color:var(--text);margin:0 0 17px;letter-spacing:-.2px}
+  .tool-total{font-size:12px;color:var(--muted);margin:-8px 0 18px}
+  .after{font-size:11.5px;color:var(--muted);line-height:1.65;margin:0 0 17px;max-width:74ch}
   .rows{border-top:1px solid var(--line)}
-  .row{display:flex;align-items:center;gap:28px;padding:17px 0;border-bottom:1px solid var(--line);min-height:66px;flex-wrap:wrap}
-  .what{flex:1 1 280px;min-width:0}
-  .what strong{display:block;font-size:14px;font-weight:550}
-  .what small{display:block;font-size:12px;color:var(--faint);margin-top:4px;line-height:1.6}
-  .how{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex:0 0 auto;margin-left:auto}
-  .value{font-size:14px;color:var(--text)}
+  .row{display:flex;align-items:center;gap:20px;padding:15px 0;border-bottom:1px solid var(--line);min-height:64px;flex-wrap:wrap}
+  .row:last-child{border-bottom:0}
+  .what{flex:1 1 220px;min-width:0}
+  .what strong{display:block;font-size:13px;font-weight:550}
+  .what small{display:block;font-size:12px;color:var(--muted);margin-top:5px;line-height:1.6;max-width:66ch}
+  .how{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex:0 1 auto;margin-left:auto;max-width:100%;flex-wrap:wrap}
+  .value{font-size:13px;color:var(--text);overflow-wrap:anywhere}
   .value.muted{color:var(--faint);font-size:12px}
   .quiet{border:1px solid var(--line-strong);background:transparent;color:var(--muted);padding:8px 13px;border-radius:8px;font-size:12.5px}
   .quiet:hover:not(:disabled){color:var(--text);background:var(--soft)}
   .inline{width:280px;padding:9px 12px;border:1px solid var(--line-strong);border-radius:8px;background:var(--soft);color:var(--text);font-size:14px}
 
-  .seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:9px;overflow:hidden}
-  .seg button{border:0;background:transparent;color:var(--muted);font-size:12.5px;padding:9px 16px;border-radius:0}
-  .seg button:hover{background:#232320;color:var(--text)}
-  .seg button[aria-pressed="true"]{background:var(--soft);color:var(--text)}
+  .seg{display:inline-flex;gap:3px;padding:3px;border:1px solid var(--line);background:var(--bg);border-radius:9px;max-width:100%;flex-wrap:wrap}
+  .seg button{border:1px solid transparent;background:transparent;color:var(--muted);font-size:12px;padding:7px 12px;border-radius:6px}
+  .seg button:hover{background:var(--paper);color:var(--text)}
+  .seg button[aria-pressed="true"]{background:var(--soft);border-color:var(--line-strong);color:var(--text);box-shadow:0 1px 3px #0003}
 
   .switch{width:42px;height:24px;flex-shrink:0;border-radius:99px;border:1px solid var(--line-strong);background:var(--soft);position:relative;padding:0;transition:background .16s ease,border-color .16s ease}
   .switch::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--faint);transition:transform .16s ease,background .16s ease}
@@ -459,13 +501,14 @@
   .state.live{color:var(--yellow)}
 
   .disclosure{border-bottom:1px solid var(--line)}
+  .tabpanel>.disclosure{border:1px solid var(--line);border-radius:12px;background:var(--paper);padding:0 24px}
   .disclosure summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:11px;padding:16px 0;font-size:13px;color:var(--muted)}
   .disclosure summary::-webkit-details-marker{display:none}
   .disclosure summary:hover{color:var(--text)}
   .chev{width:12px;height:12px;flex-shrink:0;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;transition:transform .16s ease}
   .disclosure[open]>summary .chev{transform:rotate(90deg)}
   .count{margin-left:auto;font-size:11.5px;color:var(--faint)}
-  .facts{display:grid;grid-template-columns:240px 1fr;gap:11px 22px;font-size:12.5px;color:var(--muted);padding:0 0 20px 24px;max-width:1000px}
+  .facts{display:grid;grid-template-columns:minmax(120px,200px) minmax(0,1fr);gap:14px 22px;font-size:12px;color:var(--muted);padding:4px 0 22px 24px;overflow-wrap:anywhere}
   .facts b{color:var(--text);font-weight:500}
   .facts b.bad{color:var(--error-text)}
   .facts b.muted{color:var(--faint);font-weight:400}
@@ -474,12 +517,10 @@
   .row-disclosure>summary{padding:15px 0}
   .summary-main{display:block;min-width:0}
   .summary-main strong{display:block;font-size:13.5px;font-weight:550;color:var(--text)}
-  .summary-main small{display:block;font-size:12px;color:var(--faint);margin-top:4px;line-height:1.55}
   .tool-list{padding:0 0 14px 24px}
   .tool-row{display:flex;align-items:center;gap:20px;padding:12px 0;border-top:1px solid var(--line)}
   .tool-what{flex:1;min-width:0}
   .tool-what strong{display:block;font-size:13px;font-weight:500}
-  .tool-what small{display:block;font-size:11.5px;color:var(--faint);margin-top:3px;line-height:1.55;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical}
   .grant-list{padding:0 0 16px 24px}
   .grant{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:10px 0;border-top:1px solid var(--line)}
   .grant strong{display:block;font-size:12px;font-weight:550}
@@ -487,29 +528,66 @@
   .errors{padding:0 0 16px 24px;font-size:12px;color:var(--muted);line-height:1.6}
   .errors p{margin:8px 0 0;overflow-wrap:anywhere}
   .rerun{padding:0 0 18px 24px}
-  .rerun .hint{margin:0 0 10px}
 
-  /* The embedded provider and tool sections carry their own card chrome. */
-  :global(.settings .providers),:global(.settings .tools-card){background:transparent;border:0;border-radius:0;padding:0;margin-bottom:26px;border-top:1px solid var(--line);padding-top:16px}
-  :global(.settings .providers h2),:global(.settings .tools-card h2){font-size:12.5px;font-weight:600;letter-spacing:.01em}
-  :global(.settings .providers .intro){font-size:12px;color:var(--faint)}
-  :global(.settings .providers .empty-line){background:transparent;border:0;border-radius:0;padding:14px 0;border-bottom:1px solid var(--line)}
-  :global(.settings .providers .connection){background:transparent;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:13px 0}
-  :global(.settings .providers .connected-list){margin-top:6px;gap:0}
-  :global(.settings .providers .connect-form){border-top:0;margin-top:0;padding-top:0}
-  :global(.settings .providers .field-row){grid-template-columns:repeat(auto-fit,minmax(260px,460px));justify-content:start}
-  :global(.settings .providers .connect-form label){max-width:560px}
-  :global(.settings .providers .field-row label:only-child){max-width:none}
-  :global(.settings .providers){grid-column:1/-1}
-  :global(.settings .providers .connect-actions small){max-width:56ch}
-  :global(.settings .tools-card){grid-column:1/-1}
-  :global(.settings .tools-card .eyebrow){display:none}
+  .settings :global(.providers),.settings :global(.tools-card){grid-column:1/-1;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:22px 24px;margin:0;min-width:0}
+  .settings :global(.providers h2),.settings :global(.tools-card h2){font-size:15px;font-weight:600;letter-spacing:-.2px}
+  .settings :global(.providers .field-row){grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+  .settings :global(.providers .field-row label:only-child){max-width:none}
+  .settings :global(.providers .connection){background:var(--bg);border-radius:9px}
+  .settings :global(.providers .connected-list){grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));align-items:start}
+  .settings :global(.providers .connected-list h3){grid-column:1/-1}
+  .settings :global(.providers .connection-actions){flex-wrap:wrap}
+  .settings :global(.integrations){grid-column:1/-1;max-width:none;gap:22px;align-items:start}
+  .settings :global(.integration){max-width:none;width:100%;min-width:0;background:var(--paper);border-radius:12px}
+  .settings :global(.integration .heading){padding:21px 24px}
+  .settings :global(.integration .body){padding:22px 24px}
+  .settings :global(.integration h2){font-size:16px;font-weight:600;letter-spacing:-.3px}
+  .settings :global(.tools-card form){border:1px solid var(--line-strong);border-radius:9px;background:var(--bg);padding:18px}
+  .settings :global(.tools-card .servers){margin-top:18px}
 
-  @media(max-width:760px){
+  @container settings-content (min-width:1100px){
+    .tabpanel.cols{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .tabpanel.personalization{grid-template-columns:minmax(0,1.6fr) minmax(0,1fr)}
+    .settings :global(.integrations){grid-template-columns:repeat(2,minmax(0,1fr))}
+  }
+  @container settings-content (max-width:640px){
     .how{justify-content:flex-start;margin-left:0;width:100%}
     .inline{width:100%}
+    .row:has(.switch){flex-wrap:nowrap}
+    .row:has(.switch) .how{width:auto;margin-left:auto;flex-shrink:0}
+    .group{padding:19px 20px 4px}
     .facts{grid-template-columns:1fr;gap:4px}
     .facts span{margin-top:8px}
+    .settings :global(.providers .field-row){grid-template-columns:minmax(0,1fr);gap:0}
+    .settings :global(.providers .connection){align-items:flex-start;flex-direction:column;gap:12px}
+    .settings :global(.providers .connection-actions){flex-shrink:1}
+    .settings :global(.integration .heading){flex-wrap:wrap;padding:19px 20px}
+    .settings :global(.integration .body){padding:20px}
+    .settings :global(.integration .status){margin-left:55px}
+    .settings :global(.integration .token-row){flex-direction:column}
+    .settings :global(.integration .token-row button){align-self:flex-start}
+  }
+  @media(max-width:980px){
+    .settings{grid-template-columns:200px minmax(0,1fr)}
+    .settings-sidebar{padding:26px 10px 18px}
+    .tabs button{font-size:12px;gap:9px;padding:11px 10px}
+    .section-header{padding:27px 24px 23px}
+    .section-body{padding:24px 24px 32px}
+  }
+  @media(max-width:700px){
+    .settings{grid-template-columns:54px minmax(0,1fr)}
+    .settings-sidebar{padding:18px 6px}
+    .settings-title,.sidebar-footer{display:none}
+    .tabs{gap:10px}
+    .tabs button{justify-content:center;padding:12px 0}
+    .tabs button>span:not(.update-dot){display:none}
+    .update-dot{position:absolute;right:5px;top:6px}
+    .section-header{padding:22px 18px 20px}
+    .section-header h2{font-size:22px}
+    .section-body{padding:18px 14px 28px}
+    .tabpanel.cols{gap:16px}
+    .tabpanel>.disclosure{padding:0 20px}
+    .settings :global(.providers),.settings :global(.tools-card){padding:19px 20px}
   }
   @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>

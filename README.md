@@ -34,6 +34,70 @@ requests, task progress, questions, and one-time approvals. `/status` shows prog
 Messages and approval details pass through Telegram; the bot token stays protected
 on your PC. Desktop-originated requests are not automatically forwarded.
 
+## Google Workspace
+
+Talo can read Gmail, work with Google Calendar and read or create text files in Google
+Drive from a chat. For the person using Talo it is one button: **Settings → Integrations →
+Google Workspace → Connect Google**, then choose the account and allow the permissions in
+the browser that opens. Talo listens once on `127.0.0.1` for Google's answer, so no redirect
+URI has to be registered.
+
+The host owns the sign-in: it uses PKCE with a loopback redirect, seals tokens with Windows
+DPAPI, refreshes them itself and revokes them when you disconnect. Tokens never reach the
+UI, a chat, a log, or the model provider. Reading runs when you ask. Sending email, creating
+or changing calendar events, and writing Drive files each stop and show the complete
+approved action, recipient and body in a scrollable card that waits for a one-time approval;
+a scheduled run cannot approve them on its own. Google content a chat uses is sent to your
+configured model provider like any other tool result. A cancelled or interrupted write is
+reported as uncertain rather than repeated, and Talo never retries a Google mutation by
+itself.
+
+Talo requests `gmail.readonly`, `gmail.compose`, `calendar.events`, `drive.readonly` and
+`drive.file` separately, and reports any permission Google withholds. Drive writes only
+touch files Talo created.
+
+The Google Cloud app behind the shipped client is published as **External / In production**,
+but it is **not Google-verified** and this repository does not claim otherwise. Until that
+review finishes, the consent screen shows an unverified-app warning, Google caps use at 100
+users, and `gmail.readonly` and `drive.readonly` are restricted scopes, so verification is
+still required before an unrestricted public release. Verification needs the branding the
+project registered: homepage <https://vortextbloons.github.io/talo/> and privacy policy
+<https://vortextbloons.github.io/talo/privacy.html> (the same policy as
+[PRIVACY.md](PRIVACY.md)). Two steps are still open: proving ownership of
+`vortextbloons.github.io` in Google Search Console, and recording the scope-usage demo
+video. Live behaviour is not exercised by this repository's tests: a person has to complete
+the browser sign-in once to confirm it end to end.
+
+### Building Talo with the Google app
+
+The Google OAuth client belongs to the Talo build, not to the person using it. A build
+without one still runs: the Google card then says it is unavailable instead of offering
+sign-in.
+
+1. In the Google Cloud project, enable the **Gmail**, **Google Calendar** and **Google
+   Drive** APIs.
+2. On the OAuth consent screen, set the app name, homepage and privacy links, choose
+   **External**, and add the scopes `gmail.readonly`, `gmail.compose`, `calendar.events`,
+   `drive.readonly` and `drive.file`. Testing status limits sign-in to listed test users;
+   production works for any account but shows the unverified-app warning until Google
+   verifies the app. The branding registered for this app uses
+   <https://vortextbloons.github.io/talo/> and
+   <https://vortextbloons.github.io/talo/privacy.html>.
+3. Create an OAuth client of type **Desktop app** and download its JSON. Talo reads
+   Google's standard installed-app file (`{"installed":{"client_id":…,"client_secret":…}}`)
+   exactly as downloaded; the client secret is not treated as confidential by Google for
+   desktop clients, but Talo still sends it to the token endpoint and keeps user tokens
+   sealed.
+4. Put that file where the build can embed it, then build as usual:
+   * Keep it at `apps/desktop/google-oauth.local.json` (ignored by git), or
+   * point `TALO_GOOGLE_OAUTH_CLIENT` at the downloaded file, or
+   * pass its JSON text in `TALO_GOOGLE_OAUTH_JSON`.
+   `apps/desktop/build.rs` embeds the client at compile time and rebuilds when any of these
+   changes, so a released app needs no environment variable, file or setup form. Never
+   commit the downloaded JSON. Adding the local file to a checkout that was already built
+   needs one `cargo clean -p talo --manifest-path apps/desktop/Cargo.toml`; the environment
+   variables always trigger a rebuild on their own.
+
 ## Learn more
 
-[Providers](docs/PROVIDERS.md) · [Architecture](docs/ARCHITECTURE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Third-party notices](docs/THIRD-PARTY-NOTICES.md)
+[Providers](docs/PROVIDERS.md) · [Google Workspace](docs/GOOGLE.md) · [Architecture](docs/ARCHITECTURE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Privacy](PRIVACY.md) · [Third-party notices](docs/THIRD-PARTY-NOTICES.md)

@@ -10,12 +10,12 @@ export class ToolRegistry {
   wrap(tools: ToolDefinition[], allow?: (name: string) => boolean, authorize: Authorize = this.authorize):ToolDefinition[] {
     if(new Set(tools.map(t=>t.name)).size!==tools.length)throw new Error('Duplicate tool registration.');
     return tools.map(tool=>{
-      const category = tool.name.startsWith('web_')?'Web Research':tool.name.startsWith('browser_')?'Browser':['mcp','tools','agent'].includes(tool.name)?'Integrations':'Files';
-      const permissions = category==='Web Research'?['web.public']:category==='Browser'?['browser.session','browser.action']:category==='Files'?['files.approve']:tool.name==='agent'?['tool.use']:['mcp.call'];
+      const category = tool.name.startsWith('web_')?'Web Research':tool.name.startsWith('browser_')?'Browser':tool.name.startsWith('google_')?'Integrations':['mcp','tools','agent'].includes(tool.name)?'Integrations':'Files';
+      const permissions = category==='Web Research'?['web.public']:category==='Browser'?['browser.session','browser.action']:category==='Files'?['files.approve']:tool.name==='agent'?['tool.use']:tool.name.startsWith('google_')?['google.read','google.write']:['mcp.call'];
       // A question card waits for the person, so the agent tool owns a longer deadline.
-      const timeoutMs = tool.name==='agent'?330_000:category==='Browser'?145_000:65_000;
-      const maxResultBytes = tool.name==='agent'?32_768:category==='Browser'?98_304:16_384;
-      const descriptor:ManagedTool = {id:tool.name,description:tool.description,category,permissions,availability:'available',timeoutMs,maxResultBytes,resources:[category==='Web Research'?'DonSeTch':category==='Browser'?'Chromium / Playwright / Stagehand':tool.name==='agent'?'Talo library':category==='Files'?'approved file':'MCP on demand']};
+      const timeoutMs = tool.name==='agent'?330_000:tool.name.startsWith('google_')?150_000:category==='Browser'?145_000:65_000;
+      const maxResultBytes = tool.name==='agent'?32_768:tool.name.startsWith('google_')?16_384:category==='Browser'?98_304:16_384;
+      const descriptor:ManagedTool = {id:tool.name,description:tool.description,category,permissions,availability:'available',timeoutMs,maxResultBytes,resources:[category==='Web Research'?'DonSeTch':category==='Browser'?'Chromium / Playwright / Stagehand':tool.name.startsWith('google_')?'Google Workspace':tool.name==='agent'?'Talo library':category==='Files'?'approved file':'MCP on demand']};
       const previous=this.entries.get(tool.name);
       if(previous && previous.category!==category)throw new Error(`Duplicate tool: ${tool.name}`);
       this.entries.set(tool.name,descriptor);

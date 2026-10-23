@@ -13,7 +13,7 @@
   async function loadMemories(){const version=++requestVersion;loading=true;try{const result=await libraryCall<Memory[]>('memory_list',{scope,workspaceId:library.activeWorkspace,query,history});if(version===requestVersion)memories=result;}catch(e){library.error=String(e);}finally{if(version===requestVersion)loading=false;}}
   function resetWorkspace(){workspaceId=null;name='';folder='';folderConsent=false;instructions='';pinned='';memoryScope='inherit';capabilities=[];}
   function editWorkspace(w:Workspace){workspaceId=w.id;name=w.name;folder=w.folder??'';folderConsent=false;instructions=w.instructions??'';pinned=(w.pinned??[]).join('\n');memoryScope=w.memoryScope??'inherit';capabilities=[...(w.capabilities??[])];}
-  function toggleCapability(value:'web'|'browser'|'files',on:boolean){capabilities=on?[...new Set([...capabilities,value])]:capabilities.filter(item=>item!==value);}
+  function toggleCapability(value:'web'|'browser'|'files'|'google',on:boolean){capabilities=on?[...new Set([...capabilities,value])]:capabilities.filter(item=>item!==value);}
   async function saveWorkspace(){
     const notes=pinned.split('\n').map(line=>line.trim()).filter(Boolean).slice(0,8);
     const saved=await mutateLibrary('workspace_save',{id:workspaceId??undefined,name,folder,folderConsent,instructions,pinned:notes,memoryScope,capabilities});
@@ -34,7 +34,7 @@
         <label>How should Talo work here? (optional)<textarea rows="4" maxlength="4000" bind:value={instructions} placeholder="Decisions, tone and constraints that apply to every chat in this project."></textarea></label>
         <label>Pinned notes (one per line, up to 8)<textarea rows="3" maxlength="400" bind:value={pinned} placeholder="A launch date&#10;The invoice folder"></textarea></label>
         <div class="fields"><label>Memory in this project<select bind:value={memoryScope}><option value="inherit">Use saved memory</option><option value="workspace">Only this project's memory</option><option value="off">No saved memory here</option></select></label></div>
-        <div class="check-row"><span class="check-label">Capabilities</span>{#each [['web','Web research'],['browser','Browser'],['files','Files']] as [value,text](value)}<label class="check"><input type="checkbox" checked={capabilities.includes(value)} onchange={e=>toggleCapability(value as 'web'|'browser'|'files',e.currentTarget.checked)}/><span>{text}</span></label>{/each}</div>
+        <div class="check-row"><span class="check-label">Capabilities</span>{#each [['web','Web research'],['browser','Browser'],['files','Files'],['google','Google']] as [value,text](value)}<label class="check"><input type="checkbox" checked={capabilities.includes(value)} onchange={e=>toggleCapability(value as 'web'|'browser'|'files'|'google',e.currentTarget.checked)}/><span>{text}</span></label>{/each}</div>
         <p class="hint">Leave every capability unchecked to allow everything. The brief and notes are added to each turn; they are not saved as memory.</p>
       </fieldset>
       <div class="actions"><button class="primary" disabled={library.busy || (!!folder&&!folderConsent)}>{workspaceId?'Save project':'Create project'}</button>{#if workspaceId}<button type="button" onclick={resetWorkspace}>Cancel</button>{/if}</div></form></section></div>

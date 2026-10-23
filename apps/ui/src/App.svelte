@@ -1,20 +1,14 @@
 <script lang="ts">
   import { PRIMARY_CONVERSATION_ID } from '../../../packages/contracts/src/telegram';
-  import BrowserPanel from './components/BrowserPanel.svelte';
-  import { initBrowser, closeBrowser } from './lib/browser.svelte';
+  import { browser, initBrowser, closeBrowser } from './lib/browser.svelte';
   import { onMount } from 'svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import mascot from '../../../packages/design/mascot.svg';
   import NavIcon from './NavIcon.svelte';
   import { library, refreshLibrary, mutateLibrary } from './lib/library.svelte';
-  import LibraryPanel from './components/LibraryPanel.svelte';
   import ChatView from './components/ChatView.svelte';
-  import SettingsPanel from './components/SettingsPanel.svelte';
   import ToolApprovals from './components/ToolApprovals.svelte';
-  import TasksPanel from './components/TasksPanel.svelte';
-  import InboxPanel from './components/InboxPanel.svelte';
-  import SkillsPanel from './components/SkillsPanel.svelte';
   import { agent, initAgent } from './lib/agent.svelte';
   import { chat, disposeChat, initChat, createConversation, openConversation, routing } from './lib/chat.svelte';
   import { checkForUpdates } from './lib/updates.svelte';
@@ -158,36 +152,71 @@
   <main>
     <header><span class="crumbs">{page === 'Workspaces' ? 'Projects' : page}</span></header>
     {#if error}<div class="error" role="alert">{error}<button aria-label="Dismiss error" onclick={()=>error=''}>×</button></div>{/if}
-    <div class="content" class:chat-mode={page==='Chat'}>
-      {#if page!=='Chat'}<div class="page-heading"><h1>{page === 'Workspaces' ? 'Projects' : page}</h1><p>{descriptions[page]}</p></div>{/if}
-      <BrowserPanel />
+    <div class="content" class:chat-mode={page==='Chat'} class:settings-mode={page==='Settings'}>
+      {#if page!=='Chat' && page!=='Settings'}<div class="page-heading"><h1>{page === 'Workspaces' ? 'Projects' : page}</h1><p>{descriptions[page]}</p></div>{/if}
+      {#if browser.view === 'large' || browser.approvals.length}
+        {#await import('./components/BrowserPanel.svelte') then { default: BrowserPanel }}
+          <BrowserPanel />
+        {:catch}
+          <p class="error" role="alert">The browser view could not be loaded. Close and reopen Talo to try again.</p>
+        {/await}
+      {/if}
       {#if page==='Inbox'}
-        <InboxPanel onOpenChat={()=>navigatePage('Chat')} />
+        {#await import('./components/InboxPanel.svelte')}
+          <p role="status">Loading...</p>
+        {:then { default: InboxPanel }}
+          <InboxPanel onOpenChat={()=>navigatePage('Chat')} />
+        {:catch}
+          <p class="error" role="alert">This page could not be loaded. Close and reopen Talo to try again.</p>
+        {/await}
       {:else if page==='Chat'}
         <ChatView onOpenSettings={()=>{navigatePage('Settings');}} name={settings.name} tagline={descriptions.Chat} showReasoning={settings.showReasoning === true} agentName={settings.agentName || 'Talo'} onRenameAgent={renameAgent} />
       {:else if page==='Workspaces'}
-        <LibraryPanel mode={page} />
+        {#await import('./components/LibraryPanel.svelte')}
+          <p role="status">Loading...</p>
+        {:then { default: LibraryPanel }}
+          <LibraryPanel mode={page} />
+        {:catch}
+          <p class="error" role="alert">This page could not be loaded. Close and reopen Talo to try again.</p>
+        {/await}
       {:else if page==='Settings'}
-        <SettingsPanel
-          {settings}
-          {status}
-          {busy}
-          onPersist={persist}
-          onService={control}
-          onBrowserStart={browserStart}
-          onAutostart={setAutostart}
-          onMemory={setMemory}
-          onOpenChat={()=>navigatePage('Chat')}
-          onRerunSetup={()=>{editing=true;step=0;}}
-        />
+        {#await import('./components/SettingsPanel.svelte')}
+          <p role="status">Loading...</p>
+        {:then { default: SettingsPanel }}
+          <SettingsPanel
+            {settings}
+            {status}
+            {busy}
+            onPersist={persist}
+            onService={control}
+            onBrowserStart={browserStart}
+            onAutostart={setAutostart}
+            onMemory={setMemory}
+            onOpenChat={()=>navigatePage('Chat')}
+            onRerunSetup={()=>{editing=true;step=0;}}
+          />
+        {:catch}
+          <p class="error" role="alert">This page could not be loaded. Close and reopen Talo to try again.</p>
+        {/await}
       {:else if page==='Skills'}
-        <SkillsPanel />
+        {#await import('./components/SkillsPanel.svelte')}
+          <p role="status">Loading...</p>
+        {:then { default: SkillsPanel }}
+          <SkillsPanel />
+        {:catch}
+          <p class="error" role="alert">This page could not be loaded. Close and reopen Talo to try again.</p>
+        {/await}
       {:else if page==='Tasks'}
-        <TasksPanel focusRun={taskFocus} onOpenChat={()=>navigatePage('Chat')} />
+        {#await import('./components/TasksPanel.svelte')}
+          <p role="status">Loading...</p>
+        {:then { default: TasksPanel }}
+          <TasksPanel focusRun={taskFocus} onOpenChat={()=>navigatePage('Chat')} />
+        {:catch}
+          <p class="error" role="alert">This page could not be loaded. Close and reopen Talo to try again.</p>
+        {/await}
       {:else}
         <section class="empty"><span class="empty-badge"><span class="empty-icon">&#9745;</span></span><h2>A clear slate.</h2><p>Your scheduled tasks will live here. Automatic execution is not enabled.</p><span class="coming">Foundation in place</span></section>
       {/if}
-      {#if page!=='Chat'}<footer><span>Made for your everyday.</span><span>Talo / 0.1.0</span></footer>{/if}
     </div>
   </main>
 </div>
@@ -252,6 +281,7 @@
   .error button{padding:2px 8px;background:transparent;border:0}
   .content{flex:1;min-height:0;display:flex;flex-direction:column;padding:30px 44px 26px;overflow-y:auto;scrollbar-gutter:stable}
   .content.chat-mode{overflow:hidden;padding:14px 24px 20px 18px}
+  .content.settings-mode{overflow:hidden;padding:0;scrollbar-gutter:auto}
   .page-heading h1{font-size:34px;letter-spacing:-1.3px;font-weight:560;margin:0 0 9px}
   .page-heading p,.empty p{color:var(--muted);font-size:14px;line-height:1.7;margin:0}
   .page-heading p{max-width:76ch}
@@ -261,7 +291,6 @@
   .empty-icon{font-size:28px;color:var(--yellow-deep)}
   .empty h2{font-size:23px;letter-spacing:-.7px;font-weight:550;margin:0 0 12px}
   .coming{display:inline-block;font-size:11px;color:var(--muted);background:var(--soft);border:1px solid var(--line);padding:7px 12px;border-radius:20px}
-  footer{margin-top:auto;padding-top:28px;display:flex;justify-content:space-between;font-size:10px;color:var(--faint)}
   button{border:1px solid var(--line-strong);background:var(--soft);color:var(--text);padding:9px 14px;border-radius:8px;font-size:12px}
   button:hover:not(:disabled){background:#2c2c27;border-color:#4a4a41}
   button.primary{background:var(--yellow);border-color:var(--yellow);color:var(--black);font-weight:600;padding:11px 18px}

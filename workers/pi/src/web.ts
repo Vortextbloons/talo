@@ -22,7 +22,7 @@ export class WebTransport {
     if (value.error) call.reject(new Error(value.error.message ?? 'Web worker failed. Retry the request.'));
     else call.resolve(value.result);
   }
-  request(method: string, params: unknown, signal?: AbortSignal, timeout = 65_000): Promise<any> {
+  request(method: string, params: unknown, signal?: AbortSignal, timeout = 65_000, timeoutHint = 'Retry or narrow the request.'): Promise<any> {
     signal?.throwIfAborted();
     const id = randomUUID();
     return new Promise((resolve, reject) => {
@@ -34,7 +34,7 @@ export class WebTransport {
         reject(error);
       };
       const abort = () => finish(new Error(`${this.label} cancelled`));
-      const timer = setTimeout(() => finish(new Error(`${this.label} request timed out. Retry or narrow the request.`)), timeout);
+      const timer = setTimeout(() => finish(new Error(`${this.label} request timed out. ${timeoutHint}`)), timeout);
       this.pending.set(id, { resolve: value => { signal?.removeEventListener('abort', abort); resolve(value); }, reject: error => { signal?.removeEventListener('abort', abort); reject(error); }, timer });
       signal?.addEventListener('abort', abort, { once: true });
       if (signal?.aborted) { abort(); return; }

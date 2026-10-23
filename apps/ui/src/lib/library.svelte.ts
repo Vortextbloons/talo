@@ -5,7 +5,7 @@ export interface Workspace {
   id: string; name: string; folder: string | null; archived: boolean;
   /** Bundle fields. Absent on payloads from older hosts. */
   instructions?: string; pinned?: string[]; memoryScope?: 'inherit' | 'workspace' | 'off';
-  capabilities?: ('web' | 'browser' | 'files')[]; agentOwned?: boolean; draft?: boolean; createdAt?: string;
+  capabilities?: ('web' | 'browser' | 'files' | 'google')[]; agentOwned?: boolean; draft?: boolean; createdAt?: string;
 }
 export interface Memory { id: string; scope: 'global' | 'workspace'; workspaceId: string | null; content: string; source: string; personal: boolean; approved: boolean; supersededBy: string | null; createdAt: string; updatedAt: string }
 export interface HistoryHit { conversationId: string; title: string; text: string; archived: boolean }

@@ -20,8 +20,9 @@ const busy = (): boolean =>
 
 function describe(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
-  if (/network|connect|fetch|dns|timed? ?out|request/iu.test(text)) return 'Could not reach the update server. Check your connection and try again.';
   if (/signature/iu.test(text)) return 'This update failed its signature check and was not installed.';
+  if (/valid release json|\b(?:401|403|404)\b|not found|platform.*not.*found/iu.test(text)) return 'Update files are unavailable. Try again later or install the latest Talo release manually.';
+  if (/network|connect|fetch|dns|timed? ?out|request/iu.test(text)) return 'Could not reach the update server. Check your connection and try again.';
   if (/permission|denied|access is denied/iu.test(text)) return 'Windows blocked the update. Close Talo from the tray and try again.';
   return 'The update could not be installed. You can try again.';
 }
@@ -57,21 +58,18 @@ export async function checkForUpdates(options: { quiet?: boolean } = {}): Promis
 }
 
 /**
- * Stops the bundled runtimes, downloads the signed installer and hands it to Windows.
+ * Downloads the signed installer, stops the bundled runtimes and hands it to Windows.
  * On Windows the plugin then exits into the NSIS installer, which relaunches Talo; the
  * code after the install call only runs on platforms that need an explicit relaunch.
  */
 export async function installUpdate(): Promise<void> {
   if (!pending || busy()) return;
-  updates.phase = 'preparing';
+  updates.phase = 'downloading';
   updates.error = '';
   updates.received = 0;
   updates.total = 0;
   try {
-    // The worker, browser and research processes hold files the installer replaces.
-    await invoke('prepare_update');
-    updates.phase = 'downloading';
-    await pending.downloadAndInstall((event) => {
+    await pending.download((event) => {
       switch (event.event) {
         case 'Started':
           updates.total = event.data.contentLength ?? 0;
@@ -79,14 +77,14 @@ export async function installUpdate(): Promise<void> {
         case 'Progress':
           updates.received += event.data.chunkLength;
           break;
-        case 'Finished':
-          updates.phase = 'installing';
-          break;
         default:
           break;
       }
     });
+    updates.phase = 'preparing';
+    await invoke('prepare_update');
     updates.phase = 'installing';
+    await pending.install();
   } catch (error) {
     updates.phase = 'error';
     updates.error = describe(error);

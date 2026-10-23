@@ -3,6 +3,7 @@ export * from './chat.js';
 export * from './agent.js';
 export * from './browser.js';
 export * from './tools.js';
+export * from './google.js';
 export type ServiceId = 'pi' | 'browser' | 'web';
 export type ServiceState = 'stopped' | 'starting' | 'running' | 'failed';
 export type SensitiveAction = 'provider.connect' | 'browser.start' | 'web.request' | 'memory.write' | 'extension.load' | 'mcp.connect' | 'task.execute' | 'autostart.change';

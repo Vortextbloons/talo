@@ -9,6 +9,9 @@ use std::{
 };
 use tauri::{Emitter, Manager};
 
+#[path = "telegram_markdown.rs"]
+mod markdown;
+
 #[derive(Default)]
 pub struct Telegram {
     pairing: Option<(String, Instant)>,
@@ -803,7 +806,20 @@ fn deliver_results(db: &mut Connection, current: &Link) -> Result<(), String> {
             )
         };
         let tx = db.transaction().map_err(|_| "Cannot save reply")?;
-        say(&tx, current, &format!("result:{generation}"), &reply)?;
+        if state == "completed" {
+            for (index, part) in markdown::chunks(&reply).into_iter().enumerate() {
+                enqueue(
+                    &tx,
+                    &current.id,
+                    &format!("result:{generation}:{index}"),
+                    "sendMessage",
+                    json!({"chat_id":current.chat,"text":part,"parse_mode":"MarkdownV2"}),
+                    None,
+                )?;
+            }
+        } else {
+            say(&tx, current, &format!("result:{generation}"), &reply)?;
+        }
         tx.execute(
             "UPDATE telegram_origins SET delivered=1 WHERE id=?1",
             [generation],
@@ -1076,6 +1092,7 @@ mod tests {
         db.execute("INSERT INTO telegram_connection(id,secret,bot_username,user_id,chat_id,account_name) VALUES('connection',x'00','test_bot',11,22,'Owner')",[]).unwrap();
         Host {
             telegram: Telegram::default(),
+            google: crate::google::Google::default(),
             db,
             integrations: Default::default(),
             supervisor: crate::supervisor::Supervisor::new(
@@ -1259,13 +1276,22 @@ mod tests {
         h.db.execute("UPDATE chat_generations SET state='completed'", [])
             .unwrap();
         h.db.execute(
-            "UPDATE chat_messages SET text='Finished',status='completed' WHERE role='assistant'",
+            "UPDATE chat_messages SET text='**Finished**.',status='completed' WHERE role='assistant'",
             [],
         )
         .unwrap();
         let current = link(&h.db).unwrap().unwrap();
         deliver_results(&mut h.db, &current).unwrap();
         deliver_results(&mut h.db, &current).unwrap();
+        let payload: String = h.db.query_row(
+            "SELECT payload FROM telegram_outbox WHERE id LIKE '%result:%'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        let payload: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(payload["parse_mode"], "MarkdownV2");
+        assert!(payload["text"].as_str().unwrap().contains("*Finished*"));
+        assert!(payload["text"].as_str().unwrap().contains("\\."));
         assert_eq!(
             h.db.query_row(
                 "SELECT count(*) FROM telegram_outbox WHERE id LIKE '%result:%'",

@@ -7,6 +7,7 @@ mod agent;
 mod automation;
 mod diagnostics;
 mod delegation;
+mod google;
 mod power;
 mod attachments;
 mod browser;
@@ -40,6 +41,7 @@ use tauri::{
 
 struct Host {
     telegram: telegram::Telegram,
+    google: google::Google,
     integrations: integrations::Integrations,
     db: Connection,
     supervisor: Supervisor,
@@ -162,6 +164,7 @@ impl Host {
             else { self.chat.on_worker_signal(&mut self.db, app, signal); }
         }
         if integrations::expire(self){let _=app.emit("tool-approvals-changed",());}
+        google::tick(self, app);
         agent::expire(self, app);
         let epoch = self.supervisor.worker_epoch();
         let expired: Vec<_> = self.browser_approvals.iter().filter(|(_, (_, at, owner))| *owner != epoch || at.elapsed() > Duration::from_secs(90)).map(|(id, _)| id.clone()).collect();
@@ -193,9 +196,19 @@ impl Host {
         }
     }
 }
+fn warm_worker(app: &tauri::AppHandle) {
+    let shared = Arc::clone(app.state::<Shared>().inner());
+    std::thread::spawn(move || {
+        if let Ok(mut host) = shared.lock() {
+            let _ = host.supervisor.start("pi");
+        }
+    });
+}
+
 /// Show the main window, rebuilding it when the user closed it to the tray.
 /// Building a WebView2 window on the event-loop thread deadlocks on Windows, so it runs elsewhere.
 fn open_main(app: &tauri::AppHandle) {
+    warm_worker(app);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
@@ -533,6 +546,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             automation::automation_action,
             integrations::tools_action,
+            google::google_action,
             telegram::telegram_action,
             agent::agent_action,
             delegation::delegation_action,
@@ -585,6 +599,7 @@ fn main() {
             storage::init(&db)?;
             primary::ensure(&db)?;
             telegram::recover(&db)?;
+            google::init(&db)?;
             scheduler::init(&db)?;
             agent::init(&db)?;
             skills::init(&db)?;
@@ -612,6 +627,7 @@ fn main() {
             app.manage(status_cache.clone());
             app.manage(Arc::new(Mutex::new(Host {
                 telegram: telegram::Telegram::default(),
+                google: google::Google::default(),
                 integrations: integrations::Integrations::default(),
                 db,
                 supervisor: Supervisor::new(root, data),
@@ -638,14 +654,7 @@ fn main() {
                     if warmed.swap(true, std::sync::atomic::Ordering::SeqCst) {
                         return;
                     }
-                    let handle = handle.clone();
-                    std::thread::spawn(move || {
-                        let shared = handle.state::<Shared>();
-                        let Ok(mut host) = shared.lock() else {
-                            return;
-                        };
-                        let _ = host.supervisor.start("pi");
-                    });
+                    warm_worker(&handle);
                 });
             }
             {
@@ -801,8 +810,10 @@ mod dispatch_regression {
         db.execute_batch(include_str!("../../../services/memory/schema.sql"))
             .unwrap();
         storage::init(&db).unwrap();
+        google::init(&db).unwrap();
         Host {
             telegram: telegram::Telegram::default(),
+            google: google::Google::default(),
             integrations: integrations::Integrations::default(),
             db,
             supervisor: Supervisor::new(
@@ -880,6 +891,44 @@ mod dispatch_regression {
         ))
         .unwrap();
         assert_eq!(changes.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn google_state_is_safe_and_setup_aware_without_credentials() {
+        let app = tauri::Builder::default()
+            .any_thread()
+            .manage(Arc::new(Mutex::new(test_host())))
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let state = tauri::async_runtime::block_on(google::google_action(
+            app.handle().clone(),
+            "state".into(),
+            None,
+        ))
+        .unwrap();
+        assert!(state["configured"].is_boolean());
+        assert_eq!(state["connected"], false);
+        assert_eq!(state["authorizing"], false);
+        let scopes = state["scopes"].as_array().unwrap();
+        assert_eq!(scopes.len(), 5);
+        assert!(scopes.iter().all(|scope| scope["granted"] == false));
+        let serialized = state.to_string().to_lowercase();
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("token"));
+
+        let approvals = tauri::async_runtime::block_on(google::google_action(
+            app.handle().clone(),
+            "approvals".into(),
+            None,
+        ))
+        .unwrap();
+        assert!(approvals.as_array().unwrap().is_empty());
+        assert!(tauri::async_runtime::block_on(google::google_action(
+            app.handle().clone(),
+            "unknown_operation".into(),
+            None,
+        ))
+        .is_err());
     }
 
     /// The native event loop must keep dispatching while a command holds the host mutex.

@@ -129,7 +129,6 @@
 
 <section class="card providers">
   <h2>Model providers</h2>
-  <p class="intro">Connect your ChatGPT plan or use an API key, then choose a model in Chat. Your credentials stay out of conversations.</p>
 
   {#if chat.error}
     <div class="settings-message error" role="alert">
@@ -170,7 +169,7 @@
       {/each}
     </div>
   {:else}
-    <p class="empty-line">No providers are connected yet. Connect a provider to start your first conversation.</p>
+    <p class="empty-line">No providers connected.</p>
   {/if}
 
   <!-- The form stays out of the way once a provider works; the empty state opens it. -->
@@ -187,11 +186,11 @@
           <strong>{chatgpt ? 'Finish signing in with ChatGPT in your browser…' : `Checking your key with ${descriptor.name}…`}</strong>
           <small>
             {#if chatgpt}
-              Choose your account and allow Talo to use your ChatGPT plan. You can cancel this sign-in below.
+              Choose your account to continue.
             {:else if elapsed >= 20}
-              This is taking longer than usual. Keep this window open; the form stays locked until the desktop host answers.
+              Taking longer than usual. Keep this window open.
             {:else}
-              The desktop host is verifying the key. This can take a few seconds. The key field is already cleared and the form is locked while the check runs.
+              Verifying your key.
             {/if}
           </small>
         </div>
@@ -213,11 +212,9 @@
 
     {#if placeholder}
       <div class="placeholder-note">
-        <strong>Custom endpoints are a placeholder for now.</strong>
-        <p>The setup screen can declare a local OpenAI-compatible endpoint, but chat connections for custom endpoints are not enabled yet. No key is collected here.</p>
+        <strong>Custom endpoints are not available yet.</strong>
       </div>
     {:else if chatgpt}
-      <p class="provider-note">{descriptor.tagline} API billing is separate.</p>
       {#if savedAccounts.length}
         <label for="chatgpt-account">Account
           <select id="chatgpt-account" bind:value={savedAccount} disabled={pending}>
@@ -231,10 +228,9 @@
       <div class="connect-actions">
         <button class="primary" type="submit" disabled={pending || chat.preview}>Continue with ChatGPT</button>
         {#if pending}<button type="button" onclick={cancelChatGPT}>Cancel sign-in</button>{/if}
-        <small>Sign-in opens in your browser. Talo protects your account credentials on this computer.</small>
       </div>
     {:else}
-      <p class="provider-note">{descriptor.tagline} {#if descriptor.keysUrl}Create a key at <span class="link">{descriptor.keysUrl}</span>.{/if}</p>
+      {#if descriptor.keysUrl}<p class="provider-note">Get a key: <span class="link">{descriptor.keysUrl}</span></p>{/if}
       <label for="connection-key">API key
         <input
           id="connection-key"
@@ -264,7 +260,6 @@
         <button class="primary" type="submit" disabled={pending || chat.preview || !apiKey.trim()}>
           {pending ? 'Checking key…' : `Connect ${descriptor.name}`}
         </button>
-        <small>Keys are passed once to the desktop host and cleared from this field immediately.</small>
       </div>
     {/if}
   </form>
@@ -272,12 +267,10 @@
 
   <details class="catalog">
     <summary>What Talo supports</summary>
-    <p>Hosted providers use Pi's bundled model catalog, including reasoning and thinking-level metadata. The custom choice remains a placeholder. No key is ever written to a conversation, settings, or a log.</p>
     <ul>
       {#each PROVIDER_CHOICES as choice (choice.id)}
         <li>
           <strong>{choice.name}</strong>
-          <span>{choice.tagline}</span>
           {#if choice.keysUrl}<small class="link">{choice.keysUrl}</small>{/if}
         </li>
       {/each}
@@ -288,7 +281,6 @@
 <style>
   .providers{padding:24px 26px}
   .providers h2{font-size:17px;letter-spacing:-.4px;font-weight:550;margin:0 0 6px}
-  .providers .intro{max-width:58ch}
   .providers h3{font-size:13px}
   .form-error{margin:12px 0 2px}
   .pending{display:flex;align-items:flex-start;gap:11px;padding:12px 14px;margin:14px 0 4px;border:1px solid #4e4324;border-radius:9px;background:#211f16;color:#e8d59e}
@@ -332,18 +324,14 @@
   input:disabled,select:disabled{opacity:.5}
   .provider-note{font-size:11.5px;color:var(--muted);line-height:1.6;margin:12px 0 0}
   .connect-actions{display:flex;align-items:center;gap:15px;margin-top:18px;flex-wrap:wrap}
-  .connect-actions small{font-size:10.5px;color:var(--faint);line-height:1.5;max-width:400px}
   .placeholder-note{border:1px dashed var(--line-strong);border-radius:10px;padding:15px 17px;margin-top:16px}
   .placeholder-note strong{font-size:12.5px;font-weight:550}
-  .placeholder-note p{font-size:11.5px;line-height:1.65;margin-top:7px}
   .catalog{border-top:1px solid var(--line);margin-top:24px;padding-top:17px}
   .catalog summary{cursor:pointer;font-size:12px;color:var(--muted);list-style-position:inside}
   .catalog summary:hover{color:var(--text)}
-  .catalog p{font-size:11.5px;line-height:1.7;margin-top:12px;max-width:680px}
   .catalog ul{list-style:none;padding:0;margin:15px 0 0;display:grid;gap:12px}
   .catalog li{font-size:11.5px;display:grid;grid-template-columns:150px 1fr;gap:10px;align-items:baseline}
   .catalog li strong{font-weight:550;font-size:12px}
-  .catalog li span{color:var(--muted);line-height:1.5}
   .catalog li small{grid-column:2;color:var(--faint);word-break:break-all}
   .link{color:var(--text);opacity:.8;word-break:break-all}
   @media(prefers-reduced-motion:reduce){.spinner{animation:none}}

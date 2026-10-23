@@ -29,6 +29,11 @@ Desktop.ini
 # Editor temporary files
 *.swp
 *.swo
+
+# Developer Google OAuth client (never commit credentials)
+apps/desktop/google-oauth.local.json
+*.apps.googleusercontent.com.json
+
 AGENTS.md
 /docs/*
 !/docs/DONSETCH-REDISTRIBUTION.md

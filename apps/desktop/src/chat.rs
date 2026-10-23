@@ -2198,6 +2198,7 @@ mod tests {
         storage::init(&db).unwrap();
         let mut host = Host {
             telegram: crate::telegram::Telegram::default(),
+            google: crate::google::Google::default(),
             integrations: crate::integrations::Integrations::default(),
             db,
             supervisor: Supervisor::new(

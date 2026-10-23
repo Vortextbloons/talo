@@ -15,7 +15,7 @@ pub const DAILY_OBJECT_LIMIT: i64 = 5;
 pub const ASK_TIMEOUT: Duration = Duration::from_secs(300);
 pub const MAX_PENDING_ASKS: usize = 4;
 pub const MAX_ASK_QUESTIONS: usize = 3;
-pub const CAPABILITIES: [&str; 3] = ["web", "browser", "files"];
+pub const CAPABILITIES: [&str; 4] = ["web", "browser", "files", "google"];
 pub const MEMORY_SCOPES: [&str; 3] = ["inherit", "workspace", "off"];
 
 /// A blocking `ask` call waiting for the renderer. It is memory-only because the Pi tool
@@ -137,7 +137,7 @@ pub fn bundle_patch(p: &Value) -> Result<BundlePatch, String> {
         for item in items {
             let capability = item.as_str().ok_or("capabilities must be text")?;
             if !CAPABILITIES.contains(&capability) {
-                return Err("capabilities may only contain web, browser and files".into());
+                return Err("capabilities may only contain web, browser, files and google".into());
             }
             if !allowed.iter().any(|existing| existing == capability) {
                 allowed.push(capability.to_string());

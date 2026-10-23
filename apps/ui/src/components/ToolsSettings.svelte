@@ -19,10 +19,9 @@
 </script>
 <section class="tools-card" aria-labelledby="tools-heading">
   <div class="heading">
-    <div><h2 id="tools-heading">Connected apps</h2></div>
+    <div><h2 id="tools-heading">Other apps</h2></div>
     <button disabled={!isTauri()||tools.busy} onclick={()=>adding=!adding}>{adding?'Cancel':'Add an app'}</button>
   </div>
-  <p class="intro">Apps you add here run on this PC and ask before they act. Nothing is added unless you choose it.</p>
   {#if tools.error}<p class="error" role="alert">{tools.error}</p>{/if}
   {#if adding}<form onsubmit={event=>{event.preventDefault();void add();}}>
     <label>What to call it<input required pattern={'[a-z][a-z0-9-]{0,47}'} bind:value={id} placeholder="notes" maxlength="48"/></label>
@@ -42,7 +41,7 @@
       <label>Address<input required type="url" bind:value={url} placeholder="https://example.com/mcp"/></label>
       <label>Access token <span>(if it needs one)</span><input type="password" bind:value={credential} autocomplete="off"/></label>
     {/if}
-    <label class="trust"><input type="checkbox" bind:checked={trusted} required/><span>I trust this app and where it comes from. A local app runs with my Windows account's access.</span></label>
+    <label class="trust"><input type="checkbox" bind:checked={trusted} required/><span>I trust this app to run with my Windows account's access.</span></label>
     <button class="primary" disabled={tools.busy||!trusted}>Add app</button>
   </form>{/if}
   <div class="servers">
@@ -52,14 +51,13 @@
       <div class="actions"><button disabled={tools.busy||!server.enabled} onclick={()=>toolAction('test',{id:server.id})}>Check it works</button><button disabled={tools.busy} onclick={()=>toolAction('cancel',{id:server.id})}>Disconnect</button><button disabled={tools.busy} onclick={()=>toggle(server)}>{server.enabled?'Turn off':'Turn on'}</button><button disabled={tools.busy} onclick={()=>toolAction('remove',{id:server.id})}>Remove</button></div>
       {#if server.error}<p class="error">{server.error}</p>{/if}
       {#if server.tools?.length}<details class="extra"><summary>{server.tools.length} things it can do</summary>{#each server.tools as tool (tool.id)}<p class="tool-detail"><strong>{tool.id}</strong> · {tool.description}</p>{/each}</details>{/if}
-    </article>{:else}<div class="empty">No apps connected yet. An app starts when it is needed and disconnects after two idle minutes.</div>{/each}
+    </article>{:else}<div class="empty">No other apps connected.</div>{/each}
   </div>
 </section>
 <style>
   .tools-card{min-width:0;border-top:1px solid var(--line);padding-top:16px;margin-bottom:30px}
   .heading{display:flex;align-items:center;justify-content:space-between;gap:14px}
   h2{font-size:12.5px;font-weight:600;margin:0;letter-spacing:.01em}
-  .intro{font-size:12px;line-height:1.65;color:var(--faint);margin:4px 0 0;max-width:60ch}
   .error{color:var(--error-text);font-size:11.5px;margin:10px 0 0}
   button{padding:7px 11px;border-radius:7px;border:1px solid var(--line-strong);background:transparent;color:var(--muted);font-size:12px}
   button:hover:not(:disabled){color:var(--text);background:var(--soft)}

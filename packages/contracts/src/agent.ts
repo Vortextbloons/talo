@@ -1,7 +1,7 @@
 /** Slice 9 public contract: things the agent may author for the user. */
 
 /** What a workspace bundle may enable. An empty list means every capability is on. */
-export type Capability = 'web' | 'browser' | 'files';
+export type Capability = 'web' | 'browser' | 'files' | 'google';
 export type MemoryScope = 'inherit' | 'workspace' | 'off';
 
 /**

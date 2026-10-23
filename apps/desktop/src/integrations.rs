@@ -50,6 +50,9 @@ pub fn reply(h: &mut crate::Host, id: Value, allowed: bool) {
         .relay_tools(json!({"id":id,"result":{"allowed":allowed}}));
 }
 pub fn message(h: &mut crate::Host, app: &tauri::AppHandle, message: Value) {
+    if matches!(message["method"].as_str(), Some("google/call") | Some("notifications/cancelled")) {
+        crate::google::message(h, app, &message);
+    }
     if message["method"] == "automation.usage" {
         let p=&message["params"];
         let generation=p["generationId"].as_str().unwrap_or("");
@@ -96,6 +99,19 @@ pub fn message(h: &mut crate::Host, app: &tauri::AppHandle, message: Value) {
             "browser_screenshot",
             "browser_download",
             "browser_handoff",
+            "google_gmail_list",
+            "google_gmail_read",
+            "google_gmail_draft",
+            "google_gmail_send",
+            "google_calendar_list",
+            "google_calendar_read",
+            "google_calendar_create",
+            "google_calendar_update",
+            "google_calendar_delete",
+            "google_drive_list",
+            "google_drive_read",
+            "google_drive_create",
+            "google_drive_update",
             "mcp",
             "tools",
             "agent",
@@ -170,7 +186,7 @@ pub fn expire(h: &mut crate::Host) -> bool {
     changed
 }
 
-fn live(h: &crate::Host, message: &Value) -> bool {
+pub(crate) fn live(h: &crate::Host, message: &Value) -> bool {
     let p = &message["params"];
     let Some(generation) = p["generationId"].as_str() else { return true; };
     h.db.query_row("SELECT EXISTS(SELECT 1 FROM chat_generations WHERE id=?1 AND conversation_id=?2 AND state='generating')", rusqlite::params![generation,p["conversationId"].as_str().unwrap_or("")], |r| r.get(0)).unwrap_or(false)
@@ -316,6 +332,33 @@ fn catalog(config: &Value) -> Value {
         ),
         (
             "Integrations",
+            vec![
+                "google_gmail_list",
+                "google_gmail_read",
+                "google_calendar_list",
+                "google_calendar_read",
+                "google_drive_list",
+                "google_drive_read",
+            ],
+            "google.read",
+            "Google Workspace / read on request",
+        ),
+        (
+            "Integrations",
+            vec![
+                "google_gmail_draft",
+                "google_gmail_send",
+                "google_calendar_create",
+                "google_calendar_update",
+                "google_calendar_delete",
+                "google_drive_create",
+                "google_drive_update",
+            ],
+            "google.write",
+            "Google Workspace / approved each time",
+        ),
+        (
+            "Integrations",
             vec!["tools", "agent"],
             "tool.use",
             "Managed Pi extension / discovery and routing",
@@ -329,6 +372,6 @@ fn catalog(config: &Value) -> Value {
     ];
     json!(groups.into_iter().flat_map(|(category,names,permission,resource)|names.into_iter().map(move|id|(category,id,permission,resource))).map(|(category,id,permission,resource)|{
         let disabled=config["disabled"].as_array().is_some_and(|a|a.iter().any(|x|x==id));
-        json!({"id":id,"category":category,"description":resource,"permissions":[permission],"availability":if disabled{"disabled"}else{"available"},"timeoutMs":if category=="Browser"{145000}else{65000},"maxResultBytes":if category=="Browser"{98304}else{16384},"resources":[resource]})
+        json!({"id":id,"category":category,"description":resource,"permissions":[permission],"availability":if disabled{"disabled"}else{"available"},"timeoutMs":if category=="Browser"{145000}else if id.starts_with("google_"){150000}else{65000},"maxResultBytes":if category=="Browser"{98304}else{16384},"resources":[resource]})
     }).collect::<Vec<_>>())
 }

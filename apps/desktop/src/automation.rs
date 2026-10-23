@@ -20,6 +20,14 @@ pub fn current(h: &Host) -> Option<String> {
     )
     .ok()
 }
+pub fn run_for(h: &Host, conversation: &str, generation: &str) -> Option<String> {
+    h.db.query_row(
+        "SELECT id FROM automation_runs WHERE conversation_id=?1 AND generation_id=?2 AND status IN ('running','awaiting_approval')",
+        rusqlite::params![conversation, generation],
+        |r| r.get(0),
+    )
+    .ok()
+}
 pub fn notify(app: &tauri::AppHandle, run: &str, title: &str) {
     // Only IDs and fixed event text go to diagnostics/toasts; prompts and credentials stay local.
     let _ = app
@@ -38,7 +46,9 @@ pub fn event(h: &Host, run: Option<&str>, event: &str) {
     );
 }
 pub fn reserve(h: &Host, action: &str, scope: &str) -> bool {
-    if !["mcp.call", "files.write", "files.edit", "browser.action"].contains(&action) {
+    if !["mcp.call", "files.write", "files.edit", "browser.action", "google.write"]
+        .contains(&action)
+    {
         return true;
     }
     let Some(run) = current(h) else { return true };
@@ -77,7 +87,9 @@ pub fn tick(h: &mut Host, app: &tauri::AppHandle) -> Result<(), String> {
             event(h, Some(&run), "timeout");
             notify(app, &run, "Scheduled task timed out; review its progress");
         } else {
-            let waiting = !h.integrations.pending.is_empty() || !h.browser_approvals.is_empty();
+            let waiting = !h.integrations.pending.is_empty()
+                || !h.browser_approvals.is_empty()
+                || crate::google::awaiting(h, &run);
             h.db.execute(
                 "UPDATE automation_runs SET status=?2 WHERE id=?1 AND status<>?2",
                 params![
