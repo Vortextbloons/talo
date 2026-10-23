@@ -4,9 +4,9 @@
   "version": "0.2.0",
   "identifier": "com.talo.desktop",
   "build": {
-    "beforeDevCommand": "bun run dev:ui",
+    "beforeDevCommand": "vendor/runtime/bun/bun.exe --bun --filter @talo/ui dev",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "bun run build:ui",
+    "beforeBuildCommand": "vendor/runtime/bun/bun.exe --bun --filter @talo/ui build",
     "frontendDist": "../ui/dist"
   },
   "app": {
