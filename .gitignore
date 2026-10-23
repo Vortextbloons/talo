@@ -30,6 +30,9 @@ Desktop.ini
 *.swp
 *.swo
 
+# Local scripts
+/scripts/
+
 # Developer Google OAuth client (never commit credentials)
 apps/desktop/google-oauth.local.json
 *.apps.googleusercontent.com.json
