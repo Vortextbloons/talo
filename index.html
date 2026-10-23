@@ -3,366 +3,1639 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#eef3e8">
-    <meta name="description" content="Talo is a Windows desktop AI assistant that keeps chats and projects together, researches the web, and helps you move work forward.">
+    <meta name="theme-color" content="#121211">
+    <meta name="description" content="Talo is a Windows desktop AI assistant that keeps conversations and projects together, researches in a browser you can watch, and stays with the work between replies.">
     <meta property="og:title" content="Talo — AI that stays with your work">
-    <meta property="og:description" content="A Windows desktop AI assistant for conversations, projects, research, and the next step.">
+    <meta property="og:description" content="A Windows desktop agent for conversations, projects, research, and the next step.">
     <meta property="og:type" content="website">
+    <meta property="og:image" content="https://vortextbloons.github.io/talo/mascot.png">
+    <link rel="icon" href="mascot.png" type="image/png">
+    <link rel="apple-touch-icon" href="mascot.png">
     <title>Talo — AI that stays with your work</title>
     <style>
       :root {
-        color-scheme: light;
-        --ink: #16362f;
-        --muted: #61736b;
-        --leaf: #d4eb78;
-        --paper: #f8f9f3;
-        --mist: #edf3e9;
-        --line: #dce5da;
-        --serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
-        --sans: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+        color-scheme: dark;
+        --bg: #121211;
+        --paper: #191917;
+        --soft: #232320;
+        --sidebar: #0b0b0a;
+        --text: #f1f0eb;
+        --muted: #9c9c94;
+        --faint: #6e6e67;
+        --line: #2b2b27;
+        --line-strong: #3b3b35;
+        --yellow: #ffd45c;
+        --yellow-deep: #d8a92c;
+        --display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+        --sans: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+        --mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
       }
 
       * { box-sizing: border-box; }
 
-      html { scroll-behavior: smooth; }
+      [hidden] { display: none !important; }
+
+      html { scroll-behavior: smooth; background: var(--bg); }
 
       body {
         margin: 0;
-        background: var(--paper);
-        color: var(--ink);
+        background: var(--bg);
+        color: var(--text);
         font-family: var(--sans);
         font-size: 16px;
         line-height: 1.55;
         -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
       }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        background:
+          radial-gradient(720px 460px at 8% -10%, rgba(255, 212, 92, .06), transparent 70%),
+          radial-gradient(900px 560px at 96% -14%, rgba(255, 212, 92, .045), transparent 72%);
+      }
+
+      body > * { position: relative; z-index: 1; }
+
+      h1, h2, h3, p { margin-top: 0; }
 
       a { color: inherit; }
 
       a:focus-visible, button:focus-visible {
-        outline: 3px solid #477a5b;
-        outline-offset: 4px;
+        outline: 2px solid var(--yellow);
+        outline-offset: 3px;
+        border-radius: 4px;
       }
 
-      .wrap { width: min(1160px, calc(100% - 48px)); margin-inline: auto; }
+      ::selection { background: #5a4720; color: var(--text); }
 
-      .site-header {
-        height: 88px;
+      .wrap { width: min(1200px, calc(100% - 64px)); margin-inline: auto; }
+
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+        border: 0;
+      }
+
+      .skip {
+        position: absolute;
+        left: 16px;
+        top: -60px;
+        z-index: 20;
+        padding: 10px 14px;
+        border-radius: 8px;
+        background: var(--yellow);
+        color: var(--sidebar);
+        font-size: 12px;
+        font-weight: 650;
+        text-decoration: none;
+      }
+
+      .skip:focus { top: 14px; }
+
+      /* Header */
+
+      .site-head {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        border-bottom: 1px solid var(--line);
+        background: rgba(18, 18, 17, .82);
+        backdrop-filter: blur(14px) saturate(120%);
+      }
+
+      .head-inner {
         display: flex;
         align-items: center;
-        justify-content: space-between;
+        gap: 34px;
+        height: 66px;
       }
 
-      .brand { display: inline-flex; align-items: center; gap: 11px; text-decoration: none; }
-      .brand-mark { width: 35px; height: 35px; display: block; }
-      .brand-name { font-size: 21px; font-weight: 680; letter-spacing: -.055em; }
-      .nav { display: flex; align-items: center; gap: 32px; font-size: 14px; }
-      .nav a { text-decoration: none; color: #4c6258; }
-      .nav a:hover, .text-link:hover { color: #275a47; }
-      .nav .nav-cta { color: var(--ink); font-weight: 650; border-bottom: 1px solid #718b73; padding: 7px 0; }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        text-decoration: none;
+        flex-shrink: 0;
+      }
+
+      .brand img {
+        width: 28px;
+        height: 28px;
+        display: block;
+        filter: drop-shadow(0 0 14px rgba(255, 212, 92, .18));
+      }
+
+      .wordmark {
+        font-size: 20px;
+        font-weight: 640;
+        letter-spacing: -1.1px;
+      }
+
+      .wordmark span { color: var(--yellow); }
+
+      .nav {
+        display: flex;
+        align-items: center;
+        gap: 26px;
+        margin-left: auto;
+        font-size: 12.5px;
+      }
+
+      .nav a {
+        text-decoration: none;
+        color: var(--muted);
+        transition: color .15s ease;
+      }
+
+      .nav a:hover { color: var(--text); }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 9px;
+        min-height: 42px;
+        padding: 0 17px;
+        border: 1px solid transparent;
+        border-radius: 9px;
+        font-family: var(--sans);
+        font-size: 12.5px;
+        font-weight: 650;
+        text-decoration: none;
+        white-space: nowrap;
+        transition: background-color .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
+      }
+
+      .button svg { width: 14px; height: 14px; }
+
+      .button.primary {
+        background: var(--yellow);
+        border-color: var(--yellow);
+        color: var(--sidebar);
+        box-shadow: 0 8px 26px rgba(255, 212, 92, .1);
+      }
+
+      .button.primary:hover {
+        background: #ffdd7f;
+        border-color: #ffdd7f;
+        transform: translateY(-1px);
+      }
+
+      .button.ghost {
+        background: transparent;
+        border-color: var(--line-strong);
+        color: var(--text);
+      }
+
+      .button.ghost:hover {
+        border-color: #4a4a41;
+        background: var(--soft);
+      }
+
+      .button.small { min-height: 36px; padding: 0 14px; font-size: 12px; }
+
+      /* Hero */
 
       .hero {
-        position: relative;
-        overflow: hidden;
-        background: var(--mist);
-        border-radius: 6px 30px 30px 30px;
-        padding: 78px 6.2% 70px;
         display: grid;
-        grid-template-columns: minmax(0, .88fr) minmax(420px, 1.12fr);
+        grid-template-columns: minmax(0, .86fr) minmax(520px, 1.14fr);
         align-items: center;
-        gap: 5.4%;
+        gap: clamp(34px, 4.6vw, 66px);
+        padding: 74px 0 54px;
       }
 
-      .hero::after {
-        position: absolute;
+      .kicker {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        color: var(--muted);
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: .13em;
+        text-transform: uppercase;
+      }
+
+      .kicker::before {
         content: "";
-        width: 360px;
-        height: 360px;
-        border: 1px solid rgba(22, 54, 47, .09);
+        width: 6px;
+        height: 6px;
         border-radius: 50%;
-        right: -160px;
-        top: -170px;
+        background: var(--yellow);
+        box-shadow: 0 0 0 4px rgba(255, 212, 92, .09);
+      }
+
+      .hero h1 {
+        margin: 24px 0 22px;
+        max-width: 13ch;
+        font-family: var(--display);
+        font-size: clamp(48px, 5.1vw, 68px);
+        font-weight: 600;
+        line-height: .98;
+        letter-spacing: -2.7px;
+      }
+
+      .hero h1 em {
+        font-style: normal;
+        color: var(--yellow);
+      }
+
+      .hero-lede {
+        max-width: 44ch;
+        margin-bottom: 30px;
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1.7;
+      }
+
+      .hero-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .hero-note {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 20px 0 0;
+        color: var(--faint);
+        font-size: 11.5px;
+      }
+
+      .hero-note svg { width: 13px; height: 13px; color: var(--yellow-deep); }
+
+      .hero-facts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 22px;
+        margin: 34px 0 0;
+        padding: 18px 0 0;
+        border-top: 1px solid var(--line);
+        list-style: none;
+        color: var(--muted);
+        font-size: 11.5px;
+      }
+
+      .hero-facts li { display: flex; align-items: center; gap: 8px; }
+
+      .hero-facts li::before {
+        content: "";
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: var(--line-strong);
+      }
+
+      /* App sample */
+
+      .app {
+        position: relative;
+        display: flex;
+        height: 546px;
+        min-width: 0;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 15px;
+        background: var(--bg);
+        box-shadow: 0 34px 90px rgba(0, 0, 0, .58), 0 2px 0 rgba(255, 255, 255, .016) inset;
+      }
+
+      .app::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        pointer-events: none;
+        box-shadow: inset 0 0 0 1px rgba(255, 212, 92, .04);
+      }
+
+      .app-rail {
+        flex: 0 0 58px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 3px;
+        padding: 15px 0 13px;
+        background: var(--sidebar);
+        border-right: 1px solid var(--line);
+      }
+
+      .app-rail img {
+        width: 26px;
+        height: 26px;
+        margin-bottom: 18px;
+        filter: drop-shadow(0 0 10px rgba(255, 212, 92, .16));
+      }
+
+      .rail-item {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        color: var(--muted);
+      }
+
+      .rail-item svg { width: 18px; height: 18px; opacity: .72; }
+
+      .rail-item.on { color: var(--text); background: #191916; }
+      .rail-item.on svg { opacity: 1; }
+
+      .rail-item.on::before {
+        content: "";
+        position: absolute;
+        left: -12px;
+        top: 8px;
+        bottom: 8px;
+        width: 2px;
+        border-radius: 0 2px 2px 0;
+        background: var(--yellow);
+      }
+
+      .rail-badge {
+        position: absolute;
+        top: 4px;
+        right: 3px;
+        min-width: 13px;
+        height: 13px;
+        padding: 0 3px;
+        border-radius: 999px;
+        background: var(--yellow);
+        color: var(--sidebar);
+        font-size: 8px;
+        font-weight: 700;
+        line-height: 13px;
+        text-align: center;
+      }
+
+      .presence {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--yellow-deep);
+        flex-shrink: 0;
+      }
+
+      .app-main {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--bg);
+      }
+
+      .app-crumb {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 39px;
+        flex: 0 0 39px;
+        padding: 0 15px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .app-crumb strong {
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: .14em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .sample-tag {
+        margin-left: auto;
+        padding: 3px 7px;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        color: var(--faint);
+        font-size: 8.5px;
+        letter-spacing: .07em;
+        text-transform: uppercase;
+      }
+
+      .app-body {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+      }
+
+      .app-threads {
+        width: 186px;
+        flex: 0 0 186px;
+        display: flex;
+        flex-direction: column;
+        padding: 13px 12px 11px;
+        border-right: 1px solid var(--line);
+        overflow: hidden;
+      }
+
+      .greeting { padding: 2px 1px 14px; }
+      .greeting strong {
+        display: block;
+        font-size: 14.5px;
+        font-weight: 560;
+        letter-spacing: -.5px;
+      }
+      .greeting span {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 9.5px;
+        line-height: 1.5;
+      }
+
+      .primary-chat {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 8px;
+        margin-bottom: 15px;
+        border: 1px solid #655a32;
+        border-radius: 9px;
+        background: #302d20;
+      }
+
+      .primary-chat img { width: 24px; height: 24px; flex-shrink: 0; }
+
+      .primary-chat span { display: grid; gap: 2px; min-width: 0; }
+      .primary-chat strong { font-size: 11px; font-weight: 600; }
+      .primary-chat small {
+        color: var(--muted);
+        font-size: 8.5px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .threads-head {
+        margin-bottom: 7px;
+        color: var(--faint);
+        font-size: 8px;
+        letter-spacing: .12em;
+        text-transform: uppercase;
+      }
+
+      .thread-list {
+        display: grid;
+        gap: 2px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        min-width: 0;
+      }
+
+      .thread-list li {
+        position: relative;
+        padding: 7px 8px;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        color: var(--muted);
+      }
+
+      .thread-list li.active {
+        background: #26261f;
+        border-color: #34342c;
+        color: var(--text);
+      }
+
+      .thread-list li.active::before {
+        content: "";
+        position: absolute;
+        left: -1px;
+        top: 9px;
+        bottom: 9px;
+        width: 2px;
+        border-radius: 2px;
+        background: var(--yellow);
+      }
+
+      .thread-title {
+        display: block;
+        font-size: 9.5px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .thread-meta {
+        display: block;
+        margin-top: 2px;
+        color: var(--faint);
+        font-size: 8px;
+      }
+
+      .threads-note {
+        margin: auto 0 0;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+        color: var(--faint);
+        font-size: 8.5px;
+        line-height: 1.5;
+      }
+
+      .threads-foot {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding-top: 9px;
+        color: var(--faint);
+        font-size: 8.5px;
+      }
+
+      .app-conversation {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        padding: 12px 14px 12px;
+      }
+
+      .conv-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        padding-bottom: 9px;
+        margin-bottom: 9px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .conv-head strong { font-size: 11.5px; font-weight: 560; }
+      .conv-head span { color: var(--faint); font-size: 8.5px; white-space: nowrap; }
+
+      .conv-log {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding-right: 2px;
+        scrollbar-width: thin;
+        scrollbar-color: var(--line-strong) transparent;
+      }
+
+      .conv-log::-webkit-scrollbar { width: 6px; }
+      .conv-log::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 6px; }
+
+      .welcome {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        padding: 6px 4px 2px;
+        text-align: center;
+      }
+
+      .welcome > img {
+        width: 54px;
+        height: 45px;
+        margin-bottom: 14px;
+        filter: drop-shadow(0 0 22px rgba(255, 212, 92, .24)) drop-shadow(0 0 54px rgba(255, 212, 92, .1));
+        animation: mascot-bob 5.5s ease-in-out infinite;
+      }
+
+      .welcome p {
+        max-width: 30ch;
+        margin: 0 0 15px;
+        color: var(--muted);
+        font-size: 9.5px;
+        line-height: 1.6;
+      }
+
+      .welcome .welcome-title {
+        max-width: none;
+        margin: 0 0 7px;
+        color: var(--text);
+        font-size: 16px;
+        font-weight: 550;
+        line-height: 1.3;
+        letter-spacing: -.4px;
+      }
+
+      .composer-ask.placeholder { color: var(--faint); }
+
+      .suggestions {
+        display: grid;
+        gap: 0;
+        width: 100%;
+        text-align: left;
+      }
+
+      .suggestions > div {
+        padding: 8px 1px 7px;
+        border-top: 1px solid var(--line);
+      }
+
+      .suggestions strong {
+        display: block;
+        font-size: 9.5px;
+        font-weight: 600;
+      }
+
+      .suggestions small {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 8.5px;
+        line-height: 1.45;
+      }
+
+      .msg {
+        display: flex;
+        gap: 8px;
+        padding: 8px 0 12px;
+        animation: arrive .32s cubic-bezier(.2, .7, .3, 1);
+      }
+
+      .msg.user { justify-content: flex-end; }
+
+      .msg-avatar {
+        width: 17px;
+        height: 14px;
+        margin-top: 2px;
+        flex-shrink: 0;
+      }
+
+      .msg-body { min-width: 0; max-width: 92%; }
+
+      .msg.user .msg-body {
+        max-width: 86%;
+        padding: 7px 10px;
+        border: 1px solid #33332a;
+        border-radius: 9px 9px 3px 9px;
+        background: #23231e;
+        color: var(--text);
+        font-size: 9.5px;
+        line-height: 1.55;
+      }
+
+      .msg-role {
+        margin-bottom: 3px;
+        color: var(--muted);
+        font-size: 8.5px;
+      }
+
+      .msg-text {
+        margin: 0;
+        color: var(--text);
+        font-size: 9.5px;
+        line-height: 1.6;
+      }
+
+      .msg.user .msg-role { display: none; }
+
+      .typing { display: inline-flex; gap: 4px; padding: 4px 0; }
+      .typing i {
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: var(--yellow-deep);
+        animation: bob 1.1s ease-in-out infinite;
+      }
+      .typing i:nth-child(2) { animation-delay: .15s; }
+      .typing i:nth-child(3) { animation-delay: .3s; }
+
+      .research {
+        display: grid;
+        gap: 4px;
+        margin-top: 8px;
+        padding: 7px 9px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #161615;
+      }
+
+      .research-row {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: var(--muted);
+        font-size: 8.5px;
+      }
+
+      .research-pulse {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--yellow);
+        box-shadow: 0 0 0 3px rgba(255, 212, 92, .08);
+        animation: pulse 1.5s ease-in-out infinite;
+      }
+
+      .research-files {
+        display: flex;
+        gap: 4px;
+        padding-left: 12px;
+      }
+
+      .research-files span {
+        padding: 2px 5px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        color: var(--faint);
+        font-size: 7.5px;
+      }
+
+      .results {
+        display: grid;
+        gap: 4px;
+        margin-top: 8px;
+        padding: 8px 9px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #161615;
+      }
+
+      .results > div {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        padding-bottom: 4px;
+        border-bottom: 1px solid #222220;
+      }
+
+      .results > div:last-child { padding-bottom: 0; border-bottom: 0; }
+      .results strong { font-size: 9px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .results b { color: var(--yellow); font-size: 9px; font-weight: 600; white-space: nowrap; }
+      .results small { display: block; margin-top: 1px; color: var(--faint); font-size: 8px; }
+
+      .sample-note {
+        margin: 6px 0 0;
+        color: var(--faint);
+        font-size: 8px;
+      }
+
+      .composer {
+        flex-shrink: 0;
+        margin-top: 9px;
+        padding: 10px 11px 8px;
+        border: 1px solid var(--line-strong);
+        border-radius: 12px;
+        background: var(--paper);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, .35);
+        transition: border-color .16s ease;
+      }
+
+      .composer.playing { border-color: #655a32; }
+
+      .composer-ask {
+        display: block;
+        min-height: 26px;
+        color: var(--text);
+        font-size: 10px;
+        line-height: 1.5;
+      }
+
+      .composer-ask strong { color: var(--text); font-weight: 500; }
+
+      .composer-foot {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: 6px;
+        padding-top: 7px;
+        border-top: 1px solid var(--line);
+      }
+
+      .model-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 6px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--muted);
+        font-size: 8px;
+        white-space: nowrap;
+      }
+
+      .model-chip::before {
+        content: "";
+        width: 4px;
+        height: 4px;
+        background: var(--yellow-deep);
+        transform: rotate(45deg);
+        border-radius: 1px;
+      }
+
+      .composer-hint {
+        margin-left: auto;
+        color: var(--faint);
+        font-size: 8px;
+        white-space: nowrap;
+      }
+
+      .send {
+        display: grid;
+        place-items: center;
+        width: 25px;
+        height: 25px;
+        flex-shrink: 0;
+        padding: 0;
+        border: 0;
+        border-radius: 7px;
+        background: var(--yellow);
+        color: var(--sidebar);
+        cursor: pointer;
+        transition: background-color .15s ease, transform .15s ease;
+      }
+
+      .send:hover:not(:disabled) { background: #ffdd7f; transform: translateY(-1px); }
+      .send:disabled { opacity: .55; cursor: wait; }
+      .send svg { width: 13px; height: 13px; }
+
+      .demo-caption {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 12px 2px 0;
+        color: var(--faint);
+        font-size: 10.5px;
+        line-height: 1.5;
+      }
+
+      .demo-caption svg { width: 12px; height: 12px; flex-shrink: 0; color: var(--yellow-deep); }
+
+      /* Sections */
+
+      .section { padding: 88px 0 4px; }
+      .section[id], .privacy-band[id] { scroll-margin-top: 88px; }
+
+      .section-head {
+        display: grid;
+        grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr);
+        align-items: end;
+        gap: 60px;
+        margin-bottom: 38px;
+        padding-bottom: 26px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .section-head h2 {
+        max-width: 16ch;
+        margin: 13px 0 0;
+        font-family: var(--display);
+        font-size: clamp(32px, 3.5vw, 44px);
+        font-weight: 560;
+        line-height: 1.06;
+        letter-spacing: -1.7px;
+      }
+
+      .section-head p {
+        max-width: 49ch;
+        margin: 0 0 4px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.75;
+      }
+
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0;
+      }
+
+      .step {
+        padding: 4px 32px 26px 0;
+      }
+
+      .step + .step {
+        padding-left: 32px;
+        border-left: 1px solid var(--line);
+      }
+
+      .step-number {
+        display: inline-block;
+        margin-bottom: 16px;
+        color: var(--yellow-deep);
+        font-family: var(--mono);
+        font-size: 11px;
+        letter-spacing: .12em;
+      }
+
+      .step h3 {
+        margin: 0 0 9px;
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: -.25px;
+      }
+
+      .step p {
+        max-width: 36ch;
+        margin: 0;
+        color: var(--muted);
+        font-size: 12.5px;
+        line-height: 1.75;
+      }
+
+      /* Features */
+
+      .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        padding-bottom: 12px;
+      }
+
+      .feature {
+        padding: 24px 24px 26px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--paper);
+        transition: border-color .18s ease, background-color .18s ease;
+      }
+
+      .feature:hover {
+        border-color: var(--line-strong);
+        background: #1b1b18;
+      }
+
+      .feature-icon {
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        margin-bottom: 18px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: var(--soft);
+        color: var(--yellow);
+      }
+
+      .feature-icon svg { width: 17px; height: 17px; }
+
+      .feature h3 {
+        margin: 0 0 8px;
+        font-size: 14.5px;
+        font-weight: 600;
+        letter-spacing: -.2px;
+      }
+
+      .feature p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12.5px;
+        line-height: 1.72;
+      }
+
+      .feature code {
+        padding: 1px 4px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: var(--soft);
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 10.5px;
+      }
+
+      /* Privacy band */
+
+      .privacy-band {
+        position: relative;
+        overflow: hidden;
+        display: grid;
+        grid-template-columns: minmax(0, .88fr) minmax(0, 1.12fr);
+        gap: 52px;
+        margin: 88px 0 0;
+        padding: 42px 44px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: linear-gradient(135deg, #1b1b18, #151513 62%);
+      }
+
+      .privacy-band::before {
+        content: "";
+        position: absolute;
+        width: 320px;
+        height: 320px;
+        right: -120px;
+        bottom: -190px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(255, 212, 92, .07), transparent 68%);
         pointer-events: none;
       }
 
-      .hero-copy { position: relative; z-index: 1; max-width: 470px; }
-      .kicker { display: flex; align-items: center; gap: 9px; color: #476358; font-size: 13px; font-weight: 650; letter-spacing: .025em; }
-      .kicker-dot { width: 8px; height: 8px; border-radius: 50%; background: #91a946; }
-      h1, h2, p { margin-top: 0; }
-      h1 {
-        max-width: 520px;
-        margin: 22px 0 20px;
-        font-family: var(--serif);
-        font-weight: 500;
-        letter-spacing: -.052em;
-        font-size: clamp(49px, 5.4vw, 72px);
-        line-height: .99;
+      .privacy-band h2 {
+        max-width: 15ch;
+        margin: 13px 0 0;
+        font-family: var(--display);
+        font-size: clamp(27px, 2.8vw, 34px);
+        font-weight: 560;
+        line-height: 1.1;
+        letter-spacing: -1px;
       }
-      .hero-copy > p { color: #52685f; max-width: 420px; font-size: 17px; line-height: 1.7; }
-      .hero-actions { display: flex; align-items: center; gap: 22px; margin-top: 29px; }
-      .button-link { display: inline-flex; min-height: 48px; align-items: center; justify-content: center; gap: 10px; padding: 0 19px; border-radius: 8px; background: var(--ink); color: white; text-decoration: none; font-size: 14px; font-weight: 650; transition: background-color .18s ease, transform .18s ease; }
-      .button-link:hover { background: #285244; transform: translateY(-1px); }
-      .text-link { color: #3f5e50; font-size: 14px; font-weight: 650; text-underline-offset: 4px; }
-      .hero-note { margin: 23px 0 0; color: #728279; font-size: 12px; }
 
-      .demo-window {
+      .privacy-copy { position: relative; z-index: 1; }
+
+      .privacy-copy p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12.5px;
+        line-height: 1.78;
+      }
+
+      .privacy-copy a {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: 15px;
+        color: var(--yellow);
+        font-size: 12px;
+        font-weight: 600;
+        text-decoration: none;
+        border-bottom: 1px solid rgba(255, 212, 92, .32);
+        padding-bottom: 1px;
+      }
+
+      .privacy-copy a:hover { border-bottom-color: var(--yellow); }
+      .privacy-copy a svg { width: 12px; height: 12px; }
+
+      /* Download */
+
+      .download {
         position: relative;
-        z-index: 1;
         overflow: hidden;
-        background: #fff;
-        border: 1px solid rgba(22, 54, 47, .12);
-        border-radius: 17px;
-        box-shadow: 0 28px 70px rgba(36, 66, 53, .13), 0 3px 10px rgba(36, 66, 53, .05);
+        padding: 100px 0 76px;
+        text-align: center;
       }
 
-      .window-bar { height: 46px; display: flex; align-items: center; gap: 7px; padding: 0 17px; background: #fbfcf8; border-bottom: 1px solid #edf0e9; }
-      .window-dot { width: 7px; height: 7px; border-radius: 50%; background: #c8d2c9; }
-      .window-title { margin-left: 7px; color: #728078; font-size: 11px; letter-spacing: .015em; }
-      .sample-label { margin-left: auto; color: #73827a; font-size: 10px; }
-      .demo-content { padding: 22px 22px 17px; }
-      .chat-heading { display: flex; align-items: center; gap: 11px; margin-bottom: 21px; }
-      .chat-avatar { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: var(--ink); }
-      .chat-avatar svg { width: 20px; height: 20px; }
-      .chat-title { font-size: 13px; font-weight: 700; }
-      .chat-subtitle { color: #819087; font-size: 11px; }
-      .message { max-width: 100%; }
-      .message-label { margin-bottom: 6px; color: #79877e; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
-      .user-message { max-width: 86%; margin-left: auto; padding: 12px 14px; border-radius: 12px 12px 3px 12px; background: #eef3e9; color: #344b40; font-size: 12px; line-height: 1.55; }
-      .assistant-message { margin-top: 17px; animation: arrive .38s ease both; }
-      .assistant-message p { margin: 0; color: #475b51; font-size: 12px; line-height: 1.6; }
-      .research-line { display: flex; align-items: center; gap: 7px; margin-top: 12px; color: #50705e; font-size: 11px; }
-      .research-pulse { width: 7px; height: 7px; border-radius: 50%; background: #91ae4e; box-shadow: 0 0 0 3px #eff4e4; }
-      .result-list { display: grid; gap: 7px; margin-top: 12px; }
-      .result-row { display: grid; grid-template-columns: minmax(110px, 1fr) auto auto; align-items: center; gap: 12px; padding: 9px 10px; border: 1px solid #edf0e8; border-radius: 8px; font-size: 10px; }
-      .result-name { font-weight: 700; color: #334b3e; }
-      .result-price { font-weight: 700; white-space: nowrap; }
-      .result-detail { color: #738078; white-space: nowrap; }
-      .demo-bottom { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 17px; border-top: 1px solid #edf0e9; background: #fbfcf8; }
-      .demo-disclaimer { max-width: 205px; color: #7a877f; font-size: 10px; line-height: 1.4; }
-      .demo-button { flex: none; display: inline-flex; align-items: center; gap: 8px; border: 0; border-radius: 7px; padding: 10px 12px; background: var(--leaf); color: #233d2e; font: 700 11px var(--sans); cursor: pointer; transition: background-color .18s ease; }
-      .demo-button:hover { background: #c8e45b; }
-      .demo-button:disabled { opacity: .75; cursor: wait; }
-      .demo-button svg { width: 13px; height: 13px; }
-
-      [hidden] { display: none !important; }
-
-      @keyframes arrive { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-
-      .work-section { padding: 105px 2px 98px; }
-      .section-heading { display: grid; grid-template-columns: .78fr 1.22fr; align-items: end; gap: 60px; margin-bottom: 42px; }
-      .section-heading .kicker { margin-bottom: 12px; }
-      h2 { margin-bottom: 0; font-family: var(--serif); font-size: clamp(34px, 4vw, 48px); font-weight: 500; letter-spacing: -.04em; line-height: 1.08; }
-      .section-heading p { max-width: 460px; margin-bottom: 3px; color: var(--muted); font-size: 15px; line-height: 1.7; }
-      .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); }
-      .feature { padding: 25px 28px 0 0; }
-      .feature + .feature { border-left: 1px solid var(--line); padding-left: 28px; }
-      .feature-symbol { width: 34px; height: 34px; display: grid; place-items: center; margin-bottom: 20px; border-radius: 10px; background: #e8efe3; color: #3a644d; }
-      .feature-symbol svg { width: 18px; height: 18px; }
-      .feature h3 { margin: 0 0 9px; font-size: 16px; font-weight: 700; letter-spacing: -.02em; }
-      .feature p { max-width: 320px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
-
-      .privacy-band { display: grid; grid-template-columns: .82fr 1.18fr; gap: 60px; align-items: start; padding: 37px 42px; background: #e8efe5; border-radius: 18px; }
-      .privacy-band h2 { max-width: 360px; font-size: 34px; }
-      .privacy-copy { color: #52665b; font-size: 13px; line-height: 1.75; }
-      .privacy-copy p { margin: 0; }
-      .privacy-copy a { display: inline-block; margin-top: 14px; color: #355f49; font-weight: 700; text-underline-offset: 4px; }
-
-      .site-footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 35px 0 42px; color: #78867d; font-size: 12px; }
-      .footer-brand { display: inline-flex; align-items: center; gap: 8px; color: #52665b; font-weight: 700; }
-      .footer-brand svg { width: 22px; height: 22px; }
-      .footer-links { display: flex; gap: 22px; }
-      .footer-links a { text-underline-offset: 3px; }
-
-      @media (max-width: 860px) {
-        .hero { grid-template-columns: 1fr; gap: 38px; padding: 58px 7%; }
-        .hero-copy { max-width: 600px; }
-        .demo-window { width: min(100%, 620px); }
-        .section-heading { grid-template-columns: 1fr 1fr; gap: 32px; }
-        .privacy-band { grid-template-columns: 1fr 1.2fr; gap: 30px; }
+      .download::before {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 44px;
+        width: 620px;
+        height: 620px;
+        transform: translateX(-50%);
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(255, 212, 92, .07), transparent 62%);
+        pointer-events: none;
       }
 
-      @media (max-width: 620px) {
-        .wrap { width: min(100% - 32px, 500px); }
-        .site-header { height: 72px; }
-        .brand-name { font-size: 19px; }
-        .nav { gap: 17px; font-size: 12px; }
-        .nav .nav-cta { display: none; }
-        .hero { padding: 45px 22px 24px; gap: 31px; border-radius: 4px 22px 22px 22px; }
-        h1 { font-size: clamp(48px, 13vw, 64px); }
-        .hero-copy > p { font-size: 15px; }
-        .hero-actions { gap: 17px; }
-        .hero-note { margin-top: 17px; }
-        .demo-window { border-radius: 13px; }
-        .demo-content { padding: 17px 14px 14px; }
-        .window-bar { padding: 0 12px; }
-        .sample-label { font-size: 9px; }
-        .result-row { grid-template-columns: minmax(85px, 1fr) auto; gap: 4px 9px; }
-        .result-detail { grid-column: 1 / -1; }
-        .demo-bottom { align-items: flex-start; flex-direction: column; }
-        .demo-disclaimer { max-width: none; }
-        .work-section { padding: 75px 0 68px; }
-        .section-heading { grid-template-columns: 1fr; gap: 16px; margin-bottom: 30px; }
+      .download-inner { position: relative; z-index: 1; }
+
+      .download img {
+        width: 88px;
+        height: 73px;
+        margin-bottom: 24px;
+        filter: drop-shadow(0 0 34px rgba(255, 212, 92, .22)) drop-shadow(0 0 90px rgba(255, 212, 92, .1));
+        animation: mascot-bob 5.5s ease-in-out infinite;
+      }
+
+      .download h2 {
+        margin: 0 auto 14px;
+        max-width: 18ch;
+        font-family: var(--display);
+        font-size: clamp(38px, 4.4vw, 54px);
+        font-weight: 600;
+        line-height: 1.02;
+        letter-spacing: -2.2px;
+      }
+
+      .download p {
+        max-width: 46ch;
+        margin: 0 auto 28px;
+        color: var(--muted);
+        font-size: 14.5px;
+        line-height: 1.7;
+      }
+
+      .download-actions {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .download-note {
+        margin: 22px 0 0;
+        color: var(--faint);
+        font-size: 11px;
+      }
+
+      /* Footer */
+
+      .site-foot {
+        border-top: 1px solid var(--line);
+      }
+
+      .foot-inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        padding: 28px 0 38px;
+      }
+
+      .foot-brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        color: var(--muted);
+        font-size: 11.5px;
+      }
+
+      .foot-brand img { width: 20px; height: 20px; }
+
+      .foot-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 22px;
+        font-size: 11.5px;
+        color: var(--muted);
+      }
+
+      .foot-links a { text-decoration: none; }
+      .foot-links a:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+
+      /* Motion */
+
+      @keyframes mascot-bob {
+        0%, 100% { transform: translateY(0) rotate(0); }
+        50% { transform: translateY(-3px) rotate(-3.5deg); }
+      }
+
+      @keyframes bob {
+        0%, 100% { transform: translateY(0); opacity: .55; }
+        45% { transform: translateY(-2px); opacity: 1; }
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: .55; }
+        50% { opacity: 1; }
+      }
+
+      @keyframes arrive {
+        from { opacity: 0; transform: translateY(5px); }
+        to { opacity: 1; transform: none; }
+      }
+
+      /* Responsive */
+
+      @media (max-width: 1040px) {
+        .hero {
+          grid-template-columns: 1fr;
+          padding: 58px 0 40px;
+          gap: 42px;
+        }
+
+        .hero h1 { max-width: 16ch; }
+
+        .app {
+          width: min(100%, 660px);
+          justify-self: center;
+        }
+      }
+
+      @media (max-width: 900px) {
+        .section-head { grid-template-columns: 1fr; gap: 18px; }
+        .steps { grid-template-columns: 1fr; }
+        .step { padding: 0 0 22px; }
+        .step + .step { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); padding-top: 22px; }
+        .feature-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .privacy-band { grid-template-columns: 1fr; gap: 20px; }
+      }
+
+      @media (max-width: 760px) {
+        .wrap { width: min(100% - 40px, 660px); }
+        .head-inner { height: 60px; gap: 18px; }
+        .nav { gap: 18px; font-size: 12px; }
+        .nav a:first-child { display: none; }
+        .app { height: 486px; }
+        .app-threads { display: none; }
+        .welcome > img { width: 58px; height: 48px; }
         .feature-grid { grid-template-columns: 1fr; }
-        .feature, .feature + .feature { padding: 22px 0; border-left: 0; border-bottom: 1px solid var(--line); }
-        .feature-symbol { margin-bottom: 13px; }
-        .feature p { max-width: 440px; }
-        .privacy-band { grid-template-columns: 1fr; gap: 18px; padding: 27px 24px; border-radius: 14px; }
-        .privacy-band h2 { font-size: 31px; }
-        .site-footer { align-items: flex-start; flex-direction: column; padding: 27px 0 32px; }
-        .footer-links { flex-wrap: wrap; gap: 14px 20px; }
+        .privacy-band { padding: 30px 24px; margin-top: 66px; }
+        .foot-inner { flex-direction: column; align-items: flex-start; gap: 16px; }
+      }
+
+      @media (max-width: 560px) {
+        .wrap { width: min(100% - 32px, 560px); }
+        .nav a { display: none; }
+        .nav a[href="privacy.html"] { display: inline; }
+        .nav .button { display: inline-flex; }
+        .hero { padding-top: 46px; }
+        .hero h1 { letter-spacing: -1.9px; }
+        .hero-lede { font-size: 15px; }
+        .app { height: 452px; }
+        .app-rail { flex-basis: 48px; }
+        .rail-item.on::before { left: -7px; }
+        .app-crumb { padding: 0 12px; }
+        .app-conversation { padding: 10px 11px; }
+        .model-chip { display: none; }
+        .composer-hint { display: block; }
+        .welcome .suggestions { display: none; }
+        .section { padding-top: 64px; }
+        .download { padding: 74px 0 60px; }
+        .download h2 { letter-spacing: -1.6px; }
       }
 
       @media (prefers-reduced-motion: reduce) {
-        *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+        html { scroll-behavior: auto; }
+        *, *::before, *::after {
+          animation-duration: .01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: .01ms !important;
+        }
       }
     </style>
   </head>
   <body>
-    <header class="site-header wrap">
-      <a class="brand" href="./" aria-label="Talo home">
-        <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true">
-          <rect width="40" height="40" rx="12" fill="#16362f" />
-          <path d="M11 24.5c0-6.3 3.3-10.4 9-13.5 5.7 3.1 9 7.2 9 13.5a9 9 0 0 1-18 0Z" fill="#d4eb78" />
-          <path d="M20 17.5v12" fill="none" stroke="#16362f" stroke-width="1.6" stroke-linecap="round" />
-        </svg>
-        <span class="brand-name">talo</span>
-      </a>
-      <nav class="nav" aria-label="Main navigation">
-        <a href="#how-it-works">How it works</a>
-        <a href="privacy.html">Privacy</a>
-        <a class="nav-cta" href="https://github.com/Vortextbloons/talo/releases">Get Talo</a>
-      </nav>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="site-head">
+      <div class="wrap head-inner">
+        <a class="brand" href="./" aria-label="Talo home">
+          <img src="mascot.png" alt="" width="28" height="28">
+          <span class="wordmark">talo<span>.</span></span>
+        </a>
+        <nav class="nav" aria-label="Main">
+          <a href="#how-it-works">How it works</a>
+          <a href="#inside">What's inside</a>
+          <a href="privacy.html">Privacy</a>
+          <a class="button primary small" href="https://github.com/Vortextbloons/talo/releases/latest">
+            Download
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7.5 11 4.5 4.5 4.5-4.5"/><path d="M5 19.5h14"/></svg>
+          </a>
+        </nav>
+      </div>
     </header>
 
-    <main class="wrap">
-      <section class="hero" aria-labelledby="hero-title">
+    <main id="main">
+      <section class="hero wrap" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <div class="kicker"><span class="kicker-dot"></span> A Windows desktop assistant</div>
-          <h1 id="hero-title">AI that stays with your work.</h1>
-          <p>Talo keeps your conversations and projects together, then helps you research, explore in a browser, and move to the next step. Connect an AI provider you choose and work in one place that stays close all day.</p>
+          <div class="kicker">A Windows desktop agent</div>
+          <h1 id="hero-title">AI that <em>stays</em> with your work.</h1>
+          <p class="hero-lede">
+            Talo is a quiet companion for the work that takes more than one reply. Keep chats and projects together, let it research in a browser you can watch, and come back to progress that is still there.
+          </p>
           <div class="hero-actions">
-            <a class="button-link" href="https://github.com/Vortextbloons/talo/releases">Get Talo <span aria-hidden="true">↗</span></a>
-            <a class="text-link" href="#how-it-works">What it does</a>
+            <a class="button primary" href="https://github.com/Vortextbloons/talo/releases/latest">
+              Download for Windows
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7"/><path d="M8.5 7H17v8.5"/></svg>
+            </a>
+            <a class="button ghost" href="#how-it-works">See how it works</a>
           </div>
-          <p class="hero-note">Made for Windows · Optional Google Workspace connection</p>
+          <p class="hero-note">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10.5" width="16" height="9.5" rx="2.6"/><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/></svg>
+            Windows x64 · Bring your own model provider
+          </p>
+          <ul class="hero-facts">
+            <li>Chats stay on your PC</li>
+            <li>Keys sealed with Windows DPAPI</li>
+            <li>Google is optional</li>
+          </ul>
         </div>
 
-        <div class="demo-window" role="region" aria-label="A sample Talo conversation demo">
-          <div class="window-bar" aria-hidden="true">
-            <span class="window-dot"></span><span class="window-dot"></span><span class="window-dot"></span>
-            <span class="window-title">Talo / Weekend research</span>
-            <span class="sample-label">SAMPLE DEMO</span>
-          </div>
-          <div class="demo-content" id="demoTranscript" aria-live="polite" aria-relevant="additions text">
-            <div class="chat-heading">
-              <span class="chat-avatar" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none"><path d="M5 14c0-4.1 2.1-6.8 7-9 4.9 2.2 7 4.9 7 9a7 7 0 1 1-14 0Z" fill="#d4eb78"/><path d="M12 9v10" stroke="#16362f" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <div>
+          <div class="app" role="group" aria-label="A sample Talo window">
+            <div class="app-rail" aria-hidden="true">
+              <img src="mascot.png" alt="" width="26" height="26">
+              <span class="rail-item on">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 4h14.4A1.8 1.8 0 0 1 21 5.8v8.4a1.8 1.8 0 0 1-1.8 1.8H10l-4.6 3.6v-3.6H4.8A1.8 1.8 0 0 1 3 14.2V5.8A1.8 1.8 0 0 1 4.8 4Z"/></svg>
               </span>
-              <span><span class="chat-title">Weekend research</span><br><span class="chat-subtitle">A chat in your personal workspace</span></span>
+              <span class="rail-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4.8h16v9.4H13l-4.2 4.3v-4.3H4V4.8Z"/><path d="M7.4 8.6h9.2M7.4 11.4h5.6"/></svg>
+                <span class="rail-badge">2</span>
+              </span>
+              <span class="rail-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.6a2 2 0 0 1 2-2h3.2c.6 0 1.2.3 1.6.8l1 1.4h7.2a2 2 0 0 1 2 2v6.6a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2V7.6Z"/></svg>
+              </span>
+              <span class="rail-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.6 13.6 8l4.4 1.6-4.4 1.6L12 15.6l-1.6-4.4L6 9.6 10.4 8 12 3.6Z"/><path d="M17.6 15.4l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7.7-1.9Z"/></svg>
+              </span>
+              <span class="rail-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="5"/><path d="m8.4 12.2 2.5 2.5 4.8-5.2"/></svg>
+              </span>
+              <span class="rail-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5h9M17 7.5h3M4 16.5h2.5M10.5 16.5h9.5"/><circle cx="15" cy="7.5" r="2.2"/><circle cx="8.5" cy="16.5" r="2.2"/></svg>
+              </span>
             </div>
-            <div class="message user-message">
-              <div class="message-label">You</div>
-              Find three quiet cabin stays near Estes Park for a weekend. Compare the price, nearby trails, and cancellation terms.
-            </div>
-            <div class="message assistant-message" id="demoResearch" hidden>
-              <div class="message-label">Talo</div>
-              <p>I’ll look for current options and compare the details you asked for. You can follow the research as I go.</p>
-              <div class="research-line"><span class="research-pulse"></span>Researching the web <span aria-hidden="true">·</span> Opening the browser</div>
-            </div>
-            <div class="message assistant-message" id="demoResults" hidden>
-              <div class="message-label">Example comparison</div>
-              <p>Here are three places to compare. In Talo, you can open a result in the browser and take over whenever you like.</p>
-              <div class="result-list" aria-label="Illustrative cabin comparison">
-                <div class="result-row"><span class="result-name">Pine Creek Cabin</span><span class="result-price">$182 / night</span><span class="result-detail">Trail access · Free cancellation</span></div>
-                <div class="result-row"><span class="result-name">Ridgeview Hideaway</span><span class="result-price">$209 / night</span><span class="result-detail">Trail access · Cancel by Tuesday</span></div>
-                <div class="result-row"><span class="result-name">Juniper House</span><span class="result-price">$164 / night</span><span class="result-detail">2.4 mi to trails · Partial refund</span></div>
+
+            <div class="app-main">
+              <div class="app-crumb">
+                <strong>Chat</strong>
+                <span class="sample-tag">Interactive sample</span>
+              </div>
+              <div class="app-body">
+                <aside class="app-threads" aria-hidden="true">
+                  <div class="greeting">
+                    <strong>Welcome back.</strong>
+                    <span>A little space to think things through.</span>
+                  </div>
+                  <div class="primary-chat">
+                    <img src="mascot.png" alt="" width="24" height="24">
+                    <span><strong>Talo</strong><small>Here when you need a hand.</small></span>
+                  </div>
+                  <div class="threads-head">Other chats</div>
+                  <ul class="thread-list">
+                    <li class="active"><span class="thread-title">Weekend research</span><span class="thread-meta">Today · Balanced</span></li>
+                    <li><span class="thread-title">Q4 planning notes</span><span class="thread-meta">Yesterday</span></li>
+                    <li><span class="thread-title">Recipes for the week</span><span class="thread-meta">Monday</span></li>
+                  </ul>
+                  <p class="threads-note">Start a separate chat for a focused topic.</p>
+                  <div class="threads-foot"><span class="presence"></span>Talo is here</div>
+                </aside>
+
+                <section class="app-conversation" aria-label="Sample conversation">
+                  <div class="conv-head">
+                    <strong>Weekend research</strong>
+                    <span id="demoStatus">Not started</span>
+                  </div>
+                  <div class="conv-log" id="demoLog" role="log" aria-live="polite" aria-label="Sample conversation transcript">
+                    <div class="welcome" id="demoWelcome">
+                      <img src="mascot.png" alt="" width="54" height="45">
+                      <p class="welcome-title">Here when you need a hand.</p>
+                      <p>A thought, a question, a place to begin. Your assistant will meet you here.</p>
+                      <div class="suggestions" aria-hidden="true">
+                        <div><strong>Think together</strong><small>Make room for your next idea.</small></div>
+                        <div><strong>Find your bearings</strong><small>Bring a little clarity to your day.</small></div>
+                        <div><strong>Pick up the thread</strong><small>Keep what matters close.</small></div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="composer" id="demoComposer">
+                    <span class="composer-ask" id="demoAsk">
+                      Find three quiet cabin stays near Estes Park for a weekend. Compare the price, nearby trails, and cancellation terms.
+                    </span>
+                    <div class="composer-foot">
+                      <span class="model-chip">Balanced</span>
+                      <span class="composer-hint" id="demoHint">Play the sample</span>
+                      <button class="send" id="demoSend" type="button" aria-label="Play the sample conversation">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m6.5 10.5 5.5-5.5 5.5 5.5"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                </section>
               </div>
             </div>
           </div>
-          <div class="demo-bottom">
-            <span class="demo-disclaimer" id="demoStatus" aria-live="polite">Short example · sample listings and prices, not live search results</span>
-            <button class="demo-button" id="playDemo" type="button" aria-controls="demoTranscript">
-              <span>Play the quick demo</span>
-              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8h9m-3.7-3.7L12.5 8l-3.7 3.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </button>
+          <p class="demo-caption">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11.2v5"/><circle cx="12" cy="8.2" r=".9" fill="currentColor" stroke="none"/></svg>
+            An interactive sample. Listings and prices are illustrative, not live results.
+          </p>
+        </div>
+      </section>
+
+      <section class="section wrap" id="how-it-works" aria-labelledby="how-title">
+        <div class="section-head">
+          <div>
+            <div class="kicker">Less setup, more follow-through</div>
+            <h2 id="how-title">A place for the work in between.</h2>
+          </div>
+          <p>Some questions take more than one reply. Talo is built for the research, context, and small decisions that carry from one day into the next — without asking you to manage the machinery.</p>
+        </div>
+        <div class="steps">
+          <div class="step">
+            <span class="step-number">01</span>
+            <h3>Ask in your own words</h3>
+            <p>Describe the outcome, not the steps. Talo picks the tools and keeps its working visible, so you can see what it is doing and why.</p>
+          </div>
+          <div class="step">
+            <span class="step-number">02</span>
+            <h3>Watch it work</h3>
+            <p>It can read a page in its own browser, compare what it finds, and hand off part of the job to a child task you can follow. Take over the browser whenever you like.</p>
+          </div>
+          <div class="step">
+            <span class="step-number">03</span>
+            <h3>Pick it back up</h3>
+            <p>Questions, drafts, and finished work wait in the Inbox. Close the window and Talo stays in the tray, so the work does not stop when you look away.</p>
           </div>
         </div>
       </section>
 
-      <section class="work-section" id="how-it-works" aria-labelledby="work-title">
-        <div class="section-heading">
+      <section class="section wrap" id="inside" aria-labelledby="inside-title">
+        <div class="section-head">
           <div>
-            <div class="kicker"><span class="kicker-dot"></span> Less setup, more follow-through</div>
-            <h2 id="work-title">A place for the work in between.</h2>
+            <div class="kicker">What's inside</div>
+            <h2 id="inside-title">One place for the thread to continue.</h2>
           </div>
-          <p>Some questions take more than one reply. Talo is built for the research, context, and small decisions that carry from one day into the next.</p>
+          <p>Conversations, projects, and tools that share context instead of starting over. Every connection is optional and follows the same permission boundary.</p>
         </div>
+
         <div class="feature-grid">
           <article class="feature">
-            <span class="feature-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4 6.5h16M4 12h10M4 17.5h13" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="18" cy="12" r="2" fill="#d4eb78" stroke="currentColor" stroke-width="1.2"/></svg></span>
+            <span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 4h14.4A1.8 1.8 0 0 1 21 5.8v8.4a1.8 1.8 0 0 1-1.8 1.8H10l-4.6 3.6v-3.6H4.8A1.8 1.8 0 0 1 3 14.2V5.8A1.8 1.8 0 0 1 4.8 4Z"/><path d="M7.2 8.4h9.6M7.2 11.6h6"/></svg></span>
             <h3>Chats with their own context</h3>
-            <p>Keep separate conversations for different projects. Workspaces can hold a brief and notes, so you can return without starting from scratch.</p>
+            <p>Keep conversations apart by project. A workspace carries a brief and notes, so every chat in that space starts from what you already know.</p>
           </article>
+
           <article class="feature">
-            <span class="feature-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><circle cx="10.8" cy="10.8" r="6.3" stroke="currentColor" stroke-width="1.7"/><path d="m15.4 15.4 4.3 4.3M8 11h5.6M10.8 8.2v5.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+            <span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.6"/><path d="M3.6 12h16.8"/><path d="M12 3.4c2.3 2.4 3.4 5.4 3.4 8.6S14.3 18.2 12 20.6C9.7 18.2 8.6 15.2 8.6 12S9.7 5.8 12 3.4Z"/></svg></span>
             <h3>Research you can follow</h3>
-            <p>Ask Talo to look into something online. Follow along in its browser, take control when you want, and come back to the conversation later.</p>
+            <p>Talo browses in a managed browser. Follow along, take over the wheel, or let it keep going while you work elsewhere.</p>
           </article>
+
           <article class="feature">
-            <span class="feature-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><rect x="4" y="5" width="16" height="14" rx="3" stroke="currentColor" stroke-width="1.6"/><path d="m8 12 2.4 2.4L16.5 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-            <h3>Connected only when useful</h3>
-            <p>Google Workspace is optional. Talo can use Gmail, Calendar, and Drive in a chat, and asks before it sends email or changes your files or events.</p>
+            <span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 5.2h14.4v9.4H13l-4.2 4.3v-4.3H4.8V5.2Z"/><path d="m8.2 9.6 2.2 2.1 5-5"/></svg></span>
+            <h3>Google Workspace, on your terms</h3>
+            <p>Read Gmail, work with Calendar, and read or create text files in Drive. Sending, changing, and writing each wait for a one-time approval.</p>
+          </article>
+
+          <article class="feature">
+            <span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.6"/><path d="M12 7.4V12l3.2 1.9"/></svg></span>
+            <h3>Scheduled tasks</h3>
+            <p>Set a reminder, a report, or a repeatable piece of work. When it runs, the result comes back to your chat instead of disappearing.</p>
+          </article>
+
+          <article class="feature">
+            <span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20.2 4.4 3.6 10.6l6 2.4 2.4 6 8.2-14.6Z"/><path d="m9.6 13 4.2-4.2"/></svg></span>
+            <h3>Reach it from Telegram</h3>
+            <p>Pair one private account and message your primary chat from your phone. Progress, questions, and approvals come through; other chats keep running.</p>
+          </article>
+
+          <article class="feature">
+            <span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10.5" width="16" height="9.5" rx="2.6"/><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/><path d="M12 14.2v2.2"/></svg></span>
+            <h3>Local by default</h3>
+            <p>Chats, memory, and settings live on your computer. Provider keys are sealed with Windows DPAPI and never returned to the window.</p>
           </article>
         </div>
       </section>
 
-      <section class="privacy-band" aria-labelledby="privacy-title">
-        <div>
-          <div class="kicker"><span class="kicker-dot"></span> Clear boundaries</div>
-          <h2 id="privacy-title">You choose what to connect.</h2>
-        </div>
-        <div class="privacy-copy">
-          <p>Your chats and settings are stored on your computer. Talo sends requests and the context needed to answer to the AI provider you configure. Google is optional; content a chat uses may be sent to that provider. Talo asks for your approval before it sends an email or changes a Google event or file.</p>
-          <a href="privacy.html">Read the privacy policy</a>
+      <div class="wrap">
+        <section class="privacy-band" aria-labelledby="privacy-title">
+          <div>
+            <div class="kicker">Clear boundaries</div>
+            <h2 id="privacy-title">Your work is yours. Connecting is your choice.</h2>
+          </div>
+          <div class="privacy-copy">
+            <p>Chats and settings stay on this PC. Talo sends only the context a reply needs to the model provider you choose. Google Workspace is optional, its read access runs when you ask, and anything that sends, edits, or creates waits for your approval.</p>
+            <a href="privacy.html">
+              Read the privacy policy
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7"/><path d="M8.5 7H17v8.5"/></svg>
+            </a>
+          </div>
+        </section>
+      </div>
+
+      <section class="download" aria-labelledby="download-title">
+        <div class="wrap download-inner">
+          <img src="mascot.png" alt="" width="88" height="73">
+          <h2 id="download-title">Bring Talo home.</h2>
+          <p>One installer for Windows x64. Talo keeps itself up to date from inside the app, and your chats, projects, and settings are preserved when you upgrade.</p>
+          <div class="download-actions">
+            <a class="button primary" href="https://github.com/Vortextbloons/talo/releases/latest">
+              Download Talo 0.3.0
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7.5 11 4.5 4.5 4.5-4.5"/><path d="M5 19.5h14"/></svg>
+            </a>
+            <a class="button ghost" href="https://github.com/Vortextbloons/talo/blob/main/docs/RELEASE-NOTES.md">Release notes</a>
+          </div>
+          <p class="download-note">Windows x64 · Bring your own model provider · Updates from inside the app</p>
         </div>
       </section>
+    </main>
 
-      <footer class="site-footer">
-        <span class="footer-brand">
-          <svg viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect width="40" height="40" rx="12" fill="#16362f"/><path d="M11 24.5c0-6.3 3.3-10.4 9-13.5 5.7 3.1 9 7.2 9 13.5a9 9 0 0 1-18 0Z" fill="#d4eb78"/><path d="M20 17.5v12" stroke="#16362f" stroke-width="1.6" stroke-linecap="round"/></svg>
+    <footer class="site-foot">
+      <div class="wrap foot-inner">
+        <span class="foot-brand">
+          <img src="mascot.png" alt="" width="20" height="20">
           Talo, for the work that stays with you.
         </span>
-        <nav class="footer-links" aria-label="Footer navigation">
+        <nav class="foot-links" aria-label="Footer">
           <a href="https://github.com/Vortextbloons/talo">Source on GitHub</a>
           <a href="https://github.com/Vortextbloons/talo/releases">Downloads</a>
           <a href="https://github.com/Vortextbloons/talo/issues">Support</a>
           <a href="privacy.html">Privacy</a>
         </nav>
-      </footer>
-    </main>
+      </div>
+    </footer>
 
     <script>
-      const playDemo = document.querySelector('#playDemo');
-      const demoResearch = document.querySelector('#demoResearch');
-      const demoResults = document.querySelector('#demoResults');
-      const demoStatus = document.querySelector('#demoStatus');
-      const sleep = milliseconds => new Promise(resolve => window.setTimeout(resolve, milliseconds));
+      const log = document.querySelector('#demoLog');
+      const welcome = document.querySelector('#demoWelcome');
+      const send = document.querySelector('#demoSend');
+      const composer = document.querySelector('#demoComposer');
+      const hint = document.querySelector('#demoHint');
+      const status = document.querySelector('#demoStatus');
+      const ask = document.querySelector('#demoAsk');
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const sleep = milliseconds => new Promise(resolve => window.setTimeout(resolve, reduced ? 60 : milliseconds));
+      let playing = false;
 
-      playDemo.addEventListener('click', async () => {
-        if (playDemo.disabled) return;
-        playDemo.disabled = true;
-        playDemo.querySelector('span').textContent = 'Playing demo…';
-        demoResearch.hidden = true;
-        demoResults.hidden = true;
-        demoStatus.textContent = 'Talo starts with your request';
+      function node(tag, className, text) {
+        const element = document.createElement(tag);
+        if (className) element.className = className;
+        if (text !== undefined) element.textContent = text;
+        return element;
+      }
+
+      function scrollDown() {
+        requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
+      }
+
+      function addUserMessage(text) {
+        const message = node('div', 'msg user');
+        const body = node('div', 'msg-body');
+        body.append(node('p', 'msg-text', text));
+        message.append(body);
+        return message;
+      }
+
+      function addAssistantMessage() {
+        const message = node('div', 'msg');
+        const avatar = document.createElement('img');
+        avatar.className = 'msg-avatar';
+        avatar.src = 'mascot.png';
+        avatar.alt = '';
+        avatar.width = 17;
+        avatar.height = 14;
+        const body = node('div', 'msg-body');
+        body.append(node('div', 'msg-role', 'Talo'));
+        message.append(avatar, body);
+        return { message, body };
+      }
+
+      const listing = [
+        ['Pine Creek Cabin', '$182 / night', 'Trail access · Free cancellation'],
+        ['Ridgeview Hideaway', '$209 / night', 'Trail access · Cancel by Tuesday'],
+        ['Juniper House', '$164 / night', '2.4 mi to trails · Partial refund']
+      ];
+
+      async function play() {
+        if (playing) return;
+        playing = true;
+        welcome.hidden = true;
+        send.disabled = true;
+        composer.classList.add('playing');
+        ask.textContent = 'Ask a follow-up…';
+        ask.classList.add('placeholder');
+        hint.textContent = 'Working…';
+        status.textContent = 'Sample running';
+        log.querySelectorAll('.msg').forEach(entry => entry.remove());
+
+        log.append(addUserMessage('Find three quiet cabin stays near Estes Park for a weekend. Compare the price, nearby trails, and cancellation terms.'));
+        scrollDown();
+
+        const reply = addAssistantMessage();
+        const typing = node('span', 'typing');
+        typing.append(node('i'), node('i'), node('i'));
+        reply.body.append(typing);
+        log.append(reply.message);
+        scrollDown();
+
+        await sleep(720);
+        typing.remove();
+        reply.body.append(node('p', 'msg-text', 'On it. I’ll look for current options and compare the details you asked for.'));
+        scrollDown();
+
+        const research = node('div', 'research');
+        const researchRow = node('div', 'research-row');
+        const pulse = node('span', 'research-pulse');
+        const researchLabel = node('span', '', 'Researching the web');
+        researchRow.append(pulse, researchLabel);
+        research.append(researchRow);
+        const files = node('div', 'research-files');
+        files.append(node('span', '', 'Estes Park'), node('span', '', 'Cabin stays'), node('span', '', 'Cancellation terms'));
+        research.append(files);
+        reply.body.append(research);
+        scrollDown();
+        hint.textContent = 'Researching in the browser';
+        status.textContent = 'Researching';
+
+        await sleep(1000);
+        researchLabel.textContent = 'Reading listings in the browser';
         await sleep(900);
-        demoResearch.hidden = false;
-        demoStatus.textContent = 'Research and browser activity';
-        await sleep(1400);
-        demoResults.hidden = false;
-        demoStatus.textContent = 'Example results · illustrative only';
-        playDemo.disabled = false;
-        playDemo.querySelector('span').textContent = 'Replay the demo';
-      });
+        researchLabel.textContent = 'Comparing price, trails, and cancellation';
+        await sleep(900);
+
+        research.remove();
+        reply.body.append(node('p', 'msg-text', 'Here are three to compare. I can open any of them in the browser if you want a closer look.'));
+        const results = node('div', 'results');
+        listing.forEach(([name, price, detail]) => {
+          const row = node('div');
+          const left = node('div');
+          left.append(node('strong', '', name), node('small', '', detail));
+          row.append(left, node('b', '', price));
+          results.append(row);
+        });
+        reply.body.append(results);
+        reply.body.append(node('p', 'sample-note', 'Sample listings · not live results'));
+
+        scrollDown();
+        hint.textContent = 'Replay the sample';
+        status.textContent = 'Sample finished';
+        send.disabled = false;
+        composer.classList.remove('playing');
+        playing = false;
+      }
+
+      send.addEventListener('click', () => { void play(); });
     </script>
   </body>
 </html>

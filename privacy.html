@@ -1,1 +1,381 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Talo privacy policy</title><style>body{font:17px/1.65 system-ui,sans-serif;max-width:760px;margin:64px auto;padding:0 24px;color:#242424}a{color:#285da8}h1,h2{line-height:1.2}h2{margin-top:36px}nav{display:flex;gap:24px}</style></head><body><nav><a href="./">Talo</a><a href="https://github.com/Vortextbloons/talo">GitHub</a></nav><h1>Talo privacy policy</h1><p>Last updated: October 22, 2026</p><p>Talo is a desktop AI assistant. This policy describes how Talo handles information when you use the app, including its optional Google integration.</p><h2>Information Talo uses</h2><p>Talo stores chats, settings, workspace information, and task history on your computer. Requests to an AI model are sent to the provider you configure, together with the conversation context and tool results needed to answer. That provider processes requests under its own privacy policy and your account settings.</p><p>Connecting Google is optional. With your permission, Talo can access Gmail messages and drafts, calendar events, and Drive file metadata and contents. It uses this access to answer your requests and carry out actions you authorize. Google content returned to a chat may be included in requests to your configured AI provider and saved in local chat history. If you enable other integrations, such as Telegram, content you choose to use through them also passes through those services.</p><p>Talo requests these Google permissions:</p><ul><li>`gmail.readonly`: find and read email messages.</li><li>`gmail.compose`: create drafts and send email.</li><li>`calendar.events`: read, create, update, and delete calendar events.</li><li>`drive.readonly`: find and read Drive files.</li><li>`drive.file`: create and update files accessible to Talo under this permission.</li></ul><p>Talo asks for approval before its Google tools send email, create drafts, change calendar events, or write Drive files. Read access can be used by chats and tasks that you authorize.</p><h2>Storage and sharing</h2><p>Google sign-in takes place in your system browser. Talo does not receive your Google password. On Windows, Talo protects stored Google access and refresh tokens with Windows user-bound encryption. These tokens are used by the desktop host to contact Google and are not supplied to the AI model.</p><p>Google data is shared with Google to perform API requests and with your configured AI provider when needed for the assistant features you use. Talo does not sell Google user data, use it for advertising, or train its own AI models on it. Talo&#x27;s use and transfer of information received from Google APIs will adhere to the Google API Services User Data Policy, including its Limited Use requirements: https://developers.google.com/terms/api-services-user-data-policy.</p><h2>Your choices and deletion</h2><p>You can disconnect Google in Talo&#x27;s settings. This removes the local sign-in and attempts to revoke its Google authorization. You can also revoke access at https://myaccount.google.com/permissions. Revoking or disconnecting does not remove content already saved in chats, delete files or messages in Google, or remove information already processed by an external provider.</p><p>Local chat and task information remains on your computer until you delete it. You can remove Talo&#x27;s local app data to remove its stored information; uninstalling alone may leave app data behind. External providers and Google apply their own retention and deletion policies to information they process.</p><h2>Contact and changes</h2><p>For privacy questions, contact the maintainer through https://github.com/Vortextbloons/talo/issues. Do not include private messages, credentials, or tokens in public issues. Updates to this policy will be published in this repository with a revised date. </p></body></html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#121211">
+    <meta name="description" content="How Talo, a Windows desktop AI assistant, handles chats, provider requests, and optional Google Workspace access.">
+    <link rel="icon" href="mascot.png" type="image/png">
+    <link rel="apple-touch-icon" href="mascot.png">
+    <title>Talo privacy policy</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #121211;
+        --paper: #191917;
+        --soft: #232320;
+        --sidebar: #0b0b0a;
+        --text: #f1f0eb;
+        --muted: #9c9c94;
+        --faint: #6e6e67;
+        --line: #2b2b27;
+        --line-strong: #3b3b35;
+        --yellow: #ffd45c;
+        --yellow-deep: #d8a92c;
+        --display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+        --sans: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+        --mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+      }
+
+      * { box-sizing: border-box; }
+
+      html { background: var(--bg); }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 15px;
+        line-height: 1.75;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        background:
+          radial-gradient(680px 420px at 6% -10%, rgba(255, 212, 92, .06), transparent 70%),
+          radial-gradient(760px 460px at 98% -12%, rgba(255, 212, 92, .04), transparent 72%);
+      }
+
+      body > * { position: relative; z-index: 1; }
+
+      h1, h2, p { margin-top: 0; }
+
+      a { color: var(--yellow); text-decoration: none; border-bottom: 1px solid rgba(255, 212, 92, .3); }
+      a:hover { border-bottom-color: var(--yellow); }
+
+      a:focus-visible {
+        outline: 2px solid var(--yellow);
+        outline-offset: 3px;
+        border-radius: 4px;
+      }
+
+      ::selection { background: #5a4720; color: var(--text); }
+
+      .wrap { width: min(1060px, calc(100% - 64px)); margin-inline: auto; }
+
+      .site-head {
+        border-bottom: 1px solid var(--line);
+        background: rgba(18, 18, 17, .82);
+        backdrop-filter: blur(14px) saturate(120%);
+      }
+
+      .head-inner {
+        display: flex;
+        align-items: center;
+        height: 66px;
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        text-decoration: none;
+        border: 0;
+        color: var(--text);
+      }
+
+      .brand img {
+        width: 28px;
+        height: 28px;
+        display: block;
+        filter: drop-shadow(0 0 14px rgba(255, 212, 92, .18));
+      }
+
+      .wordmark { font-size: 20px; font-weight: 640; letter-spacing: -1.1px; }
+      .wordmark span { color: var(--yellow); }
+
+      .back {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        margin-left: auto;
+        border: 0;
+        color: var(--muted);
+        font-size: 12px;
+        text-decoration: none;
+      }
+
+      .back:hover { color: var(--text); }
+      .back svg { width: 12px; height: 12px; }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 186px minmax(0, 1fr);
+        gap: 64px;
+        padding: 58px 0 80px;
+      }
+
+      .toc {
+        position: sticky;
+        top: 98px;
+        align-self: start;
+      }
+
+      .toc strong {
+        display: block;
+        margin-bottom: 12px;
+        color: var(--faint);
+        font-size: 9.5px;
+        font-weight: 600;
+        letter-spacing: .13em;
+        text-transform: uppercase;
+      }
+
+      .toc nav { display: grid; gap: 1px; }
+
+      .toc a {
+        padding: 6px 10px;
+        border: 0;
+        border-left: 2px solid transparent;
+        border-radius: 0 6px 6px 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+        text-decoration: none;
+        transition: color .14s ease, background-color .14s ease;
+      }
+
+      .toc a:hover { color: var(--text); background: var(--paper); }
+      .toc a:first-of-type { border-left-color: var(--yellow); color: var(--text); }
+
+      .toc-note {
+        margin: 22px 0 0;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+        color: var(--faint);
+        font-size: 10.5px;
+        line-height: 1.6;
+      }
+
+      .toc-note a { font-size: 10.5px; }
+
+      .policy { min-width: 0; max-width: 700px; }
+
+      .kicker {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 18px;
+        color: var(--muted);
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: .13em;
+        text-transform: uppercase;
+      }
+
+      .kicker::before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--yellow);
+        box-shadow: 0 0 0 4px rgba(255, 212, 92, .09);
+      }
+
+      h1 {
+        margin-bottom: 12px;
+        font-family: var(--display);
+        font-size: clamp(34px, 4vw, 44px);
+        font-weight: 600;
+        line-height: 1.05;
+        letter-spacing: -1.7px;
+      }
+
+      .updated {
+        margin-bottom: 24px;
+        color: var(--faint);
+        font-size: 11.5px;
+      }
+
+      .lede {
+        padding-bottom: 28px;
+        margin-bottom: 0;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 15.5px;
+      }
+
+      section { padding-top: 32px; }
+
+      h2 {
+        margin-bottom: 12px;
+        font-family: var(--display);
+        font-size: 19px;
+        font-weight: 600;
+        letter-spacing: -.5px;
+        line-height: 1.3;
+      }
+
+      section p { margin-bottom: 14px; color: #c3c2bb; }
+      section p:last-child { margin-bottom: 0; }
+
+      .scopes {
+        display: grid;
+        gap: 7px;
+        margin: 16px 0 20px;
+        padding: 0;
+        list-style: none;
+      }
+
+      .scopes li {
+        display: grid;
+        grid-template-columns: 172px minmax(0, 1fr);
+        gap: 14px;
+        align-items: baseline;
+        padding: 11px 14px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: var(--paper);
+      }
+
+      code {
+        color: var(--yellow);
+        font-family: var(--mono);
+        font-size: 11.5px;
+      }
+
+      .scopes span { color: var(--muted); font-size: 12.5px; }
+
+      .site-foot {
+        border-top: 1px solid var(--line);
+      }
+
+      .foot-inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        padding: 26px 0 36px;
+      }
+
+      .foot-brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        color: var(--muted);
+        font-size: 11.5px;
+      }
+
+      .foot-brand img { width: 20px; height: 20px; }
+
+      .foot-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 22px;
+        font-size: 11.5px;
+      }
+
+      .foot-links a { border: 0; color: var(--muted); }
+      .foot-links a:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+
+      @media (max-width: 900px) {
+        .layout { grid-template-columns: 1fr; gap: 26px; padding-top: 44px; }
+        .toc { position: static; display: none; }
+      }
+
+      @media (max-width: 620px) {
+        .wrap { width: calc(100% - 40px); }
+        .head-inner { height: 60px; }
+        .scopes li { grid-template-columns: 1fr; gap: 3px; }
+        .foot-inner { flex-direction: column; align-items: flex-start; gap: 14px; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="site-head">
+      <div class="wrap head-inner">
+        <a class="brand" href="./" aria-label="Talo home">
+          <img src="mascot.png" alt="" width="28" height="28">
+          <span class="wordmark">talo<span>.</span></span>
+        </a>
+        <a class="back" href="./">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="m10.5 6.5-5.5 5.5 5.5 5.5"/></svg>
+          Back to Talo
+        </a>
+      </div>
+    </header>
+
+    <main class="wrap layout">
+      <aside class="toc">
+        <strong>On this page</strong>
+        <nav aria-label="Policy sections">
+          <a href="#information">Information Talo uses</a>
+          <a href="#storage">Storage and sharing</a>
+          <a href="#choices">Your choices and deletion</a>
+          <a href="#contact">Contact and changes</a>
+        </nav>
+        <p class="toc-note">Talo is a Windows desktop assistant. Google Workspace is optional and can be disconnected at any time.</p>
+      </aside>
+
+      <article class="policy">
+        <div class="kicker">Privacy</div>
+        <h1>Talo privacy policy</h1>
+        <p class="updated">Last updated: October 22, 2026</p>
+        <p class="lede">Talo is a desktop AI assistant. This policy describes how Talo handles information when you use the app, including its optional Google integration.</p>
+
+        <section id="information">
+          <h2>Information Talo uses</h2>
+          <p>Talo stores chats, settings, workspace information, and task history on your computer. Requests to an AI model are sent to the provider you configure, together with the conversation context and tool results needed to answer. That provider processes requests under its own privacy policy and your account settings.</p>
+          <p>Connecting Google is optional. With your permission, Talo can access Gmail messages and drafts, calendar events, and Drive file metadata and contents. It uses this access to answer your requests and carry out actions you authorize. Google content returned to a chat may be included in requests to your configured AI provider and saved in local chat history. If you enable other integrations, such as Telegram, content you choose to use through them also passes through those services.</p>
+          <p>Talo requests these Google permissions:</p>
+          <ul class="scopes">
+            <li><code>gmail.readonly</code><span>find and read email messages.</span></li>
+            <li><code>gmail.compose</code><span>create drafts and send email.</span></li>
+            <li><code>calendar.events</code><span>read, create, update, and delete calendar events.</span></li>
+            <li><code>drive.readonly</code><span>find and read Drive files.</span></li>
+            <li><code>drive.file</code><span>create and update files accessible to Talo under this permission.</span></li>
+          </ul>
+          <p>Talo asks for approval before its Google tools send email, create drafts, change calendar events, or write Drive files. Read access can be used by chats and tasks that you authorize.</p>
+        </section>
+
+        <section id="storage">
+          <h2>Storage and sharing</h2>
+          <p>Google sign-in takes place in your system browser. Talo does not receive your Google password. On Windows, Talo protects stored Google access and refresh tokens with Windows user-bound encryption. These tokens are used by the desktop host to contact Google and are not supplied to the AI model.</p>
+          <p>Google data is shared with Google to perform API requests and with your configured AI provider when needed for the assistant features you use. Talo does not sell Google user data, use it for advertising, or train its own AI models on it. Talo's use and transfer of information received from Google APIs will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including its Limited Use requirements.</p>
+        </section>
+
+        <section id="choices">
+          <h2>Your choices and deletion</h2>
+          <p>You can disconnect Google in Talo's settings. This removes the local sign-in and attempts to revoke its Google authorization. You can also revoke access at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>. Revoking or disconnecting does not remove content already saved in chats, delete files or messages in Google, or remove information already processed by an external provider.</p>
+          <p>Local chat and task information remains on your computer until you delete it. You can remove Talo's local app data to remove its stored information; uninstalling alone may leave app data behind. External providers and Google apply their own retention and deletion policies to information they process.</p>
+        </section>
+
+        <section id="contact">
+          <h2>Contact and changes</h2>
+          <p>For privacy questions, contact the maintainer through <a href="https://github.com/Vortextbloons/talo/issues">the issue tracker</a>. Do not include private messages, credentials, or tokens in public issues. Updates to this policy will be published in this repository with a revised date.</p>
+        </section>
+      </article>
+    </main>
+
+    <footer class="site-foot">
+      <div class="wrap foot-inner">
+        <span class="foot-brand">
+          <img src="mascot.png" alt="" width="20" height="20">
+          Talo, for the work that stays with you.
+        </span>
+        <nav class="foot-links" aria-label="Footer">
+          <a href="./">Home</a>
+          <a href="https://github.com/Vortextbloons/talo">Source on GitHub</a>
+          <a href="https://github.com/Vortextbloons/talo/releases">Downloads</a>
+          <a href="https://github.com/Vortextbloons/talo/issues">Support</a>
+        </nav>
+      </div>
+    </footer>
+  </body>
+</html>
