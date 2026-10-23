@@ -6,7 +6,7 @@
   import { asksFor } from '../lib/agent.svelte';
   import { browser } from '../lib/browser.svelte';
   import { COMPANION_COLORS } from '../lib/agents';
-  import { companion, setCompanionColor, resetCompanionColor } from '../lib/theme.svelte';
+  import { companion, setCompanionColor, resetCompanionColor, activeTheme } from '../lib/theme.svelte';
 
   let { name = 'Talo', onRename }: { name?: string; onRename: (name: string) => Promise<void> } = $props();
   let editing = $state(false);
@@ -163,7 +163,7 @@
         <button type="button" class="dot" class:on={companion.color === swatch} style:background={swatch} aria-pressed={companion.color === swatch} aria-label="Agent color" title="Agent color" onclick={() => setCompanionColor(swatch)}></button>
       {/each}
       <label class="dot custom" title="Pick any color">
-        <input type="color" value={companion.color || '#ffd45c'} oninput={event => setCompanionColor(event.currentTarget.value)} aria-label="Custom companion color" />
+        <input type="color" value={companion.color || activeTheme().accent} oninput={event => setCompanionColor(event.currentTarget.value)} aria-label="Custom companion color" />
       </label>
       {#if companion.color}
         <button type="button" class="dot reset" onclick={resetCompanionColor} aria-label="Match the theme color" title="Match the theme color">↺</button>

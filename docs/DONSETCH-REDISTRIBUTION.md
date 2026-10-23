@@ -7,14 +7,14 @@ Talo launches the unmodified Windows executable as a separate stdio MCP process.
 The bundle includes:
 
 - `DONSETCH-LICENSE.txt`, copyright/license notices, exact version, commit and pinned SHA-256 values in `donsetch-manifest.json`.
-- `donsetch-v4.10.1-source.tar.gz`: checksum-pinned source at the exact release commit, including Cargo.lock, build.rs and the upstream release workflow.
+- `DONSETCH-SOURCE.txt`: exact version, commit and SHA-256 plus download instructions for the Corresponding Source, which is published as a release asset next to the installer rather than embedded in it.
 - `research-notices/`: ONNX Runtime 1.24.2 license and third-party notices; PDFium chromium/7802 license set; reranking model card and Apache-2.0 license.
 - Unmodified Windows executable, ONNX Runtime and PDFium DLLs from the checksum-pinned official release archive. No automatic self-updates.
 
 Before publishing an installer, the distributor must resolve and record these release requirements:
 
 1. Preserve upstream copyright, AGPL license, warranty notices and recipients' rights to redistribute and modify. Do not apply incompatible restrictions to covered code.
-2. Provide equivalent, free access to the complete Corresponding Source alongside the installer under section 6(d), with clear download instructions. Embedded source is useful, but a GitHub tag link alone is insufficient. Verify that the offered source includes any required non-system linked dependency source and the scripts/configuration needed to build it; the upstream repository archive alone does not establish completeness of those dependencies.
+2. Provide equivalent, free access to the complete Corresponding Source alongside the installer under section 6(d), with clear download instructions. The release workflow uploads the checksum-pinned `donsetch-v4.10.1-source.tar.gz` as a release asset next to the installer and fails the run if the upload fails; `DONSETCH-SOURCE.txt` in the installed bundle records the exact URL, commit and SHA-256. A GitHub tag link alone is insufficient. Verify that the offered source includes any required non-system linked dependency source and the scripts/configuration needed to build it; the upstream repository archive alone does not establish completeness of those dependencies.
 3. Review whether the final distribution is an aggregate or a combined/derived work and select Talo's own distribution license accordingly. Talo's own license has not yet been selected. Do not describe this integration as an exemption from AGPL.
 4. If DonSeTch is modified, mark changes and dates, provide the modified Corresponding Source and preserve applicable interactive notices. If users interact remotely with a modified version over a network, section 13 requires a prominent source-access offer. Talo currently uses only a local stdio connection to unmodified DonSeTch.
 5. Assess section 6 Installation Information if distributing with a covered User Product, and keep the source offer/download available for the applicable distribution method.

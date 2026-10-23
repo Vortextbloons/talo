@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile, cp } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, cp, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
@@ -50,10 +50,30 @@ export async function bundleDonsetch(destination) {
     if (files[name] !== release.files[name]) throw new Error(`Extracted DonSeTch checksum mismatch: ${name}`);
   }
   const modelDir = path.join(destination, 'research-models/rerank');
+  await rm(path.join(destination, 'research-models'), { recursive: true, force: true });
   for (const model of release.models) await verified(`https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/${model.file}`, path.join(modelDir, model.name), model.sha256);
 
   const source = await verified(`https://codeload.github.com/dondai44423/donsetch/tar.gz/${release.commit}`, 'vendor/downloads/donsetch-source.tar.gz', release.sourceSha256);
-  await writeFile(path.join(destination, `donsetch-v${release.version}-source.tar.gz`), source);
+  const repository = process.env.GITHUB_REPOSITORY || 'Vortextbloons/talo';
+  const appVersion = JSON.parse(await readFile('package.json', 'utf8')).version;
+  const sourceAsset = `donsetch-v${release.version}-source.tar.gz`;
+  await rm(path.join(destination, sourceAsset), { force: true });
+  await writeFile(path.join(destination, 'DONSETCH-SOURCE.txt'), [
+    `DonSeTch ${release.version} - Corresponding Source`,
+    '',
+    'Talo ships the unmodified DonSeTch Windows binaries. The complete Corresponding Source is published next to the installer:',
+    '',
+    `  https://github.com/${repository}/releases/download/v${appVersion}/${sourceAsset}`,
+    '',
+    `Source commit: ${release.commit}`,
+    `Archive: ${sourceAsset}`,
+    `SHA-256: ${release.sourceSha256}`,
+    '',
+    `The archive is generated from https://codeload.github.com/dondai44423/donsetch/tar.gz/${release.commit} and includes the upstream Cargo.lock, build.rs and release workflow.`,
+    '',
+    'If the download is unavailable, contact the distributor named in the release notes to obtain the source for no more than the cost of distribution.',
+    '',
+  ].join('\n'));
   await cp('node_modules/donsetch/LICENSE', path.join(destination, 'DONSETCH-LICENSE.txt'));
   const notices = path.join(destination, 'research-notices');
   await mkdir(notices, { recursive: true });
@@ -71,6 +91,6 @@ export async function bundleDonsetch(destination) {
   execFileSync('tar.exe', ['xzf', pdfiumArchive, '-C', tarDir(notices), 'LICENSE', 'licenses'], { windowsHide: true });
   await cp('docs/DONSETCH-REDISTRIBUTION.md', path.join(destination, 'DONSETCH-REDISTRIBUTION.md'));
   await writeFile(path.join(destination, 'donsetch-manifest.json'), JSON.stringify({ ...release, files, sourceSha256: sha256(source) }, null, 2));
-  console.log(`Verified DonSeTch ${release.version}, Windows DLLs, corresponding source and packaged reranking model.`);
+  console.log(`Verified DonSeTch ${release.version}, Windows DLLs, reranking model and the corresponding-source offer.`);
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) await bundleDonsetch(path.resolve('vendor/bundle'));

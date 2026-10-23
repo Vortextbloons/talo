@@ -49,6 +49,13 @@ async function prune(dir){
 }
 await prune(path.join(destination,'node_modules'));
 await rm(path.join(destination,'node_modules/recheck-jar'),{recursive:true,force:true});
+for(const entry of [
+  'node_modules/@earendil-works/pi-coding-agent/docs/images',
+  'node_modules/@earendil-works/pi-coding-agent/dist/bundle',
+  'node_modules/openai/src',
+  'node_modules/pi-mcp-adapter/banner.png',
+  'node_modules/playwright-core/lib/vite',
+])await rm(path.join(destination,entry),{recursive:true,force:true});
 await copyRuntimeCode();
 
 await bundleDonsetch(destination);

@@ -371,6 +371,21 @@ fn open_main(app: &tauri::AppHandle) {
         }
     });
 }
+
+#[tauri::command]
+async fn set_window_background(app: tauri::AppHandle, color: String) -> Result<(), String> {
+    run_blocking(app, move |app| {
+        let parsed: tauri::window::Color = color.trim().parse().map_err(|_| "Invalid color".to_string())?;
+        if let Some(window) = app.get_webview_window("main") {
+            window
+                .set_background_color(Some(parsed))
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    })
+    .await
+}
+
 #[tauri::command]
 async fn runtime_status(
     shared: tauri::State<'_, Shared>,
@@ -813,7 +828,8 @@ fn main() {
             chatgpt::chatgpt_poll,
             chat::provider_disconnect,
             chat::provider_models,
-            chat::theme_draft
+            chat::theme_draft,
+            set_window_background
         ])
         .setup(|app| {
             let data = app.path().app_data_dir()?;

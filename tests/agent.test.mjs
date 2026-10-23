@@ -106,3 +106,66 @@ test('a tool call reaches the host and the turn continues after the host replies
     await rm(data, { recursive: true, force: true });
   }
 });
+
+test('a structured ask reaches the host through the tools layer', { timeout: 45000 }, async () => {
+  const data = await mkdtemp(path.join(os.tmpdir(), 'talo-ask-'));
+  const provider = await startMockProvider({
+    mode: 'agent-tool',
+    agentArguments: {
+      operation: 'ask', header: 'Which folder?',
+      questions: [{ id: 'q1', question: 'Where?', options: [{ id: 'a', label: 'Docs' }, { id: 'b', label: 'Desktop' }], recommended: 'a' }],
+    },
+  });
+  const worker = startWorker(data, { idleMs: 2000 });
+  try {
+    await worker.waitReady();
+    const selection = { conversationId: 'ask-chat', provider: 'custom', model: 'mock-model', apiKey: provider.state.key, baseUrl: provider.url };
+    await worker.request('open', 'session.open', { ...selection, sessionPath: null });
+    await worker.request('prompt', 'session.prompt', {
+      conversationId: 'ask-chat', generationId: 'gen-ask-1',
+      text: 'Ask me where to save', capabilities: ['web'], context: '',
+    });
+    const call = await worker.wait(event => event.type === 'agent' && event.message?.method === 'agent.call');
+    assert.equal(call.message.params.operation, 'ask');
+    assert.equal(call.message.params.questions[0].question, 'Where?');
+    worker.send({ type: 'agent_response', message: { jsonrpc: '2.0', id: call.message.id, result: { askId: 'ask-1', expired: false, answers: [{ questionId: 'q1', optionId: 'b', decided: false }] } } });
+    const done = await worker.waitGeneration('ask-chat', 'gen-ask-1');
+    assert.equal(done.event.state, 'completed');
+    assert.ok(provider.state.requests.at(-1).body.messages.some(message => message.role === 'tool' && message.content.includes('ask-1')));
+  } finally {
+    await worker.kill();
+    await provider.close();
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
+test('an ask payload that breaks the schema fails with an error the model can act on', { timeout: 45000 }, async () => {
+  const data = await mkdtemp(path.join(os.tmpdir(), 'talo-ask-bad-'));
+  const provider = await startMockProvider({
+    mode: 'agent-tool',
+    agentArguments: {
+      operation: 'ask', header: 'Which folder?',
+      questions: [{ id: 'q1', question: 'Where?', options: [{ id: 'a', label: 'Docs', title: 'Docs folder' }, { id: 'b', label: 'Desktop' }] }],
+    },
+  });
+  const worker = startWorker(data, { idleMs: 2000 });
+  try {
+    await worker.waitReady();
+    const selection = { conversationId: 'ask-bad-chat', provider: 'custom', model: 'mock-model', apiKey: provider.state.key, baseUrl: provider.url };
+    await worker.request('open', 'session.open', { ...selection, sessionPath: null });
+    await worker.request('prompt', 'session.prompt', {
+      conversationId: 'ask-bad-chat', generationId: 'gen-ask-2',
+      text: 'Ask me where to save', capabilities: ['web'], context: '',
+    });
+    const done = await worker.waitGeneration('ask-bad-chat', 'gen-ask-2');
+    assert.equal(done.event.state, 'completed');
+    const toolMessage = provider.state.requests.at(-1).body.messages.find(message => message.role === 'tool');
+    assert.ok(toolMessage, 'the model sees the tool outcome');
+    assert.match(toolMessage.content, /schema/i, 'the failure names the schema');
+    assert.match(toolMessage.content, /additional propert|options\/0/i, 'the failure names the offending field so the model can fix it');
+  } finally {
+    await worker.kill();
+    await provider.close();
+    await rm(data, { recursive: true, force: true });
+  }
+});

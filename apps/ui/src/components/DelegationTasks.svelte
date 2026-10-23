@@ -51,7 +51,7 @@
         style:border-color={busy ? busyBorder(agent.color) : undefined}
       >
         <button type="button" class="card-open" aria-label={`Open ${task.title}`} onclick={() => onOpen(task)}></button>
-        <span class="agent-avatar" class:busy><AgentMark size={18} color={agent.color} /></span>
+        <span class="agent-avatar" class:busy style:color={agent.color}><AgentMark size={18} color={agent.color} /></span>
         <div class="task-main">
           <div class="line">
             <strong class="title">{task.title}</strong>
@@ -92,7 +92,7 @@
   .card-open:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
   .agent-avatar,.task-main,.stop{position:relative;z-index:1}
   .agent-avatar{display:block;width:18px;flex-shrink:0;pointer-events:none}
-  .agent-avatar.busy{animation:agent-think 1.4s ease-in-out infinite}
+  .agent-avatar.busy{animation:agent-think 1.4s ease-in-out infinite;filter:drop-shadow(0 0 6px color-mix(in srgb,currentColor 35%,transparent))}
   .task-main{min-width:0;flex:1;pointer-events:none}
   .line{display:flex;align-items:center;gap:6px;min-width:0}
   .title{flex:1;min-width:0;font-size:11px;font-weight:550;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

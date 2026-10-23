@@ -134,7 +134,13 @@ export class McpManager {
     if (!args || typeof args!=='object' || Array.isArray(args) || Buffer.byteLength(JSON.stringify(args))>32_768) throw new Error('Tool arguments must be an object under 32 KiB.');
     const c=await this.connect(id,signal), selected=c.tools.get(tool), validate=c.validators.get(tool);
     if (!selected) throw new Error('Unknown MCP tool. Discover this server first.');
-    if (!validate(args)) throw new Error('Arguments do not match the MCP tool schema.');
+    if (!validate(args)) {
+      const errors = (validate.errors ?? []) as Array<{ instancePath?: string; message?: string }>;
+      const detail = errors.slice(0, 3)
+        .map(error => `${error.instancePath || 'arguments'} ${error.message ?? ''}`.trim())
+        .join('; ');
+      throw new Error(detail ? `Arguments do not match the tool schema: ${detail}.` : 'Arguments do not match the MCP tool schema.');
+    }
     c.active++; this.changed();
     try {
       const group=this.groups.find(group=>group.id===id);

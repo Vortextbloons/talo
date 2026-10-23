@@ -100,7 +100,7 @@ export async function startMockProvider(options = {}) {
           const call = state.mode === 'mcp-tool'
             ? {operation:'call',server:'fixture',tool:'echo',arguments:{text:'Pi executed real MCP'}}
             : state.mode === 'agent-tool'
-              ? {operation:'call',server:'talo-agent',tool:'agent',arguments:{operation:'schedule_save',title:'Daily briefing',prompt:'Summarize today’s priorities.',localTime:'2099-01-01T09:00',timezone:'America/Denver',recurrence:'daily'}}
+              ? {operation:'call',server:'talo-agent',tool:'agent',arguments:options.agentArguments ?? {operation:'schedule_save',title:'Daily briefing',prompt:'Summarize today’s priorities.',localTime:'2099-01-01T09:00',timezone:'America/Denver',recurrence:'daily'}}
               : {operation:'call',server:'talo-research',tool:'web_search',arguments:{query:'Rust documentation'}};
           chunk({role:'assistant', tool_calls:[{index:0,id:'call-web-1',type:'function',function:{name:'tools',arguments:JSON.stringify(call)}}]});
           chunk({}, 'tool_calls');

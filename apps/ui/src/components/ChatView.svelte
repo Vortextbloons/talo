@@ -1170,7 +1170,7 @@
   .chat-layout{--rail-w:240px;flex:1;min-width:0;min-height:0;display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr)}
   .chat-layout>*{min-width:0}
   .threads{position:relative;z-index:2;border-right:1px solid var(--line);min-height:0;overflow:visible}
-  .rail-inner{width:100%;height:100%;padding:2px 20px 8px 0;overflow-y:auto;display:flex;flex-direction:column;scrollbar-gutter:stable}
+  .rail-inner{width:100%;height:100%;padding:2px 20px 8px 14px;overflow-y:auto;display:flex;flex-direction:column;scrollbar-gutter:stable}
   .rail-greeting{padding:6px 2px 20px}
   .rail-greeting strong{display:block;font-size:21px;letter-spacing:-.8px;font-weight:560}
   .rail-greeting span{display:block;margin-top:6px;font-size:12px;color:var(--muted);line-height:1.55}
@@ -1370,7 +1370,7 @@
   @media(max-width:980px){
     .chat-layout{--rail-w:216px}
     .conversation{padding-left:12px}
-    .rail-inner{padding:0 16px 8px 0}
+    .rail-inner{padding:0 16px 8px 12px}
   }
   @media(max-width:560px){.chat-workspace{flex-direction:column}.chat-workspace :global(.companion){order:-1}}
   @media(max-width:1120px){

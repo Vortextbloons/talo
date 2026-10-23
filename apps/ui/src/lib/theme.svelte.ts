@@ -1,3 +1,5 @@
+import { invoke, isTauri } from '@tauri-apps/api/core';
+
 export type SurfaceVar =
   | '--bg' | '--paper' | '--soft' | '--sidebar' | '--text'
   | '--muted' | '--faint' | '--line' | '--line-strong' | '--black';
@@ -71,6 +73,7 @@ function apply(theme: Theme): void {
     if (value) root.setProperty(surface, value);
     else root.removeProperty(surface);
   }
+  if (isTauri()) void invoke('set_window_background', { color: theme.surfaces?.['--bg'] ?? '#121211' }).catch(() => {});
 }
 
 function applyCompanion(): void {

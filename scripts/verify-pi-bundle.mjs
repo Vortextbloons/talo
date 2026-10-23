@@ -12,7 +12,9 @@ for (const [name, expected] of Object.entries(release.files)) {
 for (const model of release.models) {
   if (sha256(await readFile(path.join('vendor/bundle/research-models/rerank', model.name))) !== model.sha256) throw new Error(`Bundled model checksum mismatch: ${model.name}`);
 }
-if (sha256(await readFile(`vendor/bundle/donsetch-v${release.version}-source.tar.gz`)) !== release.sourceSha256) throw new Error('Bundled DonSeTch source checksum mismatch');
+if (sha256(await readFile('vendor/downloads/donsetch-source.tar.gz')) !== release.sourceSha256) throw new Error('Downloaded DonSeTch source checksum mismatch');
+const sourceOffer = await readFile('vendor/bundle/DONSETCH-SOURCE.txt', 'utf8');
+if (!sourceOffer.includes(release.sourceSha256) || !sourceOffer.includes(`donsetch-v${release.version}-source.tar.gz`)) throw new Error('Bundled DonSeTch source offer is incomplete');
 
 
 const data = await mkdtemp(path.join(os.tmpdir(), 'talo-bundle-check-'));

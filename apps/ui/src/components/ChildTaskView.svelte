@@ -65,7 +65,7 @@
 
 <div class="conversation-head child-head">
   <div class="agent-identity">
-    <span class="agent-avatar" class:busy={working}><AgentMark size={34} color={agent.color} /></span>
+    <span class="agent-avatar" class:busy={working} style:color={agent.color}><AgentMark size={34} color={agent.color} /></span>
     <div class="conversation-title">
       <div class="agent-line"><span class="agent-name" style:color={agent.color}>{agent.name}</span><span class="state">{stateLabel}</span></div>
       <strong>{snapshot.conversation.title || task?.title || 'Delegated task'}</strong>
@@ -140,7 +140,7 @@
   .child-head{align-items:center;padding-bottom:10px;margin-bottom:10px}
   .agent-identity{display:flex;align-items:flex-start;gap:11px;min-width:0}
   .agent-avatar{display:block;width:34px;flex-shrink:0;margin-top:1px}
-  .agent-avatar.busy{animation:agent-think 1.4s ease-in-out infinite;filter:drop-shadow(0 0 8px color-mix(in srgb,var(--accent) 30%,transparent))}
+  .agent-avatar.busy{animation:agent-think 1.4s ease-in-out infinite;filter:drop-shadow(0 0 8px color-mix(in srgb,currentColor 30%,transparent))}
   .conversation-title{min-width:0}
   .agent-line{display:flex;align-items:center;gap:7px;margin-bottom:2px}
   .agent-name{font-size:10px;letter-spacing:.03em;font-weight:620}

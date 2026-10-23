@@ -75,8 +75,22 @@ jobs:
 
             See the [changelog](https://github.com/Vortextbloons/talo/blob/main/CHANGELOG.md) for details.
             Installed copies update themselves: Settings → Advanced → Updates.
+
+            The DonSeTch corresponding source is published in this release as `donsetch-v4.10.1-source.tar.gz`.
           releaseDraft: false
           prerelease: false
           # Only NSIS is built, so the manifest must point at the setup.exe.
           updaterJsonPreferNsis: true
           retryAttempts: 2
+
+      - name: Publish the DonSeTch corresponding source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          app_version=$(node -p "require('./package.json').version")
+          source_version=$(node -p "require('./vendor/bundle/donsetch-manifest.json').version")
+          asset="donsetch-v${source_version}-source.tar.gz"
+          cp vendor/downloads/donsetch-source.tar.gz "$asset"
+          gh release upload "v${app_version}" "$asset" --clobber
