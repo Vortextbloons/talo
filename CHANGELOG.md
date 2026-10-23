@@ -3,6 +3,53 @@
 All notable changes to Talo are recorded here. Versions follow semantic versioning; the
 installer, the update manifest and this file are bumped together by `bun run version:set`.
 
+## 0.4.0 — 2026-10-23
+
+This release improves tray behavior, approval routing, theming, and the first-run
+experience.
+
+### Window and tray
+
+- Closing to tray now suspends and resumes the WebView2 webview, with a
+  `keepWebviewInTray` setting and updated window close handling.
+- The native window background color follows the active theme.
+
+### Approvals and onboarding
+
+- Browser and tool approvals now carry conversation and generation IDs, so prompts
+  route to the conversation that triggered them.
+- Reworked onboarding and permission dialogs.
+- Structured questions use a single-question wizard with progress pips.
+
+### Theming and branding
+
+- New theme store with a companion color picker; the AgentMark component replaces
+  the static mascot SVG, and agent avatars plus busy glow effects use the
+  companion color.
+- The assistant can draft a theme from a description through the new `theme.draft`
+  worker method.
+- Chat session system prompts now include the current date and current model.
+
+### Delegation
+
+- Delegated tasks carry an `agent_name`, persisted in the host database and shown
+  in the child transcript and delegation views.
+
+### Memory and navigation
+
+- Added a Memory page to primary navigation.
+
+### Tool errors and release bundle
+
+- MCP schema validation errors now surface field details.
+- Bundle assets pruned; DonSeTch source ships as a release asset.
+
+### Upgrading
+
+Install over an existing build. Chats, memory, projects, skills, schedules, and integrations are
+kept; the SQLite schema migrates in place. Installed copies update themselves through
+Settings → Advanced → Updates.
+
 ## 0.3.0 — 2026-10-23
 
 This release adds Google Workspace integrations and improves startup and long-running chat
