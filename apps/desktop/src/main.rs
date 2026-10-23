@@ -206,10 +206,13 @@ fn warm_worker(app: &tauri::AppHandle) {
     });
 }
 
+#[tauri::command]
+fn warm_worker_after_first_frame(app: tauri::AppHandle) {
+    warm_worker(&app);
+}
 
 
 fn open_main(app: &tauri::AppHandle) {
-    warm_worker(app);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
@@ -276,16 +279,78 @@ async fn load_settings(app: tauri::AppHandle) -> Result<Value, String> {
     run_blocking(app, |app| {
         let shared = app.state::<Shared>();
         let h = shared.lock().map_err(|e| e.to_string())?;
-        let value: Result<String, _> = h.db.query_row(
-            "SELECT value FROM settings WHERE key='onboarding'",
-            [],
-            |r| r.get(0),
-        );
-        match value {
-            Ok(v) => serde_json::from_str(&v).map_err(|e| e.to_string()),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(Value::Null),
-            Err(e) => Err(e.to_string()),
-        }
+        saved_settings(&h.db)
+    })
+    .await
+}
+
+fn saved_settings(db: &Connection) -> Result<Value, String> {
+    let value: Result<String, _> = db.query_row(
+        "SELECT value FROM settings WHERE key='onboarding'",
+        [],
+        |row| row.get(0),
+    );
+    match value {
+        Ok(value) => serde_json::from_str(&value).map_err(|error| error.to_string()),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(Value::Null),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn startup_snapshot(app: tauri::AppHandle) -> Result<Value, String> {
+    run_blocking(app, |app| {
+        let shared = app.state::<Shared>();
+        let mut host = shared
+            .lock()
+            .map_err(|_| "Talo state is unavailable".to_string())?;
+        let chat = chat::chat_bootstrap_inner(&mut host)?;
+        let mut errors = Vec::new();
+        let settings = saved_settings(&host.db).unwrap_or_else(|error| {
+            errors.push(format!("Could not load saved settings: {error}"));
+            Value::Null
+        });
+        let agent = agent::state(&host.db, &host);
+        let library = library::startup_state(&host.db).unwrap_or_else(|error| {
+            errors.push(format!("Could not load projects: {error}"));
+            Value::Null
+        });
+        let runtime = host.supervisor.status();
+        let tools: Vec<_> = host
+            .integrations
+            .pending
+            .iter()
+            .map(|(id, (message, _, _))| {
+                json!({
+                    "id": id,
+                    "action": message["params"]["action"],
+                    "scope": message["params"]["scope"],
+                    "summary": message["params"]["summary"]
+                })
+            })
+            .collect();
+        let google = google::approvals(&host);
+        let browser: Vec<_> = host
+            .browser_approvals
+            .iter()
+            .map(|(id, (message, _, _))| {
+                json!({
+                    "id": id,
+                    "tool": message["params"]["name"],
+                    "arguments": message["params"]["arguments"],
+                    "page": message["params"]["page"]
+                })
+            })
+            .collect();
+        Ok(json!({
+            "chat": chat,
+            "settings": settings,
+            "agent": agent,
+            "library": library,
+            "runtime": runtime,
+            "errors": errors,
+            "approvals": {"tools": tools, "google": google, "browser": browser}
+        }))
     })
     .await
 }
@@ -552,6 +617,8 @@ fn main() {
             agent::agent_action,
             delegation::delegation_action,
             runtime_status,
+            startup_snapshot,
+            warm_worker_after_first_frame,
             browser::browser_control,
             browser::browser_view,
             browser::browser_input,
@@ -573,6 +640,7 @@ fn main() {
             library::memory_delete,
             chat::conversation_create,
             chat::conversation_open,
+            chat::conversation_refresh,
             chat::conversation_history,
             chat::conversation_select_model,
             chat::conversation_thinking,
@@ -604,7 +672,6 @@ fn main() {
             scheduler::init(&db)?;
             agent::init(&db)?;
             skills::init(&db)?;
-            skills::sync(&db, &data);
             delegation::init(&db)?;
             scheduler::recover(&db)?;
             delegation::recover(&db)?;
@@ -627,6 +694,7 @@ fn main() {
                 "dependencies":{}
             }));
             app.manage(status_cache.clone());
+            let skill_data = data.clone();
             app.manage(Arc::new(Mutex::new(Host {
                 telegram: telegram::Telegram::default(),
                 google: google::Google::default(),
@@ -639,26 +707,17 @@ fn main() {
             browser_approvals: Default::default(),
             agent_asks: Default::default(),
             })));
+            std::thread::spawn(move || {
+                if let Ok(db) = Connection::open(skill_data.join("talo.db")) {
+                    let _ = db.busy_timeout(Duration::from_secs(5));
+                    skills::sync(&db, &skill_data);
+                }
+            });
             diagnostics::start(app.handle().clone());
             telegram::start(app.handle().clone());
             #[cfg(windows)]
             app.manage(power::Registration::new()?);
 
-
-
-            if let Some(window) = app.get_webview_window("main") {
-                let handle = app.handle().clone();
-                let warmed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                window.on_window_event(move |event| {
-                    if !matches!(event, tauri::WindowEvent::Focused(true)) {
-                        return;
-                    }
-                    if warmed.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                        return;
-                    }
-                    warm_worker(&handle);
-                });
-            }
             {
                 use tauri_plugin_notification::NotificationExt;
                 let handle=app.handle().clone();
@@ -753,12 +812,8 @@ fn main() {
             });
 
             let headless = std::env::args().any(|a| a == "--tray" || a == "--smoke-test");
-            if headless {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.destroy();
-                }
-            } else if let Some(window) = app.get_webview_window("main") {
-                window.show()?;
+            if !headless {
+                open_main(app.handle());
             }
             if std::env::args().any(|a| a == "--smoke-test") {
                 let shared = app.state::<Shared>();
@@ -856,7 +911,7 @@ mod dispatch_regression {
         agent::init(&host.db).unwrap();
         host.db
             .execute(
-                "INSERT INTO agent_assignments(id,workspace_id,title) VALUES('a1','general','Review invoice')",
+                "INSERT INTO library_workspaces(id,name,draft) VALUES('draft-1','Review invoices',1)",
                 [],
             )
             .unwrap();
@@ -878,7 +933,7 @@ mod dispatch_regression {
                 None,
             ))
             .unwrap();
-            assert_eq!(state["assignments"].as_array().unwrap().len(), 1);
+            assert_eq!(state["drafts"].as_array().unwrap().len(), 1);
             assert_eq!(
                 changes.load(Ordering::SeqCst),
                 0,
@@ -888,8 +943,8 @@ mod dispatch_regression {
 
         tauri::async_runtime::block_on(agent::agent_action(
             app.handle().clone(),
-            "assignment".into(),
-            Some(json!({"id":"a1","status":"done"})),
+            "space_accept".into(),
+            Some(json!({"id":"draft-1"})),
         ))
         .unwrap();
         assert_eq!(changes.load(Ordering::SeqCst), 1);

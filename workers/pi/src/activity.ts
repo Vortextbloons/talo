@@ -104,9 +104,11 @@ export function describeTool(tool: string, args: any): { label: string; detail?:
       break;
     case 'agent':
       label = input.operation === 'ask' ? 'Asking you a question'
-        : input.operation === 'task_assign' ? 'Adding a task for you'
+        : input.operation === 'schedule_save' ? 'Saving a scheduled task'
+          : input.operation === 'schedule_pause' ? 'Updating a scheduled task'
+            : input.operation === 'schedule_delete' ? 'Deleting a scheduled task'
           : input.operation === 'space_create' || input.operation === 'space_update' ? 'Preparing a workspace'
-            : input.operation === 'task_list' ? 'Checking its tasks'
+            : input.operation === 'schedule_list' ? 'Checking scheduled tasks'
               : 'Checking Talo';
       break;
     case 'tools': {

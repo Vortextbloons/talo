@@ -16,7 +16,7 @@ import type {
   MessagePage,
   ResearchActivity,
 } from '../../../../packages/contracts/src/chat';
-import type { ProviderModelInfo, ThinkingLevelName } from '../../../../packages/contracts/src/index';
+import type { ProviderModelInfo, StartupSnapshot, ThinkingLevelName } from '../../../../packages/contracts/src/index';
 import { rolesFor } from '../../../../packages/contracts/src/index';
 import { providerName } from './connection-providers';
 
@@ -524,17 +524,18 @@ export async function refreshConnections(): Promise<void> {
   }
 }
 
-export async function initChat(): Promise<void> {
-  if (chat.initialized) return;
+export async function initChat(): Promise<StartupSnapshot | null> {
+  if (chat.initialized) return null;
   chat.initialized = true;
   chat.phase = 'loading';
   chat.preview = !isTauri();
 
   if (!isTauri()) {
     chat.phase = 'ready';
-    return;
+    return null;
   }
 
+  let startup: StartupSnapshot | null = null;
   queuedEvents = [];
   try {
     unlisten = await listen<ChatEvent>(EVENT_NAME, event => {
@@ -544,8 +545,8 @@ export async function initChat(): Promise<void> {
     telegramUnlisten = await listen('telegram-message', () => {
       if (chat.active?.conversation.id === 'talo-primary') scheduleReconcile('talo-primary', 0);
     });
-    const bootstrap = await invoke<ChatBootstrap>('chat_bootstrap');
-    applyBootstrap(bootstrap);
+    startup = await invoke<StartupSnapshot>('startup_snapshot');
+    applyBootstrap(startup.chat);
     chat.phase = 'ready';
   } catch (value) {
     chat.phase = 'error';
@@ -558,7 +559,16 @@ export async function initChat(): Promise<void> {
 
   window.addEventListener('focus', reconcileOnFocus);
   document.addEventListener('visibilitychange', reconcileOnFocus);
-  void discoverAll();
+  if (startup) deferInitialWork();
+  return startup;
+}
+
+function deferInitialWork(): void {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    void invoke('warm_worker_after_first_frame').catch(() => {});
+    if (chat.active) void refreshSnapshot(chat.active.conversation.id, true);
+    void discoverAll();
+  }));
 }
 
 export function disposeChat(): void {
@@ -580,7 +590,12 @@ export function disposeChat(): void {
 function reconcileOnFocus(): void {
   if (document.visibilityState === 'hidden') return;
   if (!chat.active || chat.phase !== 'ready') return;
-  void refreshSnapshot(chat.active.conversation.id, true);
+  const conversationId = chat.active.conversation.id;
+  requestAnimationFrame(() => {
+    if (document.visibilityState !== 'hidden' && chat.active?.conversation.id === conversationId) {
+      void refreshSnapshot(conversationId, true);
+    }
+  });
 }
 
 export async function retryChat(): Promise<void> {
@@ -602,7 +617,7 @@ async function refreshSnapshot(conversationId: string | undefined, quiet: boolea
   pendingSnapshot = pending;
   let succeeded = false;
   try {
-    const snapshot = await invoke<ConversationSnapshot>('conversation_open', { conversationId });
+    const snapshot = await invoke<ConversationSnapshot>('conversation_refresh', { conversationId });
     if (token !== openToken) return;
     if (chat.active?.conversation.id === conversationId) {
       if (chat.active.after && !initialEvent && preserveHistory) {

@@ -208,6 +208,47 @@ pub fn resolve_pending(h: &mut crate::Host, app: &tauri::AppHandle, id: &str, de
     Ok(())
 }
 
+pub(crate) fn startup_state(h: &crate::Host) -> Result<Value, String> {
+    let config = load(&h.supervisor.data)?;
+    let mut state = public_config(&config);
+    if let Some(servers) = state["servers"].as_array_mut() {
+        for server in servers {
+            if let Some(health) = h
+                .integrations
+                .status["servers"]
+                .as_array()
+                .filter(|_| h.supervisor.worker_ready())
+                .and_then(|servers| servers.iter().find(|item| item["id"] == server["id"]))
+            {
+                server["state"] = health["state"].clone();
+                server["tools"] = health["tools"].clone();
+                server["error"] = health["error"].clone();
+            } else {
+                server["state"] = json!("disconnected");
+            }
+        }
+    }
+    state["tools"] = catalog(&config);
+    state["errors"] = h
+        .integrations
+        .status["errors"]
+        .as_array()
+        .map(|errors| json!(errors))
+        .unwrap_or(json!([]));
+    state["pending"] = json!(h
+        .integrations
+        .pending
+        .iter()
+        .map(|(id, (message, _, _))| json!({
+            "id": id,
+            "action": message["params"]["action"],
+            "scope": message["params"]["scope"],
+            "summary": message["params"]["summary"]
+        }))
+        .collect::<Vec<_>>());
+    Ok(state)
+}
+
 #[tauri::command]
 pub async fn tools_action(
     app: tauri::AppHandle,
@@ -216,20 +257,9 @@ pub async fn tools_action(
 ) -> Result<Value, String> {
     run_blocking(app,move|app|{
         let shared=app.state::<Shared>();let mut h=shared.lock().map_err(|_|"Tool state unavailable")?;
+        if operation == "state" { return startup_state(&h); }
         let p=payload.unwrap_or(json!({}));let mut config=load(&h.supervisor.data)?;
         match operation.as_str(){
-            "state"=>{
-                let mut state=public_config(&config);
-                if let Some(servers)=state["servers"].as_array_mut(){for s in servers{
-                    if let Some(health)=h.integrations.status["servers"].as_array().filter(|_|h.supervisor.worker_ready()).and_then(|a|a.iter().find(|r|r["id"]==s["id"])){
-                        s["state"]=health["state"].clone();s["tools"]=health["tools"].clone();s["error"]=health["error"].clone();
-                    }else{s["state"]=json!("disconnected");}
-                }}
-                state["tools"]=catalog(&config);
-                state["errors"]=h.integrations.status["errors"].as_array().map(|a|json!(a)).unwrap_or(json!([]));
-                state["pending"]=json!(h.integrations.pending.iter().map(|(id,(m,_,_))|json!({"id":id,"action":m["params"]["action"],"scope":m["params"]["scope"],"summary":m["params"]["summary"]})).collect::<Vec<_>>());
-                return Ok(state);
-            }
             "save"=>{
                 let mut server=p["server"].clone();
                 let id=server["id"].as_str().ok_or("Server ID required")?.to_string();

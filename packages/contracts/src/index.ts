@@ -1,9 +1,28 @@
+import type { ChatBootstrap } from './chat.js';
+import type { AgentState, WorkspaceBundle } from './agent.js';
+import type { GoogleApproval } from './google.js';
+import type { ToolPermission } from './tools.js';
+
 export * from './providers.js';
 export * from './chat.js';
 export * from './agent.js';
 export * from './browser.js';
 export * from './tools.js';
 export * from './google.js';
+
+export interface StartupSnapshot {
+  chat: ChatBootstrap;
+  settings: Onboarding | null;
+  agent: AgentState;
+  library: { workspaces: WorkspaceBundle[]; activeWorkspace: string; memoryEnabled: boolean } | null;
+  runtime: RuntimeStatus;
+  errors?: string[];
+  approvals: {
+    tools: ToolPermission[];
+    google: GoogleApproval[];
+    browser: { id: string; tool: string; arguments: Record<string, unknown>; page?: { url?: string; title?: string } }[];
+  };
+}
 export type ServiceId = 'pi' | 'browser' | 'web';
 export type ServiceState = 'stopped' | 'starting' | 'running' | 'failed';
 export type SensitiveAction = 'provider.connect' | 'browser.start' | 'web.request' | 'memory.write' | 'extension.load' | 'mcp.connect' | 'task.execute' | 'autostart.change';

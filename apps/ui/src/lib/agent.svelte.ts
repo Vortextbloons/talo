@@ -1,13 +1,12 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { AgentState, Assignment, PendingAsk, Skill, WorkspaceBundle } from '../../../../packages/contracts/src/agent';
+import type { AgentState, PendingAsk, Skill, WorkspaceBundle } from '../../../../packages/contracts/src/agent';
 
 
 
 
 
 export const agent = $state({
-  assignments: [] as Assignment[],
   asks: [] as PendingAsk[],
   drafts: [] as WorkspaceBundle[],
   skills: [] as Skill[],
@@ -17,20 +16,22 @@ export const agent = $state({
   busy: false,
   loaded: false,
 });
+let stateRevision = 0;
 
-function apply(state: AgentState): void {
-  agent.assignments = state.assignments ?? [];
+export function applyAgentState(state: AgentState): void {
   agent.asks = state.asks ?? [];
   agent.drafts = state.drafts ?? [];
   agent.skills = state.skills ?? [];
   agent.skillProposals = state.skillProposals ?? [];
   agent.budget = state.budget ?? { used: 0, limit: 5 };
   agent.loaded = true;
+  stateRevision += 1;
 }
+export function agentStateRevision(): number { return stateRevision; }
 
 export async function refreshAgent(): Promise<void> {
   if (!isTauri()) return;
-  try { apply(await invoke<AgentState>('agent_action', { operation: 'state' })); }
+  try { applyAgentState(await invoke<AgentState>('agent_action', { operation: 'state' })); }
   catch (e) { agent.error = String(e); }
 }
 
@@ -43,12 +44,13 @@ export async function agentAction(operation: string, payload: Record<string, unk
 }
 
 
-export function initAgent(): () => void {
+export function initAgent(initialState?: AgentState | null): () => void {
   let active = true;
   let stop: (() => void) | undefined;
-  void refreshAgent();
+  if (initialState) applyAgentState(initialState);
+  else if (initialState === undefined) void refreshAgent();
   if (isTauri()) {
-    void listen('agent-changed', () => { if (active) void refreshAgent(); })
+    void listen('agent-changed', () => { stateRevision += 1; if (active) void refreshAgent(); })
       .then(dispose => { if (active) stop = dispose; else dispose(); });
   }
 

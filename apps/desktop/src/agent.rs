@@ -40,22 +40,7 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
 
         let _ = db.execute(statement, []);
     }
-    db.execute_batch(
-        "CREATE TABLE IF NOT EXISTS agent_assignments(
-           id TEXT PRIMARY KEY,
-           workspace_id TEXT NOT NULL,
-           title TEXT NOT NULL,
-           detail TEXT NOT NULL DEFAULT '',
-           why TEXT NOT NULL DEFAULT '',
-           due TEXT,
-           status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','done','dismissed')),
-           conversation_id TEXT,
-           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-           updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-         );
-         CREATE INDEX IF NOT EXISTS agent_assignments_open ON agent_assignments(status,created_at);
-         CREATE INDEX IF NOT EXISTS agent_assignments_space ON agent_assignments(workspace_id,status);",
-    )
+    Ok(())
 }
 
 fn clean(value: &str, max: usize, multiline: bool) -> Option<String> {
@@ -248,15 +233,9 @@ pub fn capabilities_for(db: &Connection, workspace: &str) -> Vec<String> {
         .collect()
 }
 
-fn active_workspace(db: &Connection) -> String {
-    library::setting(db, "active_workspace", "general")
-}
-
-
 pub fn used_today(db: &Connection) -> i64 {
     db.query_row(
         "SELECT (SELECT count(*) FROM library_workspaces WHERE agent_owned=1 AND created_at>=date('now')) \
-              + (SELECT count(*) FROM agent_assignments WHERE created_at>=date('now')) \
               + (SELECT count(*) FROM agent_skills WHERE created_at>=date('now'))",
         [],
         |r| r.get(0),
@@ -330,40 +309,47 @@ fn update_space(db: &Connection, p: &Value) -> Result<Value, String> {
     Ok(json!({"id":id}))
 }
 
-fn assign(db: &Connection, p: &Value, conversation: &str) -> Result<Value, String> {
-    budget(db)?;
-    let title = label(p, "title", 200)?;
-    let detail = optional_text(p, "detail", 2000, true)?.unwrap_or_default();
-    let why = optional_text(p, "why", 300, false)?.unwrap_or_default();
-    let workspace = p
-        .get("workspaceId")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| active_workspace(db));
-    let exists: i64 = db
-        .query_row(
-            "SELECT count(*) FROM library_workspaces WHERE id=?1 AND archived=0 AND draft=0",
-            [&workspace],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    if exists == 0 {
-        return Err("Choose a workspace that exists".into());
+fn scheduled_task(db: &Connection, p: &Value, conversation: &str) -> Result<Value, String> {
+    let source = crate::storage::get_conversation(db, conversation).map_err(|e| e.to_string())?;
+    let operation = p["operation"].as_str().unwrap_or("");
+    let tasks = crate::scheduler::list(db).map_err(|e| e.to_string())?;
+    if operation == "schedule_list" {
+        return Ok(json!({"tasks": tasks.into_iter().filter(|task| task.workspace_id == source.workspace_id).collect::<Vec<_>>(), "now": chrono::Utc::now().to_rfc3339()}));
     }
-    let due = optional_text(p, "due", 40, false)?;
-    if let Some(due) = due.as_deref().filter(|value| !value.is_empty()) {
-        if !(10..=25).contains(&due.len()) || !due.starts_with(|c: char| c.is_ascii_digit()) {
-            return Err("due must be an ISO date (YYYY-MM-DD) or timestamp".into());
+    if crate::storage::conversation_is_delegated(db, conversation).map_err(|e| e.to_string())? {
+        return Err("Report scheduling needs to the parent chat instead of changing scheduled tasks.".into());
+    }
+    let id = p["taskId"].as_str().unwrap_or("");
+    let existing = if id.is_empty() {
+        None
+    } else {
+        Some(tasks.into_iter().find(|task| task.id == id && task.workspace_id == source.workspace_id)
+            .ok_or("That scheduled task does not exist in this chat's workspace")?)
+    };
+    if operation != "schedule_save" {
+        let task = existing.ok_or("Task ID required")?;
+        return crate::automation::task_action(db, match operation {
+            "schedule_pause" => "pause",
+            "schedule_delete" => "delete",
+            _ => return Err("Unknown scheduled task operation".into()),
+        }, json!({"id": task.id, "paused": p["paused"]}), &source.workspace_id);
+    }
+    let mut payload = if let Some(task) = existing {
+        json!(task)
+    } else {
+        json!({
+            "id": "", "workspaceId": source.workspace_id,
+            "paused": false, "nextAt": null, "timeoutSeconds": 600,
+            "connectionId": source.selection.as_ref().map(|s| s.connection_id.as_str()).unwrap_or(""),
+            "modelId": source.selection.as_ref().map(|s| s.model_id.as_str()).unwrap_or(""),
+        })
+    };
+    for key in ["title", "prompt", "localTime", "timezone", "recurrence", "paused", "timeoutSeconds", "connectionId", "modelId"] {
+        if let Some(value) = p.get(key) {
+            payload[key] = value.clone();
         }
     }
-    let id = uuid::Uuid::new_v4().to_string();
-    db.execute(
-        "INSERT INTO agent_assignments(id,workspace_id,title,detail,why,due,conversation_id) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-        params![id, workspace, title, detail, why, due, conversation],
-    )
-    .map_err(|_| "The task could not be saved")?;
-    Ok(json!({"id":id,"title":title,"workspaceId":workspace,"status":"open"}))
+    crate::automation::task_action(db, "save", payload, &source.workspace_id)
 }
 
 fn normalize_questions(p: &Value) -> Result<Vec<Value>, String> {
@@ -454,12 +440,12 @@ pub fn message(h: &mut Host, app: &tauri::AppHandle, message: Value) {
     let operation = p["operation"].as_str().unwrap_or("").to_string();
     let child_task = crate::delegation::task_for_child_conversation(&h.db, &conversation).ok().flatten();
     if child_task.is_some()
-        && matches!(operation.as_str(), "space_create" | "space_update" | "task_assign")
+        && matches!(operation.as_str(), "space_create" | "space_update" | "schedule_save" | "schedule_pause" | "schedule_delete")
     {
         reply(
             h,
             message["id"].clone(),
-            Err("Delegated child tasks cannot create assignments or change workspaces. Report the need in your result.".into()),
+            Err("Delegated child tasks cannot change scheduled tasks or workspaces. Report the need in your result.".into()),
         );
         return;
     }
@@ -519,8 +505,13 @@ pub fn message(h: &mut Host, app: &tauri::AppHandle, message: Value) {
             "space_list" => Ok(json!({"spaces": spaces(&h.db, false)?})),
             "space_create" => insert_space(&h.db, &p),
             "space_update" => update_space(&h.db, &p),
-            "task_assign" => assign(&h.db, &p, &conversation),
-            "task_list" => Ok(json!({"assignments": assignments(&h.db, None)?})),
+            "schedule_list" | "schedule_save" | "schedule_pause" | "schedule_delete" => {
+                let result = scheduled_task(&h.db, &p, &conversation);
+                if result.is_ok() && operation != "schedule_list" {
+                    let _ = app.emit("automation-changed", ());
+                }
+                result
+            }
             "skill_list" => {
                 let workspace = crate::storage::get_conversation(&h.db, &conversation)
                     .map(|conversation| conversation.workspace_id)
@@ -538,7 +529,7 @@ pub fn message(h: &mut Host, app: &tauri::AppHandle, message: Value) {
     })();
     let write = !matches!(
         operation.as_str(),
-        "state" | "space_list" | "task_list" | "skill_list"
+        "state" | "space_list" | "schedule_list" | "skill_list"
     );
     reply(h, message["id"].clone(), result);
     if write {
@@ -546,40 +537,10 @@ pub fn message(h: &mut Host, app: &tauri::AppHandle, message: Value) {
     }
 }
 
-fn assignments(db: &Connection, status: Option<&str>) -> Result<Vec<Value>, String> {
-    let mut statement = db
-        .prepare(
-            "SELECT id,workspace_id,title,detail,why,due,status,conversation_id,created_at,updated_at \
-             FROM agent_assignments WHERE (?1 IS NULL OR status=?1) \
-             ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, created_at DESC LIMIT 100",
-        )
-        .map_err(|_| "Tasks are unavailable")?;
-    let rows = statement
-        .query_map([status], |r| {
-            Ok(json!({
-                "id": r.get::<_, String>(0)?,
-                "workspaceId": r.get::<_, String>(1)?,
-                "title": r.get::<_, String>(2)?,
-                "detail": r.get::<_, String>(3)?,
-                "why": r.get::<_, String>(4)?,
-                "due": r.get::<_, Option<String>>(5)?,
-                "status": r.get::<_, String>(6)?,
-                "conversationId": r.get::<_, Option<String>>(7)?,
-                "createdAt": r.get::<_, String>(8)?,
-                "updatedAt": r.get::<_, String>(9)?,
-            }))
-        })
-        .map_err(|_| "Tasks are unavailable")?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|_| "Tasks are unavailable".into())
-}
-
-
 pub fn state(db: &Connection, h: &Host) -> Value {
     let asks: Vec<Value> = h.agent_asks.values().map(|ask| ask.ask.clone()).collect();
     let skills = crate::skills::state(db);
     json!({
-        "assignments": assignments(db, None).unwrap_or_default(),
         "asks": asks,
         "drafts": spaces(db, true).unwrap_or_default(),
         "skills": skills["skills"],
@@ -723,24 +684,6 @@ pub fn expire(h: &mut Host, app: &tauri::AppHandle) -> bool {
     changed
 }
 
-fn assignment_update(db: &Connection, p: &Value) -> Result<Value, String> {
-    let id = label(p, "id", 100)?;
-    let status = label(p, "status", 20)?;
-    if !["open", "done", "dismissed"].contains(&status.as_str()) {
-        return Err("status must be open, done or dismissed".into());
-    }
-    let changed = db
-        .execute(
-            "UPDATE agent_assignments SET status=?2,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?1",
-            params![id, status],
-        )
-        .map_err(|_| "The task could not be updated")?;
-    if changed == 0 {
-        return Err("That task no longer exists".into());
-    }
-    Ok(json!({"id":id,"status":status}))
-}
-
 fn accept_space(db: &Connection, p: &Value) -> Result<Value, String> {
     let id = label(p, "id", 100)?;
     let changed = db
@@ -805,7 +748,6 @@ pub async fn agent_action(
         let result = match operation.as_str() {
             "state" | "refresh" => Ok(state(&h.db, &h)),
             "answer" => answer(&mut h, app, &p).map(|_| state(&h.db, &h)),
-            "assignment" => assignment_update(&h.db, &p).map(|_| json!(true)),
             "space_accept" => accept_space(&h.db, &p).map(|_| json!(true)),
             "space_dismiss" => dismiss_space(&h.db, &p).map(|_| json!(true)),
             "space_permission" => set_permission(&h.db, &p).map(|_| json!(true)),
@@ -928,22 +870,61 @@ mod tests {
     }
 
     #[test]
-    fn assignments_are_capped_validated_and_transition_once() {
-        let db = database();
-        let first = assign(&db, &json!({"title":"Check the invoice folder","why":"Two invoices are unreviewed"}), "c1").unwrap();
-        assert_eq!(first["workspaceId"], "general");
-        assert!(assign(&db, &json!({"title":"x","due":"tomorrow"}), "").is_err());
-        assert!(assign(&db, &json!({"title":"x","workspaceId":"missing"}), "").is_err());
-        let list = assignments(&db, Some("open")).unwrap();
-        assert_eq!(list.len(), 1);
-        assignment_update(&db, &json!({"id":first["id"],"status":"done"})).unwrap();
-        assert_eq!(assignments(&db, Some("open")).unwrap().len(), 0);
-        assert!(assignment_update(&db, &json!({"id":first["id"],"status":"later"})).is_err());
-        for index in 0..DAILY_OBJECT_LIMIT {
-            let _ = assign(&db, &json!({"title":format!("extra {index}")}), "");
-        }
-        assert_eq!(used_today(&db), DAILY_OBJECT_LIMIT);
-        assert!(assign(&db, &json!({"title":"over budget"}), "").is_err());
+    fn scheduled_tasks_use_the_chat_model_and_support_the_user_controls() {
+        let mut db = database();
+        crate::scheduler::init(&db).unwrap();
+        let connection = crate::storage::upsert_connection(&mut db, "custom", "Test", Some("model-1"), None, None).unwrap();
+        let selection = crate::storage::ModelSelection { connection_id: connection.clone(), model_id: "model-1".into() };
+        crate::storage::create_conversation(&db, "chat-1", "Chat", Some(&selection)).unwrap();
+        let created = scheduled_task(&db, &json!({
+            "operation": "schedule_save", "title": "Daily briefing", "prompt": "Summarize my priorities",
+            "localTime": "2099-01-01T09:00", "timezone": "America/Denver", "recurrence": "daily"
+        }), "chat-1").unwrap();
+        assert_eq!(created["connectionId"], connection);
+        assert_eq!(created["modelId"], "model-1");
+        assert_eq!(created["workspaceId"], "general");
+        assert!(created["nextAt"].as_i64().is_some());
+        assert_eq!(used_today(&db), 0);
+        let id = created["id"].as_str().unwrap();
+        let edited = scheduled_task(&db, &json!({"operation":"schedule_save","taskId":id,"recurrence":"weekly","timeoutSeconds":120}), "chat-1").unwrap();
+        assert_eq!(edited["recurrence"], "weekly");
+        assert_eq!(edited["prompt"], created["prompt"]);
+        assert_eq!(edited["timezone"], created["timezone"]);
+        scheduled_task(&db, &json!({"operation":"schedule_pause","taskId":id,"paused":true}), "chat-1").unwrap();
+        let list = scheduled_task(&db, &json!({"operation":"schedule_list"}), "chat-1").unwrap();
+        assert_eq!(list["tasks"][0]["paused"], true);
+        scheduled_task(&db, &json!({"operation":"schedule_pause","taskId":id,"paused":false}), "chat-1").unwrap();
+        assert!(!crate::scheduler::list(&db).unwrap()[0].paused);
+        scheduled_task(&db, &json!({"operation":"schedule_delete","taskId":id}), "chat-1").unwrap();
+        assert!(crate::scheduler::list(&db).unwrap().is_empty());
+        assert!(scheduled_task(&db, &json!({"operation":"schedule_save","taskId":id,"title":"Revive"}), "chat-1").is_err());
+    }
+
+    #[test]
+    fn scheduling_validates_times_and_cannot_escape_the_parent_workspace() {
+        let mut db = database();
+        crate::scheduler::init(&db).unwrap();
+        let connection = crate::storage::upsert_connection(&mut db, "custom", "Test", Some("model-1"), None, None).unwrap();
+        let selection = crate::storage::ModelSelection { connection_id: connection, model_id: "model-1".into() };
+        crate::storage::create_conversation(&db, "chat-1", "Chat", Some(&selection)).unwrap();
+        let mut request = json!({
+            "operation":"schedule_save", "title":"Briefing", "prompt":"Summarize priorities",
+            "localTime":"2099-01-01T09:00", "timezone":"invalid", "recurrence":"daily"
+        });
+        assert!(scheduled_task(&db, &request, "chat-1").is_err());
+        request["timezone"] = json!("America/Denver");
+        let created = scheduled_task(&db, &request, "chat-1").unwrap();
+        let id = created["id"].as_str().unwrap();
+        db.execute("INSERT INTO library_workspaces(id,name) VALUES('other','Other')", []).unwrap();
+        crate::storage::create_conversation(&db, "other-chat", "Other", Some(&selection)).unwrap();
+        db.execute("UPDATE chat_conversations SET workspace_id='other' WHERE id='other-chat'", []).unwrap();
+        assert!(scheduled_task(&db, &json!({"operation":"schedule_delete","taskId":id}), "other-chat").is_err());
+        assert!(scheduled_task(&db, &json!({"operation":"schedule_save","taskId":id,"title":"Changed"}), "other-chat").is_err());
+        let list = scheduled_task(&db, &json!({"operation":"schedule_list"}), "other-chat").unwrap();
+        assert!(list["tasks"].as_array().unwrap().is_empty());
+        db.execute("UPDATE chat_conversations SET delegation_parent_id='chat-1' WHERE id='other-chat'", []).unwrap();
+        assert!(scheduled_task(&db, &request, "other-chat").is_err());
+        assert_eq!(crate::scheduler::list(&db).unwrap().len(), 1);
     }
 
     #[test]

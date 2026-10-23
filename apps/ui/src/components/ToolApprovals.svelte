@@ -4,12 +4,18 @@
   import { listen } from '@tauri-apps/api/event';
   import { tools, refreshTools, toolAction } from '../lib/tools.svelte';
   import type { GoogleApproval } from '../../../../packages/contracts/src/google';
+  import type { StartupSnapshot } from '../../../../packages/contracts/src/index';
+  let { initial = null, startupReady = false }: { initial?: StartupSnapshot['approvals'] | null; startupReady?: boolean } = $props();
   let pending=$derived(tools.state.pending[0]);
   let browser=$state<{id:string;tool:string;arguments:unknown}[]>([]);
   let browserError=$state('');
   let google=$state<GoogleApproval[]>([]);
   let googleError=$state('');
   let googleBusy=$state(false);
+  let toolEvent=false;
+  let toolStateDirty=false;
+  let googleEvent=false;
+  let browserEvent=false;
   async function resolveBrowser(allowed:boolean){
     const request=browser[0];if(!request)return;
     try{await invoke('resolve_permission',{id:request.id,allowed});browser=browser.filter(b=>b.id!==request.id);}catch(e){browserError=String(e);}
@@ -23,12 +29,18 @@
   }
   onMount(()=>{
     const stops:(()=>void)[]=[];let active=true;
-    if(isTauri())for(const event of ['tools-changed','tool-approvals-changed'])void listen(event,()=>void refreshTools()).then(stop=>active?stops.push(stop):stop());
-    if(isTauri())void listen<typeof browser>('browser-approvals',event=>browser=event.payload).then(stop=>active?stops.push(stop):stop());
-    if(isTauri())void listen<GoogleApproval[]>('google-approvals',event=>google=event.payload).then(stop=>active?stops.push(stop):stop());
-    void refreshTools();
-    if(isTauri())void invoke<GoogleApproval[]>('google_action',{operation:'approvals'}).then(value=>{if(active)google=value;}).catch(()=>{});
+    if(isTauri())for(const event of ['tools-changed','tool-approvals-changed'])void listen(event,()=>{toolEvent=true;toolStateDirty=true;if(startupReady)void refreshTools();}).then(stop=>active?stops.push(stop):stop());
+    if(isTauri())void listen<typeof browser>('browser-approvals',event=>{browserEvent=true;browser=event.payload;}).then(stop=>active?stops.push(stop):stop());
+    if(isTauri())void listen<GoogleApproval[]>('google-approvals',event=>{googleEvent=true;google=event.payload;}).then(stop=>active?stops.push(stop):stop());
     return()=>{active=false;stops.forEach(stop=>stop());};
+  });
+  $effect(()=>{
+    if(!startupReady)return;
+    const snapshot=initial;
+    if(!toolEvent){if(snapshot&&!toolStateDirty)tools.state.pending=snapshot.tools;else if(isTauri())void refreshTools();}
+    else if(toolStateDirty&&isTauri())void refreshTools();
+    if(!googleEvent){if(snapshot)google=snapshot.google;else if(isTauri())void invoke<GoogleApproval[]>('google_action',{operation:'approvals'}).then(value=>{if(!googleEvent)google=value;}).catch(()=>{});}
+    if(!browserEvent&&snapshot)browser=snapshot.browser;
   });
 </script>
 {#if pending}

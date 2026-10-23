@@ -86,12 +86,14 @@ test('a tool call reaches the host and the turn continues after the host replies
     const call = await worker.wait(event => event.type === 'agent' && event.message?.method === 'agent.call');
     const first = provider.state.requests.find(request => request.body.tools?.length);
     assert.deepEqual(first.body.tools.map(tool => tool.function.name), ['tools'], 'a workspace without files hides read/write/edit');
-    assert.equal(call.message.params.operation, 'task_assign');
+    assert.equal(call.message.params.operation, 'schedule_save');
+    assert.equal(call.message.params.recurrence, 'daily');
+    assert.equal(call.message.params.timezone, 'America/Denver');
     assert.equal(call.message.params.conversationId, 'agent-chat');
-    worker.send({ type: 'agent_response', message: { jsonrpc: '2.0', id: call.message.id, result: { id: 'assignment-1', status: 'open' } } });
+    worker.send({ type: 'agent_response', message: { jsonrpc: '2.0', id: call.message.id, result: { id: 'schedule-1', nextAt: 4070908800 } } });
     const done = await worker.waitGeneration('agent-chat', 'gen-1');
     assert.equal(done.event.state, 'completed');
-    assert.ok(provider.state.requests.at(-1).body.messages.some(message => message.role === 'tool' && message.content.includes('assignment-1')));
+    assert.ok(provider.state.requests.at(-1).body.messages.some(message => message.role === 'tool' && message.content.includes('schedule-1')));
     const activity = worker.events
       .filter(event => event.type === 'chat' && event.event?.type === 'activity')
       .map(event => event.event.activity);

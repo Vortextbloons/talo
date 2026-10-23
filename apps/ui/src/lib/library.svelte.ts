@@ -10,6 +10,7 @@ export interface Workspace {
 export interface Memory { id: string; scope: 'global' | 'workspace'; workspaceId: string | null; content: string; source: string; personal: boolean; approved: boolean; supersededBy: string | null; createdAt: string; updatedAt: string }
 export interface HistoryHit { conversationId: string; title: string; text: string; archived: boolean }
 interface LibraryState { workspaces: Workspace[]; activeWorkspace: string; memoryEnabled: boolean; conversations: ConversationInfo[] }
+export type LibraryBootstrap = Omit<LibraryState, 'conversations'>;
 export const library = $state({ workspaces: [{id:'general',name:'General',folder:null,archived:false}] as Workspace[], activeWorkspace: 'general', memoryEnabled: true, error: '', busy: false });
 export async function libraryCall<T>(operation: string, payload: Record<string, unknown> = {}): Promise<T> {
   if (!isTauri()) throw new Error('Open the desktop app to manage your library.');
@@ -20,13 +21,16 @@ export async function refreshLibrary(): Promise<void> {
   try { apply(await libraryCall<LibraryState>('state')); } catch (e) { library.error=String(e); }
 }
 function apply(state: LibraryState): void {
-  library.workspaces=state.workspaces; library.activeWorkspace=state.activeWorkspace; library.memoryEnabled=state.memoryEnabled;
+  applyLibraryBootstrap(state);
   chat.conversations=state.conversations;
   if(chat.active) {
     const info=state.conversations.find(c=>c.id===chat.active?.conversation.id);
     if(!info || (info.id!=='talo-primary' && info.workspaceId!==state.activeWorkspace) || info.archived) chat.active=null;
     else chat.active.conversation=info;
   }
+}
+export function applyLibraryBootstrap(state: LibraryBootstrap): void {
+  library.workspaces=state.workspaces; library.activeWorkspace=state.activeWorkspace; library.memoryEnabled=state.memoryEnabled;
 }
 export async function mutateLibrary(operation: string, payload: Record<string, unknown> = {}): Promise<boolean> {
   library.busy=true; library.error='';

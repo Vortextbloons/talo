@@ -1154,11 +1154,13 @@ fn parse_models(result: Value) -> Result<Vec<ProviderModelInfo>, String> {
         .map_err(|_| "Pi worker returned an invalid model list".to_string())
 }
 
-fn chat_bootstrap_inner(host: &mut Host) -> Result<ChatBootstrap, String> {
+pub(crate) fn chat_bootstrap_inner(host: &mut Host) -> Result<ChatBootstrap, String> {
     crate::primary::ensure(&host.db).map_err(storage_error)?;
     let conversations = storage::list_conversations(&host.db).map_err(storage_error)?;
     let connections = storage::list_connections(&host.db).map_err(storage_error)?;
-    let active = Some(conversation_open_inner(host, crate::primary::ID.into())?);
+    host.db.execute("INSERT INTO settings(key,value) VALUES('active_conversation',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [crate::primary::ID]).map_err(|error| error.to_string())?;
+    let conversation = storage::get_conversation(&host.db, crate::primary::ID).map_err(storage_error)?;
+    let active = Some(snapshot(&host.db, &host.chat, conversation)?);
     Ok(ChatBootstrap {
         conversations,
         connections,
@@ -1219,6 +1221,14 @@ pub(crate) fn conversation_snapshot_inner(
         }
     }
     snapshot(&host.db, &host.chat, conversation)
+}
+
+pub(crate) fn conversation_refresh_inner(
+    host: &mut Host,
+    conversation_id: String,
+) -> Result<ConversationSnapshot, String> {
+    let conversation = storage::get_conversation(&host.db, &conversation_id).map_err(storage_error)?;
+    conversation_snapshot_inner(host, conversation)
 }
 
 fn conversation_select_model_inner(
@@ -2663,6 +2673,21 @@ pub async fn conversation_open(
             .lock()
             .map_err(|_| "Talo state is unavailable".to_string())?;
         conversation_open_inner(&mut host, conversation_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn conversation_refresh(
+    app: AppHandle,
+    conversation_id: String,
+) -> Result<ConversationSnapshot, String> {
+    run_blocking(app, move |app| {
+        let shared = app.state::<Shared>();
+        let mut host = shared
+            .lock()
+            .map_err(|_| "Talo state is unavailable".to_string())?;
+        conversation_refresh_inner(&mut host, conversation_id)
     })
     .await
 }

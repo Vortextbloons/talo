@@ -1,24 +1,25 @@
 <script lang="ts">
   import { PRIMARY_CONVERSATION_ID } from '../../../packages/contracts/src/telegram';
-  import { browser, initBrowser, closeBrowser } from './lib/browser.svelte';
+  import { browser, initBrowser, closeBrowser, applyBrowserApprovals, applyRuntimeStatus, browserApprovalRevision } from './lib/browser.svelte';
   import { onMount } from 'svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import mascot from '../../../packages/design/mascot.svg';
   import NavIcon from './NavIcon.svelte';
-  import { library, refreshLibrary, mutateLibrary } from './lib/library.svelte';
+  import { library, refreshLibrary, mutateLibrary, applyLibraryBootstrap } from './lib/library.svelte';
   import ChatView from './components/ChatView.svelte';
   import ToolApprovals from './components/ToolApprovals.svelte';
-  import { agent, initAgent } from './lib/agent.svelte';
+  import { agent, initAgent, applyAgentState, agentStateRevision, refreshAgent } from './lib/agent.svelte';
   import { chat, disposeChat, initChat, createConversation, openConversation, routing } from './lib/chat.svelte';
   import { checkForUpdates } from './lib/updates.svelte';
   import { CUSTOM_BASE_URL_EXAMPLE, DEFAULT_PREFERENCE, PROVIDERS, parseProviderPreference, providerDescriptor } from '../../../packages/contracts/src/index';
-  import type { Onboarding, RuntimeStatus, ServiceId } from '../../../packages/contracts/src/index';
+  import { tools } from './lib/tools.svelte';
+  import type { Onboarding, RuntimeStatus, ServiceId, StartupSnapshot } from '../../../packages/contracts/src/index';
   const pages = ['Chat', 'Inbox', 'Workspaces', 'Skills', 'Tasks', 'Settings'] as const;
   type Page = typeof pages[number];
   let page = $state<Page>('Chat');
 
-  const inboxCount = $derived(agent.asks.length + agent.assignments.filter(item=>item.status==='open').length + agent.drafts.length + agent.skillProposals.length);
+  const inboxCount = $derived(agent.asks.length + agent.drafts.length + agent.skillProposals.length);
   let taskFocus = $state('');
   function openPrimary(): void { navigatePage('Chat'); void openConversation(PRIMARY_CONVERSATION_ID); }
   function navigatePage(next: Page) { if (page !== next) closeBrowser(); page = next; }
@@ -35,6 +36,8 @@
   let settings = $state<Onboarding>({name:'',personality:'Thoughtful and direct',...DEFAULT_PREFERENCE,memory:'workspace',showReasoning:false,complete:false});
   let provider = $derived(providerDescriptor(settings.provider));
   let loaded = $state(false);
+  let startupReady = $state(false);
+  let startup = $state.raw<StartupSnapshot | null>(null);
   let editing = $state(false);
   let step = $state(0);
   let status = $state<RuntimeStatus | null>(null);
@@ -44,26 +47,58 @@
   const descriptions:Record<Page,string> = {
     Chat:'A little space to think things through.',Inbox:'What Talo has asked, proposed or left for you.',Workspaces:'One Talo, with conversations and context organized by project.',Skills:'Ways of working Talo saved once they worked.',Tasks:'A home for the things you want to come back to.',Settings:'Make yourself at home.'
   };
-  async function refresh() { if(isTauri()) status = await invoke<RuntimeStatus>('runtime_status'); }
+  async function refresh() { if(isTauri()) { status = await invoke<RuntimeStatus>('runtime_status'); applyRuntimeStatus(status); } }
   onMount(() => {
     let active=true;
     let unlisten:(()=>void)|undefined;
     let stopAutomation:(()=>void)|undefined;
+    let runtimeRevision=0;
     const notification=async()=>{if(!isTauri())return;const run=await invoke<string>('automation_action',{operation:'notification'});if(run&&active){taskFocus=run;navigatePage('Tasks');}};
     if(isTauri()){
-      void notification().catch(()=>{});
       void listen('automation-open',()=>void notification().catch(()=>{})).then(stop=>{if(active)stopAutomation=stop;else stop();});
     }
-    void initChat();
-    const stopAgent = initAgent();
-    const stopBrowser = initBrowser();
-    (async()=>{try { if(isTauri()){const saved=await invoke<Onboarding|null>('load_settings');if(saved && active){settings={...settings,...saved,...parseProviderPreference(saved)};routing.mode=saved.routing??'auto';routing.tier=saved.performance??'recommended';}await refresh();} }catch(e){error=String(e);}finally{if(active)loaded=true;}})();
-
-    if(isTauri())listen<RuntimeStatus>('runtime-status',event=>{if(active)status=event.payload;}).then(stop=>{if(active)unlisten=stop;else stop();});
-
+    const stopAgent = initAgent(null);
+    const stopBrowser = initBrowser(null);
+    if(isTauri())listen<RuntimeStatus>('runtime-status',event=>{if(active){runtimeRevision+=1;status=event.payload;applyRuntimeStatus(event.payload);}}).then(stop=>{if(active)unlisten=stop;else stop();});
+    void (async()=>{
+      try {
+        const initialRuntimeRevision=runtimeRevision;
+        const initialAgentRevision=agentStateRevision();
+        const initialBrowserApprovalRevision=browserApprovalRevision();
+        startup = await initChat();
+        if (!active) return;
+        if (startup) {
+          if (startup.errors?.length) error = startup.errors.join('\n');
+          if(agentStateRevision()===initialAgentRevision)applyAgentState(startup.agent);
+          if (startup.library) applyLibraryBootstrap(startup.library);
+          tools.state.pending = startup.approvals.tools;
+          if(browserApprovalRevision()===initialBrowserApprovalRevision)applyBrowserApprovals(startup.approvals.browser);
+          if(runtimeRevision===initialRuntimeRevision){status = startup.runtime;applyRuntimeStatus(startup.runtime);}
+          if (startup.settings) {
+            settings = {...settings,...startup.settings,...parseProviderPreference(startup.settings)};
+            routing.mode = startup.settings.routing ?? 'auto';
+            routing.tier = startup.settings.performance ?? 'recommended';
+          }
+        } else if (isTauri()) {
+          const [saved] = await Promise.all([
+            invoke<Onboarding|null>('load_settings').catch(e=>{if(active)error=String(e);return null;}),
+            refreshAgent(),refreshLibrary(),refresh().catch(e=>{if(active)error=String(e);}),
+          ]);
+          if(saved&&active){settings={...settings,...saved,...parseProviderPreference(saved)};routing.mode=saved.routing??'auto';routing.tier=saved.performance??'recommended';}
+        }
+      } catch(e) {
+        if (active) error = String(e);
+      } finally {
+        if (active) {
+          startupReady = true;
+          loaded = true;
+          if (isTauri()) requestAnimationFrame(() => requestAnimationFrame(() => { if (active) void notification().catch(()=>{}); }));
+        }
+      }
+    })();
 
     const updateCheck = setTimeout(() => { if (active) void checkForUpdates({ quiet: true }); }, 4000);
-    const wake=()=>{if(active)refresh().catch(()=>{});};
+    const wake=()=>{if(active&&startupReady)requestAnimationFrame(()=>{if(active)refresh().catch(()=>{});});};
     window.addEventListener('focus',wake);
     return ()=>{active=false;unlisten?.();stopAutomation?.();window.removeEventListener('focus',wake);disposeChat();stopAgent();stopBrowser();};
   });
@@ -230,7 +265,7 @@
 {/if}
 {#if pending}<div class="overlay"><dialog open class="onboarding" aria-modal="true" aria-labelledby="permission-title"><h2 id="permission-title">Allow this action?</h2><p>{pending.action==='browser.start'?'Open Chromium with Talo’s dedicated persistent profile?':'Change whether Talo starts when you sign in to Windows?'}</p><p class="detail">{pending.resource} · This action only</p><div class="setup-actions"><button onclick={()=>resolve(false)}>Deny</button><button class="primary" onclick={()=>resolve(true)}>Allow once</button></div></dialog></div>{/if}
 
-<ToolApprovals />
+<ToolApprovals initial={startup?.approvals ?? null} {startupReady} />
 <style>
 
 

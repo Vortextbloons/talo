@@ -16,6 +16,7 @@ const renewing = new Set<string>();
 let initialized = false;
 let workspaceVisible = false;
 let hiddenPreview = false;
+let approvalRevision = 0;
 const viewIsOpen = () => browser.view !== 'closed';
 
 function updateStatus(status: BrowserStatus) {
@@ -41,7 +42,16 @@ export function setBrowserWorkspaceVisible(visible: boolean) {
   if (!visible) closeBrowser(false);
   else updateStatus(browser.sessions[browser.sessionId] ?? browser.status);
 }
-export function initBrowser() {
+export function applyRuntimeStatus(value: {browser?: BrowserStatus; browserSessions?: Record<string, BrowserStatus>}) {
+  browser.sessions = value.browserSessions ?? {};
+  updateStatus(browser.sessions[browser.sessionId] ?? (browser.sessionId === 'primary' && value.browser ? value.browser : stopped(browser.sessionId)));
+}
+export function applyBrowserApprovals(approvals: BrowserApproval[]) {
+  browser.approvals = approvals;
+  approvalRevision += 1;
+}
+export function browserApprovalRevision(): number { return approvalRevision; }
+export function initBrowser(initialStatus?: {browser?: BrowserStatus; browserSessions?: Record<string, BrowserStatus>} | null) {
   if (!isTauri() || initialized) return () => {};
   initialized = true;
   let active = true;
@@ -50,18 +60,15 @@ export function initBrowser() {
     const stop = await listen<T>(name, event => { if (active) handler(event.payload); });
     if (active) stops.push(stop); else stop();
   };
-  const status = (value: {browser?: BrowserStatus; browserSessions?: Record<string, BrowserStatus>}) => {
-    browser.sessions = value.browserSessions ?? {};
-    updateStatus(browser.sessions[browser.sessionId] ?? (browser.sessionId === 'primary' && value.browser ? value.browser : stopped(browser.sessionId)));
-  };
   void Promise.all([
-    subscribe('runtime-status', status),
-    subscribe<BrowserApproval[]>('browser-approvals', value => { browser.approvals = value; }),
+    subscribe('runtime-status', applyRuntimeStatus),
+    subscribe<BrowserApproval[]>('browser-approvals', applyBrowserApprovals),
     subscribe<{sessionId: string; frame: BrowserFrame | null}>('browser-frame', value => {
       if (value.sessionId === browser.sessionId && browser.view !== 'closed') browser.frame = value.frame;
     }),
   ]).catch(() => { if (active) browser.error = 'Browser connection unavailable. Reopen Talo to reconnect.'; });
-  void invoke<Parameters<typeof status>[0]>('runtime_status').then(value => { if (active) status(value); }).catch(() => {});
+  if (initialStatus) applyRuntimeStatus(initialStatus);
+  else if (initialStatus === undefined) void invoke<Parameters<typeof applyRuntimeStatus>[0]>('runtime_status').then(value => { if (active) applyRuntimeStatus(value); }).catch(() => {});
   const visibility = () => { if (document.hidden) closeBrowser(false); else if (workspaceVisible) updateStatus(browser.status); };
   document.addEventListener('visibilitychange', visibility);
   return () => { active = false; initialized = false; closeBrowser(false); stops.forEach(stop => stop()); document.removeEventListener('visibilitychange', visibility); };

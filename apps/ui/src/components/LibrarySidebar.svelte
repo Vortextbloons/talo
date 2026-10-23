@@ -1,8 +1,7 @@
 <script lang="ts">
   import { PRIMARY_CONVERSATION_ID } from '../../../../packages/contracts/src/telegram';
-  import { onMount } from 'svelte';
   import { chat, openConversation } from '../lib/chat.svelte';
-  import { library, refreshLibrary, libraryCall, mutateLibrary, switchWorkspace, type HistoryHit } from '../lib/library.svelte';
+  import { library, libraryCall, mutateLibrary, switchWorkspace, type HistoryHit } from '../lib/library.svelte';
   let { showArchived = $bindable(false) }: { showArchived?: boolean } = $props();
   let query = $state('');
   let hits = $state<HistoryHit[]>([]);
@@ -21,7 +20,6 @@
     catch(e){library.error=String(e);}finally{library.busy=false;}
   }
   const working = $derived(chat.sending || chat.active?.state==='generating' || chat.active?.state==='cancelling');
-  onMount(() => { void refreshLibrary(); });
   async function search() {
     const version=++searchVersion; searching=true; library.error='';
     try { const result=await libraryCall<HistoryHit[]>('history_search',{query,workspaceId:library.activeWorkspace}); if(version===searchVersion){hits=result;searched=true;} }

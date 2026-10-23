@@ -349,7 +349,7 @@ pub fn state(h: &Host) -> Value {
     })
 }
 
-fn approvals(h: &Host) -> Value {
+pub(crate) fn approvals(h: &Host) -> Value {
     json!(h
         .google
         .approvals

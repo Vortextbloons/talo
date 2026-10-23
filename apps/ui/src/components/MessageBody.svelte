@@ -1,9 +1,13 @@
+<script module lang="ts">
+  let markdownModule: Promise<typeof import('../lib/markdown')> | undefined;
+  let katexModule: Promise<typeof import('katex')> | undefined;
+  let katexRenderer: typeof import('katex').default | undefined;
+</script>
+
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { isTauri } from '@tauri-apps/api/core';
   import { openBrowserSource } from '../lib/browser.svelte';
-  import katex from 'katex';
-  import { parseMarkdown } from '../lib/markdown';
   import type { Align, Block, Inline, ListItem } from '../lib/markdown';
 
   let { text }: { text: string } = $props();
@@ -16,27 +20,55 @@
 
 
   const PARSE_INTERVAL = 150;
-  let tree = $state.raw<Block[]>([]);
+  let tree = $state.raw<Block[] | null>(null);
+  let mathReady = $state(false);
   let lastParse = 0;
 
   $effect(() => {
     const source = text;
     const since = Date.now() - lastParse;
-    if (since >= PARSE_INTERVAL) {
-      lastParse = Date.now();
-      tree = parseMarkdown(source);
-      return;
-    }
+    let cancelled = false;
+    let frame = 0;
     const timer = setTimeout(() => {
-      lastParse = Date.now();
-      tree = parseMarkdown(text);
-    }, PARSE_INTERVAL - since);
-    return () => clearTimeout(timer);
+      frame = requestAnimationFrame(() => {
+        void (async () => {
+          const module = await (markdownModule ??= import('../lib/markdown'));
+          const parsed = module.parseMarkdown(source);
+          if (cancelled) return;
+          lastParse = Date.now();
+          tree = parsed;
+          if (containsMath(parsed)) {
+            const math = await (katexModule ??= import('katex'));
+            if (!cancelled) {
+              katexRenderer = math.default;
+              mathReady = true;
+            }
+          }
+        })();
+      });
+    }, Math.max(0, PARSE_INTERVAL - since));
+    return () => { cancelled = true; clearTimeout(timer); cancelAnimationFrame(frame); };
   });
 
+  function containsMath(blocks: Block[]): boolean {
+    return blocks.some(block => {
+      if (block.kind === 'math') return true;
+      if (block.kind === 'paragraph' || block.kind === 'heading') return inlineHasMath(block.children);
+      if (block.kind === 'quote') return containsMath(block.blocks);
+      if (block.kind === 'list') return block.items.some(item => containsMath(item.blocks));
+      if (block.kind === 'table') return block.header.some(inlineHasMath) || block.rows.some(row => row.some(inlineHasMath));
+      return false;
+    });
+  }
+
+  function inlineHasMath(nodes: Inline[]): boolean {
+    return nodes.some(node => node.kind === 'math' || ('children' in node && inlineHasMath(node.children)));
+  }
+
   function renderMath(tex: string, display: boolean): string {
+    if (!mathReady || !katexRenderer) return `<code>${tex.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code>`;
     try {
-      return katex.renderToString(tex, { displayMode: display, throwOnError: false, strict: 'ignore', trust: false });
+      return katexRenderer.renderToString(tex, { displayMode: display, throwOnError: false, strict: 'ignore', trust: false });
     } catch {
       return `<code>${tex.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code>`;
     }
@@ -189,7 +221,11 @@
   {/each}
 {/snippet}
 
-<div class="markdown">{@render blocks(tree)}</div>
+{#if tree}
+  <div class="markdown">{@render blocks(tree)}</div>
+{:else}
+  <div class="markdown"><p class="md-raw">{text}</p></div>
+{/if}
 
 <style>
   .markdown{display:flex;flex-direction:column;gap:11px;min-width:0;font-size:15px;line-height:1.75;overflow-wrap:anywhere}

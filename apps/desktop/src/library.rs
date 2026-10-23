@@ -171,6 +171,13 @@ fn state(db: &Connection) -> Result<Value> {
         json!({"workspaces":crate::agent::spaces(db,false)?,"activeWorkspace":setting(db,"active_workspace","general"),"memoryEnabled":setting(db,"memory_enabled","true")=="true","conversations":storage::list_conversations(db).map_err(|e|e.to_string())?}),
     )
 }
+pub(crate) fn startup_state(db: &Connection) -> Result<Value> {
+    Ok(json!({
+        "workspaces": crate::agent::spaces(db, false)?,
+        "activeWorkspace": setting(db, "active_workspace", "general"),
+        "memoryEnabled": setting(db, "memory_enabled", "true") == "true"
+    }))
+}
 fn action(db: &mut Connection, operation: &str, p: &Value) -> Result<Value> {
     match operation {
         "state" => return state(db),

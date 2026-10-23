@@ -166,6 +166,47 @@ pub fn stop_run(h: &mut Host, app: &tauri::AppHandle, generation: String) -> Res
     h.browser_approvals.clear();
     Ok(())
 }
+pub fn task_action(
+    db: &rusqlite::Connection,
+    operation: &str,
+    payload: Value,
+    workspace: &str,
+) -> Result<Value, String> {
+    match operation {
+        "save" => {
+            let mut task: scheduler::Task = serde_json::from_value(payload).map_err(|e| e.to_string())?;
+            if task.id.is_empty() {
+                task.id = uuid::Uuid::new_v4().to_string();
+            }
+            if task.workspace_id.is_empty() {
+                task.workspace_id = workspace.to_string();
+            }
+            let connection = storage::get_connection(db, &task.connection_id).map_err(|_| "Choose a connected provider")?;
+            if !connection.connected {
+                return Err("Choose a connected provider".into());
+            }
+            let now = chrono::Utc::now().timestamp();
+            scheduler::save(db, task.clone(), now)?;
+            task.next_at = scheduler::next(&task, Some(now))?;
+            Ok(json!(task))
+        }
+        "pause" | "delete" => {
+            let id = payload["id"].as_str().ok_or("Task ID required")?;
+            let changed = if operation == "delete" {
+                db.execute("UPDATE automation_tasks SET deleted=1,paused=1 WHERE id=?1 AND deleted=0", [id])
+            } else {
+                let paused = payload["paused"].as_bool().ok_or("Paused flag required")?;
+                db.execute("UPDATE automation_tasks SET paused=?2 WHERE id=?1 AND deleted=0", params![id, paused])
+            }.map_err(|e| e.to_string())?;
+            if changed == 0 {
+                return Err("That scheduled task no longer exists".into());
+            }
+            Ok(json!({"id": id}))
+        }
+        _ => Err("Unknown scheduled task operation".into()),
+    }
+}
+
 #[tauri::command]
 pub async fn automation_action(
     app: tauri::AppHandle,
@@ -192,21 +233,11 @@ pub async fn automation_action(
                 let resources=h.db.query_row::<String,_,_>("SELECT event FROM automation_events WHERE event LIKE '{%' ORDER BY id DESC LIMIT 1",[],|r|r.get(0)).ok().and_then(|v|serde_json::from_str::<Value>(&v).ok());
                 return Ok(json!({"tasks":tasks,"runs":runs,"resources":resources,"paused":paused(&h),"runtime":if h.chat.any_active(){"working"}else if h.supervisor.worker_ready(){"ready"}else{"sleeping"}}));
             }
-            "save"=>{
-                let mut task:scheduler::Task=serde_json::from_value(p).map_err(|e|e.to_string())?;
-                if task.workspace_id.is_empty(){task.workspace_id=library::setting(&h.db,"active_workspace","general");}
-                storage::get_connection(&h.db,&task.connection_id).map_err(|_|"Choose a connected provider")?;
-                scheduler::save(&h.db,task,chrono::Utc::now().timestamp())?;
+            "save"|"pause"|"delete"=>{
+                let workspace=library::setting(&h.db,"active_workspace","general");
+                task_action(&h.db,&operation,p,&workspace)?;
             }
             "pause_automation"=>set_paused(&h,p["paused"].as_bool().ok_or("Paused flag required")?)?,
-            "pause"|"delete"=>{
-                let id=p["id"].as_str().ok_or("Task ID required")?;
-                if operation=="delete" {
-                    h.db.execute("UPDATE automation_tasks SET deleted=1,paused=1 WHERE id=?1",[id]).map_err(|e|e.to_string())?;
-                } else {
-                    h.db.execute("UPDATE automation_tasks SET paused=?2 WHERE id=?1",params![id,p["paused"].as_bool().ok_or("Paused flag required")?]).map_err(|e|e.to_string())?;
-                }
-            }
             "cancel"=>{
                 let id=p["id"].as_str().ok_or("Run ID required")?;
                 let generation:String=h.db.query_row("SELECT generation_id FROM automation_runs WHERE id=?1 AND status IN ('running','awaiting_approval')",[id],|r|r.get(0)).map_err(|_|"Run is no longer active")?;

@@ -4,12 +4,9 @@
   import { agent, agentAction, refreshAgent } from '../lib/agent.svelte';
   import { library, refreshLibrary } from '../lib/library.svelte';
   import { openConversation } from '../lib/chat.svelte';
-  import type { Assignment, Skill, WorkspaceBundle } from '../../../../packages/contracts/src/agent';
+  import type { Skill, WorkspaceBundle } from '../../../../packages/contracts/src/agent';
 
   let { onOpenChat }: { onOpenChat: () => void } = $props();
-
-  const open = $derived(agent.assignments.filter(item => item.status === 'open'));
-  const settled = $derived(agent.assignments.filter(item => item.status !== 'open').slice(0, 8));
 
   type SkillDraft = { title: string; description: string; instructions: string; workspaceId: string };
   let edits = $state<Record<string, SkillDraft>>({});
@@ -39,11 +36,6 @@
   async function openChat(conversationId: string | null): Promise<void> {
     if (conversationId && await openConversation(conversationId)) onOpenChat();
   }
-  function due(item: Assignment): string | null {
-    if (!item.due) return null;
-    const date = new Date(item.due.length === 10 ? `${item.due}T12:00:00` : item.due);
-    return Number.isNaN(date.getTime()) ? item.due : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  }
   function bundleSummary(space: WorkspaceBundle): string {
     const parts: string[] = [];
     if (space.instructions) parts.push('own brief');
@@ -56,7 +48,7 @@
 
 <div class="inbox">
   {#if agent.error}<p class="error" role="alert">{agent.error}</p>{/if}
-  <p class="budget">Talo can create <strong>{agent.budget.limit}</strong> things a day and has made <strong>{agent.budget.used}</strong> today. It only acts inside a conversation, never on a timer.</p>
+  <p class="budget">Proposals today: <strong>{agent.budget.used}</strong> / {agent.budget.limit}.</p>
 
   <section>
     <h2>Waiting on you <span>{agent.asks.length}</span></h2>
@@ -64,29 +56,6 @@
       <AskCard {ask} onOpenChat={() => void openChat(ask.parentConversationId ?? ask.conversationId)} />
     {:else}
       <p class="hint">No open questions. When Talo needs a decision it cannot infer, the card appears here and in the chat.</p>
-    {/each}
-  </section>
-
-  <section>
-    <h2>Tasks Talo left you <span>{open.length}</span></h2>
-    {#each open as item (item.id)}
-      <article>
-        <div class="body">
-          <strong>{item.title}</strong>
-          {#if item.why}<p class="why">{item.why}</p>{/if}
-          {#if item.detail}<p class="detail">{item.detail}</p>{/if}
-          <small>
-            {due(item) ? `Due ${due(item)} · ` : ''}Added {new Date(item.createdAt).toLocaleDateString()}
-            {#if item.conversationId}<button class="link" type="button" onclick={() => void openChat(item.conversationId)}>where it came from</button>{/if}
-          </small>
-        </div>
-        <div class="actions">
-          <button disabled={agent.busy} onclick={() => void agentAction('assignment', { id: item.id, status: 'done' })}>Done</button>
-          <button disabled={agent.busy} onclick={() => void agentAction('assignment', { id: item.id, status: 'dismissed' })}>Dismiss</button>
-        </div>
-      </article>
-    {:else}
-      <p class="hint">Nothing assigned. Talo only hands you work it cannot do itself.</p>
     {/each}
   </section>
 
@@ -149,23 +118,6 @@
       <p class="hint">No proposed skills. After a workflow works well, Talo can offer to save the steps for next time.</p>
     {/each}
   </section>
-
-  {#if settled.length}
-    <section>
-      <h2>Recently settled</h2>
-      {#each settled as item (item.id)}
-        <article class="settled">
-          <div class="body">
-            <strong>{item.title}</strong>
-            <small>{item.status === 'done' ? 'Done' : 'Dismissed'} · {new Date(item.updatedAt).toLocaleDateString()}</small>
-          </div>
-          <div class="actions">
-            <button disabled={agent.busy} onclick={() => void agentAction('assignment', { id: item.id, status: 'open' })}>Reopen</button>
-          </div>
-        </article>
-      {/each}
-    </section>
-  {/if}
 </div>
 
 <style>
@@ -196,6 +148,4 @@
   textarea{resize:vertical;margin-top:8px;font-family:var(--font-mono,inherit)}
   details summary{cursor:pointer;font-size:11px;font-weight:550;color:var(--muted);margin-top:9px}
   article .body{max-width:100%}
-  .settled{opacity:.72}
-  .settled strong{font-weight:500}
 </style>

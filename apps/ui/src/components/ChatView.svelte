@@ -746,7 +746,7 @@
         <button class="primary" onclick={() => { void retryChat(); }}>Try again</button>
         <button class="secondary" onclick={onOpenSettings}>Open Settings</button>
       </div>
-    {:else if !connected.length}
+    {:else if !connected.length && messages.length === 0}
       <div class="welcome connect">
         <img src={mascot} alt="Talo, a rounded yellow companion with two black eyes" />
         <h2>Let's get you connected.</h2>

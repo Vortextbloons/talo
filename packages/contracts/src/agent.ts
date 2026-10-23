@@ -16,12 +16,6 @@ export interface WorkspaceBundle {
 }
 
 
-export interface Assignment {
-  id: string; workspaceId: string; title: string; detail: string; why: string;
-  due: string | null; status: 'open' | 'done' | 'dismissed';
-  conversationId: string | null; createdAt: string; updatedAt: string;
-}
-
 export interface AskOption { id: string; label: string; detail: string }
 export interface AskQuestion {
   id: string; question: string; options: AskOption[];
@@ -62,7 +56,7 @@ export interface Skill {
 
 export interface AgentBudget { used: number; limit: number }
 export interface AgentState {
-  assignments: Assignment[]; asks: PendingAsk[];
+  asks: PendingAsk[];
   drafts: WorkspaceBundle[]; skills: Skill[]; skillProposals: Skill[];
   budget: AgentBudget;
 }
