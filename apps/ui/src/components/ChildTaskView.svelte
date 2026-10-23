@@ -2,15 +2,17 @@
   import type { ConversationInfo, ConversationSnapshot, DelegationActivity, DelegationTask } from '../../../../packages/contracts/src/chat';
   import MessageBody from './MessageBody.svelte';
   import AskCard from './AskCard.svelte';
+  import AgentMark from './AgentMark.svelte';
+  import { agentIdentity } from '../lib/agents';
   import { asksFor } from '../lib/agent.svelte';
   import { browser, closeBrowser, openBrowser, selectBrowserSession } from '../lib/browser.svelte';
-  import mascot from '../../../../packages/design/mascot.svg';
 
-  let { snapshot, parent, task = null, activity = [], onBack, agentName = 'Talo' }: {
+  let { snapshot, parent, task = null, activity = [], siblings = [], onBack, agentName = 'Talo' }: {
     snapshot: ConversationSnapshot;
     parent: ConversationInfo | null;
     task?: DelegationTask | null;
     activity?: DelegationActivity[];
+    siblings?: DelegationTask[];
     onBack: () => void;
     agentName?: string;
   } = $props();
@@ -42,6 +44,7 @@
       : latestActivity(activity) || (task?.state === 'queued' ? 'Waiting to start' : ''),
   );
   const browserConnected = $derived(browser.sessionId === snapshot.conversation.id && browser.status.state === 'connected');
+  const agent = $derived(task ? agentIdentity(task, siblings) : { name: agentName, color: 'var(--companion)' });
 
   function watchBrowser(): void {
     const selected = browser.sessionId === snapshot.conversation.id;
@@ -62,9 +65,9 @@
 
 <div class="conversation-head child-head">
   <div class="agent-identity">
-    <img class="agent-avatar" class:busy={working} src={mascot} alt="" aria-hidden="true" />
+    <span class="agent-avatar" class:busy={working}><AgentMark size={34} color={agent.color} /></span>
     <div class="conversation-title">
-      <div class="agent-line"><span class="agent-name">{agentName}</span><span class="state">{stateLabel}</span></div>
+      <div class="agent-line"><span class="agent-name" style:color={agent.color}>{agent.name}</span><span class="state">{stateLabel}</span></div>
       <strong>{snapshot.conversation.title || task?.title || 'Delegated task'}</strong>
       <span class="parent-line">{parent ? `Child of ${parent.title}` : 'Delegated task'}</span>
     </div>
@@ -108,7 +111,7 @@
     <article class="message {message.role}" class:streaming={message.status === 'generating'}>
       <div class="message-body">
         <div class="message-role">
-          <span>{message.role === 'user' ? 'Task' : agentName}</span>
+          <span>{message.role === 'user' ? 'Task' : agent.name}</span>
           {#if message.status === 'cancelled'}<span class="status-tag">Stopped</span>{/if}
           {#if message.status === 'failed'}<span class="status-tag failed">Failed</span>{/if}
         </div>
@@ -136,11 +139,11 @@
   .back:hover{border-color:var(--yellow-deep);color:var(--yellow)}
   .child-head{align-items:center;padding-bottom:10px;margin-bottom:10px}
   .agent-identity{display:flex;align-items:flex-start;gap:11px;min-width:0}
-  .agent-avatar{width:34px;height:34px;flex-shrink:0;margin-top:1px}
-  .agent-avatar.busy{animation:agent-think 1.4s ease-in-out infinite;filter:drop-shadow(0 0 8px rgba(255,212,92,.3))}
+  .agent-avatar{display:block;width:34px;flex-shrink:0;margin-top:1px}
+  .agent-avatar.busy{animation:agent-think 1.4s ease-in-out infinite;filter:drop-shadow(0 0 8px color-mix(in srgb,var(--accent) 30%,transparent))}
   .conversation-title{min-width:0}
   .agent-line{display:flex;align-items:center;gap:7px;margin-bottom:2px}
-  .agent-name{font-size:10px;color:var(--yellow-deep);letter-spacing:.03em}
+  .agent-name{font-size:10px;letter-spacing:.03em;font-weight:620}
   .state{font-size:9.5px;border:1px solid var(--line-strong);border-radius:20px;padding:1px 6px;color:var(--muted)}
   .conversation-title strong{display:block;font-size:14.5px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .parent-line{display:block;font-size:10.5px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -170,7 +173,7 @@
   .message:last-child{border-bottom:0}
   .message.user{justify-content:flex-end}
   .message-body{min-width:0;max-width:92%}
-  .message.user .message-body{max-width:82%;background:#23231e;border:1px solid #33332a;border-radius:13px;padding:10px 14px}
+  .message.user .message-body{max-width:82%;background:var(--soft);border:1px solid color-mix(in srgb,var(--text) 8%,var(--soft));border-radius:13px;padding:10px 14px}
   .message-role{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-bottom:6px}
   .message.user .message-role{justify-content:flex-end;margin-bottom:4px}
   .status-tag{font-size:9.5px;border:1px solid var(--line);border-radius:20px;padding:2px 7px;color:var(--muted)}

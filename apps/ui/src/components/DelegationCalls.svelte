@@ -1,8 +1,10 @@
 <script lang="ts">
   import type { DelegationTask } from '../../../../packages/contracts/src/chat';
+  import { agentIdentity } from '../lib/agents';
 
-  let { tasks, onOpen }: {
+  let { tasks, siblings = [], onOpen }: {
     tasks: DelegationTask[];
+    siblings?: DelegationTask[];
     onOpen: (task: DelegationTask) => void;
   } = $props();
 
@@ -24,10 +26,15 @@
     if (task.state === 'failed' || task.state === 'interrupted') return task.error ?? 'This task did not finish';
     return '';
   }
+
+  function runningBorder(color: string): string {
+    return `color-mix(in srgb, ${color} 45%, var(--line))`;
+  }
 </script>
 
 <div class="calls" role="group" aria-label="Tasks Talo is working on">
   {#each tasks as task (task.id)}
+    {@const agent = agentIdentity(task, siblings.length ? siblings : tasks)}
     <button
       type="button"
       class="call"
@@ -35,17 +42,18 @@
       class:waiting={task.state === 'waiting'}
       class:done={task.state === 'completed'}
       class:failed={task.state === 'failed' || task.state === 'interrupted'}
+      style:border-color={task.state === 'running' || task.state === 'queued' ? runningBorder(agent.color) : undefined}
       title={`Open ${task.title}`}
       onclick={() => onOpen(task)}
     >
-      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" style:color={agent.color}>
         <circle cx="6" cy="5.5" r="2.2" />
         <circle cx="18" cy="18.5" r="2.2" />
         <path d="M6 7.7v3.8a5 5 0 0 0 5 5h4.8" />
       </svg>
       <span class="body">
         <span class="line">
-          <span class="kind">Task</span>
+          <span class="agent" style:color={agent.color}>{agent.name}</span>
           <span class="title">{task.title}</span>
           <span class="state">{state(task)}</span>
         </span>
@@ -59,15 +67,14 @@
   .calls{display:grid;gap:4px;margin:2px 0 12px}
   .call{display:flex;align-items:flex-start;gap:9px;width:100%;min-width:0;text-align:left;font:inherit;background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--muted);transition:border-color .15s ease}
   .call:hover{border-color:var(--line-strong)}
-  .call.running{border-color:#4e4324}
   .call.waiting{border-color:var(--yellow-deep)}
   .call.failed{border-color:var(--error-line)}
   .glyph{width:13px;height:13px;flex-shrink:0;margin-top:2px;color:var(--faint)}
-  .call.running .glyph,.call.waiting .glyph{color:var(--yellow-deep)}
+  .call.waiting .glyph{color:var(--yellow-deep)}
   .call.failed .glyph{color:var(--error-text)}
   .body{display:grid;gap:3px;min-width:0;flex:1}
   .line{display:flex;align-items:baseline;gap:7px;min-width:0}
-  .kind{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);flex-shrink:0}
+  .agent{flex-shrink:0;font-size:10px;font-weight:620;letter-spacing:.02em;white-space:nowrap}
   .title{flex:1;min-width:0;font-size:11.5px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .state{flex-shrink:0;font-size:10px;color:var(--faint);white-space:nowrap}
   .call.running .state{color:var(--yellow-deep)}

@@ -41,6 +41,6 @@
   .reasoning-toggle[aria-expanded="true"] .reasoning-chevron{transform:rotate(180deg)}
   .reasoning-state{color:var(--yellow-deep);text-transform:none;letter-spacing:.02em}
   .reasoning-body{margin-top:8px;padding:2px 0 2px 12px;border-left:2px solid var(--line);color:var(--muted);font-size:12px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow-y:auto;scrollbar-gutter:stable}
-  .thinking .reasoning-body{border-left-color:#4e4324}
+  .thinking .reasoning-body{border-left-color:var(--accent-line)}
   @media(prefers-reduced-motion:reduce){.reasoning-chevron{transition:none}}
 </style>

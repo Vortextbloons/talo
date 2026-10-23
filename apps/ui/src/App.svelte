@@ -4,8 +4,8 @@
   import { onMount } from 'svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import mascot from '../../../packages/design/mascot.svg';
   import NavIcon from './NavIcon.svelte';
+  import AgentMark from './components/AgentMark.svelte';
   import { library, refreshLibrary, mutateLibrary, applyLibraryBootstrap } from './lib/library.svelte';
   import ChatView from './components/ChatView.svelte';
   import ToolApprovals from './components/ToolApprovals.svelte';
@@ -188,7 +188,7 @@
     <div class="rail-inner">
       <div class="rail-top">
         <button class="brand" onclick={openPrimary} title="Chat" aria-label="Talo — go to Chat">
-          <img src={mascot} alt=""/>
+          <span class="brand-mark"><AgentMark size={27} /></span>
           <span class="wordmark">talo<span class="dot">.</span></span>
         </button>
         <button class="pin" onclick={toggleRail} aria-pressed={railPinned} title={railPinned?'Let the rail close again':'Keep the rail open'} aria-label={railPinned?'Let the navigation rail close again':'Keep the navigation rail open'}>
@@ -286,7 +286,7 @@
 </div>
 <svelte:window onkeydown={onKeydown} />
 {#if loaded && (!settings.complete || editing)}
-  <div class="overlay"><dialog open class="onboarding" aria-modal="true" aria-labelledby="setup-title"><img src={mascot} alt="Talo"/><div class="steps">{step===0?'Getting acquainted':'Choosing a model'} · {step+1} of 2</div><h2 id="setup-title">{step===0?'Hi, I’m Talo.':'Where should answers come from?'}</h2>
+  <div class="overlay"><dialog open class="onboarding" aria-modal="true" aria-labelledby="setup-title"><span class="setup-mark"><AgentMark size={55} title="Talo" /></span><div class="steps">{step===0?'Getting acquainted':'Choosing a model'} · {step+1} of 2</div><h2 id="setup-title">{step===0?'Hi, I’m Talo.':'Where should answers come from?'}</h2>
     {#if step===0}
       <p class="setup-lead">One companion and one continuing chat. I remember what matters in each project, tell you what I’m doing while I work, and bring results back to the chat you started in.</p>
       <label>Your name <span>(optional)</span><input bind:value={settings.name} maxlength="80" placeholder="What should Talo call you?"/></label><label>How it should sound<select bind:value={settings.personality}><option>Thoughtful and direct</option><option>Warm and encouraging</option><option>Brief and practical</option></select></label>
@@ -321,7 +321,7 @@
   .rail-inner{width:var(--rail-open);height:100%;padding:18px 0 14px;display:flex;flex-direction:column;min-height:0}
   .rail-top{display:flex;align-items:center;height:34px;padding:0 18px}
   .brand{display:flex;align-items:center;gap:11px;background:transparent;border:0;padding:0;color:var(--text);min-width:0;cursor:pointer}
-  .brand img{width:27px;flex-shrink:0;filter:drop-shadow(0 0 16px rgba(255,212,92,.16))}
+  .brand-mark{display:block;width:27px;flex-shrink:0;filter:drop-shadow(0 0 16px color-mix(in srgb,var(--companion) 16%,transparent))}
   .wordmark{font-size:21px;font-weight:640;letter-spacing:-1px;white-space:nowrap;opacity:0;transform:translateX(-4px);
     transition:opacity .14s ease .03s,transform .14s ease .03s}
   .dot{color:var(--yellow)}
@@ -335,8 +335,8 @@
   nav{display:grid;gap:2px;margin-top:20px}
   nav button{position:relative;display:flex;align-items:center;gap:14px;height:40px;padding:0 18px;border:0;background:transparent;
     color:var(--muted);font-size:13.5px;text-align:left;white-space:nowrap;transition:color .13s ease,background .13s ease}
-  nav button:hover{background:#151513;color:var(--text)}
-  nav button.selected{background:#191916;color:var(--text)}
+  nav button:hover{background:color-mix(in srgb,var(--text) 4%,var(--sidebar));color:var(--text)}
+  nav button.selected{background:var(--paper);color:var(--text)}
 
   nav button.selected::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:0 2px 2px 0;background:var(--yellow)}
   nav button.thinking{color:var(--yellow)}
@@ -358,7 +358,7 @@
   .presence{display:inline-block;width:6px;height:6px;background:var(--yellow-deep);border-radius:50%;flex-shrink:0}
   .foot-label{font-size:11.5px;color:var(--faint);opacity:0;transition:opacity .13s ease}
   .rail:hover .foot-label,.rail:focus-within .foot-label,.rail-pinned .foot-label{opacity:1}
-  .ai-working .brand img{animation:brand-bob 1.7s ease-in-out infinite;filter:drop-shadow(0 0 22px rgba(255,212,92,.34))}
+  .ai-working .brand-mark{animation:brand-bob 1.7s ease-in-out infinite;filter:drop-shadow(0 0 22px color-mix(in srgb,var(--companion) 34%,transparent))}
   main{flex:1;min-width:0;display:flex;flex-direction:column;margin-left:var(--rail);transition:margin-left .18s cubic-bezier(.2,.7,.3,1)}
   header{height:50px;flex-shrink:0;border-bottom:1px solid var(--line);padding:0 44px;display:flex;align-items:center}
   .crumbs{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
@@ -372,17 +372,17 @@
   .page-heading p{max-width:76ch}
   .empty{margin:auto;padding:40px 20px;text-align:center;max-width:520px}
   .empty p{margin:0 0 24px}
-  .empty-badge{display:grid;place-items:center;width:76px;height:76px;margin:0 auto 28px;border:1px solid var(--line-strong);border-radius:50%;background:var(--paper);box-shadow:0 0 64px 6px rgba(255,212,92,.09),inset 0 0 22px rgba(255,212,92,.05)}
+  .empty-badge{display:grid;place-items:center;width:76px;height:76px;margin:0 auto 28px;border:1px solid var(--line-strong);border-radius:50%;background:var(--paper);box-shadow:0 0 64px 6px color-mix(in srgb,var(--accent) 9%,transparent),inset 0 0 22px color-mix(in srgb,var(--accent) 5%,transparent)}
   .empty-icon{font-size:28px;color:var(--yellow-deep)}
   .empty h2{font-size:23px;letter-spacing:-.7px;font-weight:550;margin:0 0 12px}
   .coming{display:inline-block;font-size:11px;color:var(--muted);background:var(--soft);border:1px solid var(--line);padding:7px 12px;border-radius:20px}
   button{border:1px solid var(--line-strong);background:var(--soft);color:var(--text);padding:9px 14px;border-radius:8px;font-size:12px}
-  button:hover:not(:disabled){background:#2c2c27;border-color:#4a4a41}
+  button:hover:not(:disabled){background:var(--hover-bg);border-color:var(--hover-line)}
   button.primary{background:var(--yellow);border-color:var(--yellow);color:var(--black);font-weight:600;padding:11px 18px}
-  button.primary:hover:not(:disabled){background:#ffdd7f;border-color:#ffdd7f}
+  button.primary:hover:not(:disabled){background:var(--accent-bright);border-color:var(--accent-bright)}
   .overlay{position:fixed;inset:0;background:var(--overlay);backdrop-filter:blur(5px);display:grid;place-items:center;padding:24px;z-index:5}
   .onboarding{position:relative;margin:auto;border:1px solid var(--line);color:var(--text);background:var(--paper);border-radius:24px;padding:36px;width:440px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 30px 90px rgba(0,0,0,.65)}
-  .onboarding>img{width:55px;margin-bottom:20px;filter:drop-shadow(0 0 26px rgba(255,212,92,.2))}
+  .setup-mark{display:block;width:55px;margin-bottom:20px;filter:drop-shadow(0 0 26px color-mix(in srgb,var(--companion) 20%,transparent))}
   .steps{font-size:11px;color:var(--muted);margin-bottom:14px}
   .onboarding h2{font-size:26px;letter-spacing:-.7px;margin-bottom:16px}
   .setup-lead{margin:0 0 6px;font-size:13px;line-height:1.7;color:var(--muted)}
@@ -394,7 +394,7 @@
   label{display:block;font-size:13px;font-weight:550;margin:18px 0}
   label span{font-weight:400;color:var(--muted)}
   input,select{display:block;width:100%;padding:12px;border:1px solid var(--line-strong);border-radius:8px;margin-top:9px;background:var(--soft);color:var(--text)}
-  input:hover,select:hover{border-color:#4a4a41}
+  input:hover,select:hover{border-color:var(--hover-line)}
   .setup-note{font-size:12px;margin-top:20px;color:var(--muted);line-height:1.65}
   .setup-actions{display:flex;justify-content:space-between;align-items:center;margin-top:30px;gap:12px;flex-wrap:wrap}
   .setup-right{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto}
@@ -403,7 +403,7 @@
   ::-webkit-scrollbar{width:10px;height:10px}
   ::-webkit-scrollbar-track{background:transparent}
   ::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:8px;border:2px solid var(--bg)}
-  ::-webkit-scrollbar-thumb:hover{background:#4f4f46}
+  ::-webkit-scrollbar-thumb:hover{background:var(--hover-line)}
   @media(max-width:900px){
     .shell{--rail-open:212px}
     header{padding:0 24px}
@@ -423,7 +423,7 @@
   }
   @media(prefers-reduced-motion:reduce){
     .rail,main,.wordmark,.nav-label,.foot-label,.pin{transition:none}
-    .ai-working .brand img{animation:none}
+    .ai-working .brand-mark{animation:none}
   }
   @keyframes brand-bob{0%,100%{transform:translateY(0) rotate(0)}50%{transform:translateY(-2.5px) rotate(-5deg)}}
 </style>

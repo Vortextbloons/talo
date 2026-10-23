@@ -5,6 +5,8 @@
   import { chat, cancelAllDelegations, cancelDelegation, openDelegationTask } from '../lib/chat.svelte';
   import { asksFor } from '../lib/agent.svelte';
   import { browser } from '../lib/browser.svelte';
+  import { COMPANION_COLORS } from '../lib/agents';
+  import { companion, setCompanionColor, resetCompanionColor } from '../lib/theme.svelte';
 
   let { name = 'Talo', onRename }: { name?: string; onRename: (name: string) => Promise<void> } = $props();
   let editing = $state(false);
@@ -129,7 +131,7 @@
         <span class="comet"><i></i></span>
         <span class="spark s1"></span><span class="spark s2"></span><span class="spark s3"></span>
         <svg class="agent-logo" viewBox="0 0 96 80" aria-hidden="true">
-          <rect x="2" y="2" width="92" height="76" rx="32" fill="#ffd45c"/>
+          <rect x="2" y="2" width="92" height="76" rx="32" fill="var(--companion)"/>
           <g class="gaze">
             <g class="eyes" fill="#151515">
               <rect x="28" y="25" width="10" height="28" rx="5"/>
@@ -156,13 +158,24 @@
       <button class="agent-name" onclick={() => { draft = name; editing = true; }} title="Rename your agent"><h2>{name}</h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m15 5 4 4M4 20l5-1L20 8a2.8 2.8 0 0 0-4-4L5 15l-1 5Z"/></svg></button>
     {/if}
     {#if error}<p class="error" role="alert">{error}</p>{/if}
+    <div class="tint" role="group" aria-label="Companion color">
+      {#each COMPANION_COLORS as swatch (swatch)}
+        <button type="button" class="dot" class:on={companion.color === swatch} style:background={swatch} aria-pressed={companion.color === swatch} aria-label="Agent color" title="Agent color" onclick={() => setCompanionColor(swatch)}></button>
+      {/each}
+      <label class="dot custom" title="Pick any color">
+        <input type="color" value={companion.color || '#ffd45c'} oninput={event => setCompanionColor(event.currentTarget.value)} aria-label="Custom companion color" />
+      </label>
+      {#if companion.color}
+        <button type="button" class="dot reset" onclick={resetCompanionColor} aria-label="Match the theme color" title="Match the theme color">↺</button>
+      {/if}
+    </div>
     <p class="activity" role="status"><span class="presence"></span>{#key activity}<span class="activity-in">{activity}</span>{/key}</p><span class="runtime">{runtime}</span>
   </section>
   <div class="browser-slot"><BrowserPreview /></div>
   {#if agents.length}
     <div class="agents-slot">
       <DelegationTasks
-        tasks={agents}
+        tasks={chat.active?.delegations ?? []}
         onOpen={(task) => { void openDelegationTask(task.id); }}
         onCancel={(task) => { void cancelDelegation(task.id); }}
         onCancelAll={() => { const id = chat.active?.conversation.id; if (id) void cancelAllDelegations(id); }}
@@ -176,29 +189,29 @@
   .identity{text-align:center;padding:4px 0 12px}.eyebrow{font-size:9px;text-transform:uppercase;letter-spacing:.16em;color:var(--faint)}
   .avatar-wrap{position:relative;height:130px;display:grid;place-items:center}
   .avatar-stage{position:absolute;inset:0;display:grid;place-items:center;isolation:isolate}
-  .agent-logo{width:86px;z-index:1;animation:float 6s ease-in-out infinite;filter:drop-shadow(0 8px 20px #ffd45c18);transform-origin:50% 88%;transition:filter .3s ease}
+  .agent-logo{width:86px;z-index:1;animation:float 6s ease-in-out infinite;filter:drop-shadow(0 8px 20px color-mix(in srgb,var(--companion) 9%,transparent));transform-origin:50% 88%;transition:filter .3s ease}
   .avatar-wrap:hover .agent-logo{animation:float-squish 1.9s ease-in-out infinite}
   .mood-waking .agent-logo{animation:doze 4.2s ease-in-out infinite}
-  .mood-browsing .agent-logo{animation:lean 2.4s ease-in-out infinite;filter:drop-shadow(0 10px 24px #ffd45c2e)}
-  .mood-thinking .agent-logo{animation:think 2.5s ease-in-out infinite;filter:drop-shadow(0 10px 24px #ffd45c2e)}
+  .mood-browsing .agent-logo{animation:lean 2.4s ease-in-out infinite;filter:drop-shadow(0 10px 24px color-mix(in srgb,var(--companion) 18%,transparent))}
+  .mood-thinking .agent-logo{animation:think 2.5s ease-in-out infinite;filter:drop-shadow(0 10px 24px color-mix(in srgb,var(--companion) 18%,transparent))}
   .mood-stopping .agent-logo{animation:shake .55s ease-in-out 3}
   .mood-attention .agent-logo{animation:perk .8s cubic-bezier(.34,1.56,.64,1) 1}
   .mood-crashed .agent-logo,.mood-failed .agent-logo{animation:droop .7s ease forwards}
   .happy .agent-logo{animation:joy .75s ease-in-out 2}
   .poking .agent-logo{animation:poke .8s cubic-bezier(.34,1.56,.64,1) 1}
-  .orbit{position:absolute;width:122px;height:122px;border:1px solid var(--line);border-radius:50%;background:radial-gradient(circle,#ffd45c09,transparent 70%)}
+  .orbit{position:absolute;width:122px;height:122px;border:1px solid var(--line);border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--companion) 4%,transparent),transparent 70%)}
   .mood-thinking .orbit,.mood-browsing .orbit{border-style:dashed;animation:orbit 14s linear infinite}
   .mood-attention .orbit{border-color:var(--yellow-deep);animation:ring-pulse 1.6s ease-in-out infinite}
-  .aura{position:absolute;width:140px;height:140px;border-radius:50%;background:radial-gradient(circle,#ffd45c14,transparent 65%);opacity:.35;transition:opacity .4s ease}
+  .aura{position:absolute;width:140px;height:140px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--companion) 8%,transparent),transparent 65%);opacity:.35;transition:opacity .4s ease}
   .mood-thinking .aura,.mood-browsing .aura,.mood-attention .aura{opacity:.9;animation:aura-pulse 2.4s ease-in-out infinite}
   .comet{position:absolute;width:122px;height:122px;animation:orbit 46s linear infinite;opacity:.5;pointer-events:none}
-  .comet i{position:absolute;top:-3px;left:50%;margin-left:-3px;width:6px;height:6px;border-radius:50%;background:var(--yellow);box-shadow:0 0 9px 2px #ffd45c59}
+  .comet i{position:absolute;top:-3px;left:50%;margin-left:-3px;width:6px;height:6px;border-radius:50%;background:var(--yellow);box-shadow:0 0 9px 2px color-mix(in srgb,var(--companion) 35%,transparent)}
   .mood-thinking .comet,.mood-browsing .comet,.mood-attention .comet{animation-duration:8s;opacity:1}
-  .spark{position:absolute;width:5px;height:5px;border-radius:50%;background:var(--yellow);box-shadow:0 0 8px 2px #ffd45c40;opacity:0;pointer-events:none}
+  .spark{position:absolute;width:5px;height:5px;border-radius:50%;background:var(--yellow);box-shadow:0 0 8px 2px color-mix(in srgb,var(--companion) 25%,transparent);opacity:0;pointer-events:none}
   .spark.s1{top:16%;left:15%}.spark.s2{top:26%;right:11%}.spark.s3{bottom:24%;left:20%}
   .mood-thinking .spark,.mood-browsing .spark{animation:twinkle 1.7s ease-in-out infinite}
   .spark.s2{animation-delay:.5s}.spark.s3{animation-delay:1s}
-  .burst{position:absolute;left:50%;top:44%;width:5px;height:5px;margin:-2.5px;border-radius:50%;background:var(--yellow);box-shadow:0 0 7px 1px #ffd45c4d;opacity:0;pointer-events:none;z-index:2}
+  .burst{position:absolute;left:50%;top:44%;width:5px;height:5px;margin:-2.5px;border-radius:50%;background:var(--yellow);box-shadow:0 0 7px 1px color-mix(in srgb,var(--companion) 30%,transparent);opacity:0;pointer-events:none;z-index:2}
   .poking .burst{animation:burst .8s cubic-bezier(.2,.6,.35,1) 1}
   .shadow{position:absolute;bottom:22px;width:50px;height:7px;background:#0003;border-radius:50%;filter:blur(4px);animation:shadow 6s ease-in-out infinite}
   .poke{position:absolute;left:50%;top:50%;width:112px;height:112px;transform:translate(-50%,-50%);z-index:2;background:transparent;border:0;padding:0;border-radius:50%;cursor:pointer}
@@ -216,6 +229,14 @@
   .happy .mouth,.poking .mouth{opacity:1;transform:scale(1)}
   .agent-name{display:inline-flex;align-items:center;gap:9px;max-width:100%;border:0;background:transparent;padding:2px 8px;color:var(--text)}h2{font-size:19px;font-weight:550;letter-spacing:-.6px;margin:0;overflow-wrap:anywhere}.agent-name svg{width:13px;height:13px;color:var(--faint);flex-shrink:0}.agent-name:hover svg{color:var(--yellow)}
   .runtime{display:block;font-size:10px;color:var(--faint);margin-top:7px;line-height:1.6}
+  .tint{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;align-items:center;margin:10px auto 0;padding:0 8px;max-width:172px}
+  .dot{width:15px;height:15px;flex-shrink:0;border-radius:50%;border:1px solid var(--line-strong);padding:0;transition:transform .12s ease}
+  .dot:hover{transform:scale(1.15)}
+  .dot.on{border-color:transparent;box-shadow:0 0 0 1.5px var(--text)}
+  .dot.custom{position:relative;overflow:hidden;background:conic-gradient(#f59bb8,#ffd45c,#8fe3a9,#82c7f0,#c4a2ff,#f59bb8)}
+  .dot.custom input{position:absolute;inset:-6px;opacity:0;cursor:pointer}
+  .dot.reset{display:grid;place-items:center;background:var(--soft);color:var(--muted);font-size:9px;line-height:1}
+  .dot.reset:hover{color:var(--text)}
   .activity{display:flex;align-items:center;justify-content:center;gap:7px;color:var(--muted);font-size:11px;margin:11px 0 0}.presence{width:5px;height:5px;background:var(--yellow);border-radius:50%;flex-shrink:0}
   .mood-thinking .presence,.mood-browsing .presence{animation:pulse 1.8s ease-in-out infinite}
   .mood-attention .presence{animation:pulse 1.1s ease-in-out infinite}

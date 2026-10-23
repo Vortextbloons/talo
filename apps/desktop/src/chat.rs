@@ -2885,6 +2885,67 @@ pub async fn provider_models(
     .await
 }
 
+fn theme_draft_inner(host: &mut Host, description: &str) -> Result<Value, String> {
+    let description = description.trim();
+    if description.is_empty() || description.chars().count() > 400 || description.chars().any(char::is_control) {
+        return Err("Describe the theme you want in a few words".into());
+    }
+    let stored = crate::library::setting(&host.db, "onboarding", "{}");
+    let stored: Value = serde_json::from_str(&stored).unwrap_or(Value::Null);
+    let preferred = stored.get("provider").and_then(Value::as_str).unwrap_or("");
+    let connections = storage::list_connections(&host.db).map_err(storage_error)?;
+    let chosen = connections
+        .iter()
+        .find(|connection| connection.connected && connection.provider_id == preferred)
+        .or_else(|| connections.iter().find(|connection| connection.connected))
+        .ok_or("Connect a model in Settings first")?
+        .id
+        .clone();
+    let connection = storage::get_connection(&host.db, &chosen).map_err(storage_error)?;
+    let secret = decrypt_secret(&host.db, &mut host.supervisor, &connection)?;
+    host.supervisor.ensure_worker()?;
+    let mut params = json!({
+        "provider": &connection.provider_id,
+        "model": connection.model_id.as_deref(),
+        "baseUrl": connection.base_url.as_deref(),
+        "description": description,
+    });
+    if let Some(secret) = secret.as_ref().and_then(|secret| secret.as_str().ok()) {
+        params["apiKey"] = Value::String(secret.to_string());
+    }
+    let reply = host
+        .supervisor
+        .dispatch("theme.draft", params)
+        .map_err(|error| {
+            if error.is_timeout() {
+                "The theme request timed out".to_string()
+            } else {
+                sanitize_error(&error.to_string())
+            }
+        })?;
+    reply
+        .wait(std::time::Duration::from_secs(90))
+        .map_err(|error| {
+            if error.is_timeout() {
+                "The theme request timed out".to_string()
+            } else {
+                sanitize_error(&error.to_string())
+            }
+        })
+}
+
+#[tauri::command]
+pub async fn theme_draft(app: AppHandle, description: String) -> Result<Value, String> {
+    run_blocking(app, move |app| {
+        let shared = app.state::<Shared>();
+        let mut host = shared
+            .lock()
+            .map_err(|_| "Talo state is unavailable".to_string())?;
+        theme_draft_inner(&mut host, &description)
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

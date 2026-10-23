@@ -3,7 +3,7 @@
   import LibrarySidebar from './LibrarySidebar.svelte';
   import { library, mutateLibrary } from '../lib/library.svelte';
   import { tick, untrack, onMount } from 'svelte';
-  import mascot from '../../../../packages/design/mascot.svg';
+  import AgentMark from './AgentMark.svelte';
   import type { ChatMessage } from '../../../../packages/contracts/src/chat';
   import type { ThinkingLevelName } from '../../../../packages/contracts/src/index';
   import { rolesFor } from '../../../../packages/contracts/src/index';
@@ -690,7 +690,7 @@
         <span>{tagline}</span>
       </div>
       <button class="primary-chat" class:selected={primary} disabled={chat.creating || chat.preview} aria-current={primary ? 'true' : undefined} onclick={() => { void openConversation(PRIMARY_CONVERSATION_ID); }}>
-        <span class="primary-avatar"><img src={mascot} alt="" /><span class:busy={primary && (working || activeTasks > 0)}></span></span>
+        <span class="primary-avatar"><AgentMark size={34} /><span class="presence" class:busy={primary && (working || activeTasks > 0)}></span></span>
         <span class="primary-copy"><strong>{agentName}</strong><small>{primaryStatus}</small></span>
       </button>
       <LibrarySidebar bind:showArchived {onOpenMemory} />
@@ -752,7 +752,7 @@
 
   <section class="conversation" aria-label="Conversation">
     {#if chat.child}
-      <ChildTaskView snapshot={chat.child} parent={chat.childParent} task={delegations.find(task => task.childConversationId === chat.child?.conversation.id) ?? null} activity={chat.activity[delegations.find(task => task.childConversationId === chat.child?.conversation.id)?.id ?? ''] ?? []} agentName={agentName} onBack={closeDelegationTask} />
+      <ChildTaskView snapshot={chat.child} parent={chat.childParent} task={delegations.find(task => task.childConversationId === chat.child?.conversation.id) ?? null} siblings={delegations} activity={chat.activity[delegations.find(task => task.childConversationId === chat.child?.conversation.id)?.id ?? ''] ?? []} agentName={agentName} onBack={closeDelegationTask} />
     {:else}
     <div class="conversation-head">
       <div class="conversation-lead">
@@ -783,14 +783,14 @@
 
     {#if chat.phase === 'loading'}
       <div class="welcome connect" role="status">
-        <img src={mascot} alt="Talo, a rounded yellow companion with two black eyes" />
+        <span class="welcome-mark"><AgentMark size={84} title="Talo, a friendly rounded companion with two eyes" /></span>
         <span class="loading-dot" aria-hidden="true"></span>
         <h2>Opening your conversations…</h2>
         <p>Bringing your threads and connected models back into view.</p>
       </div>
     {:else if chat.phase === 'error'}
       <div class="welcome connect">
-        <img src={mascot} alt="Talo, a rounded yellow companion with two black eyes" />
+        <span class="welcome-mark"><AgentMark size={84} title="Talo, a friendly rounded companion with two eyes" /></span>
         <h2>Your conversations did not open.</h2>
         <p>The desktop app is still running. Try once more, or check Settings if this keeps happening.</p>
         <button class="primary" onclick={() => { void retryChat(); }}>Try again</button>
@@ -798,7 +798,7 @@
       </div>
     {:else if !connected.length && messages.length === 0}
       <div class="welcome connect">
-        <img src={mascot} alt="Talo, a rounded yellow companion with two black eyes" />
+        <span class="welcome-mark"><AgentMark size={84} title="Talo, a friendly rounded companion with two eyes" /></span>
         <h2>One step before we talk.</h2>
         <p>Connect a model so Talo can answer. You paste one key from a provider you already use.<br />That provider bills you for what Talo uses; free options cost nothing.</p>
         <button class="primary" disabled={chat.preview} onclick={() => onOpenSettings('Models')}>Add a model key</button>
@@ -807,7 +807,7 @@
       </div>
     {:else if messages.length === 0}
       <div class="welcome">
-        <img src={mascot} alt="Talo, a rounded yellow companion with two black eyes" />
+        <span class="welcome-mark"><AgentMark size={84} title="Talo, a friendly rounded companion with two eyes" /></span>
         <h2>Hi, I’m here. What are we working on?</h2>
         <p>Describe it in your own words, or let me show you with one small task.</p>
         <button class="primary sample" disabled={chat.sending || !connected.length} onclick={() => void trySample()}>Try a sample task</button>
@@ -833,14 +833,14 @@
           <VirtualMessage id={item.kind === 'turns' ? item.id : item.message.id} root={logEl} onResize={() => { if (pinned && !active?.after && !changingHistory && logEl) logEl.scrollTop = logEl.scrollHeight; }}>
           {#if item.kind === 'turns'}
             <article class="message assistant turns-group">
-              <img class="avatar" src={mascot} alt="" aria-hidden="true" />
+              <span class="avatar"><AgentMark size={27} /></span>
               <div class="message-body">
                 <div class="message-role"><span>{agentName}</span></div>
                 {#if item.firstOfGeneration && item.turns[0].generationId && chat.research[item.turns[0].generationId]?.length}
                   <WebResearch items={chat.research[item.turns[0].generationId]} working={chat.active?.generationId === item.turns[0].generationId} onCancel={() => void stopGeneration()} />
                 {/if}
                 {#if calledTasks(item.turns[0].generationId).length}
-                  <DelegationCalls tasks={calledTasks(item.turns[0].generationId)} onOpen={(task) => { void openDelegationTask(task.id); }} />
+                  <DelegationCalls tasks={calledTasks(item.turns[0].generationId)} siblings={delegations} onOpen={(task) => { void openDelegationTask(task.id); }} />
                 {/if}
                 {#if showReasoning && item.turns.some(turn => turn.reasoning)}
                   <button type="button" class="turns-toggle" aria-expanded={Boolean(expandedTurns[item.id])} onclick={() => toggleTurns(item.id)}>
@@ -864,7 +864,7 @@
             {@const index = item.index}
             <article class="message {message.role}" class:streaming={message.status === 'generating'}>
             {#if message.role === 'assistant'}
-              <img class="avatar" class:busy={message.status === 'generating'} src={mascot} alt="" aria-hidden="true" />
+              <span class="avatar" class:busy={message.status === 'generating'}><AgentMark size={27} /></span>
             {/if}
             <div class="message-body">
               <div class="message-role">
@@ -876,7 +876,7 @@
                 <WebResearch items={chat.research[message.generationId]} working={message.status === 'generating'} onCancel={() => void stopGeneration()} />
               {/if}
               {#if message.role === 'assistant' && message.generationId && calledTasks(message.generationId).length}
-                <DelegationCalls tasks={calledTasks(message.generationId)} onOpen={(task) => { void openDelegationTask(task.id); }} />
+                <DelegationCalls tasks={calledTasks(message.generationId)} siblings={delegations} onOpen={(task) => { void openDelegationTask(task.id); }} />
               {/if}
               {#if message.attachments?.length}
                 <div class="message-images">
@@ -923,7 +923,7 @@
           </VirtualMessage>
         {/each}
         {#if unattachedTasks.length}
-          <DelegationCalls tasks={unattachedTasks} onOpen={(task) => { void openDelegationTask(task.id); }} />
+          <DelegationCalls tasks={unattachedTasks} siblings={delegations} onOpen={(task) => { void openDelegationTask(task.id); }} />
         {/if}
       </div>
       {#if active?.after}<button class="secondary" onclick={() => void latest()}>Jump to latest</button>{/if}
@@ -1162,7 +1162,7 @@
 
 <style>
   .primary-chat{display:flex;align-items:center;gap:12px;text-align:left;width:100%;padding:14px 12px;margin:2px 0 18px;border:1px solid var(--line-strong);border-radius:12px;background:var(--soft);color:var(--text);cursor:pointer}
-  .primary-chat.selected{background:#302d20;border-color:#655a32}.primary-chat:hover:not(:disabled){border-color:var(--yellow-deep)}.primary-chat:disabled{opacity:.5;cursor:not-allowed}.primary-avatar{position:relative;flex-shrink:0}.primary-avatar img{display:block;width:34px;height:34px}.primary-avatar>span{position:absolute;right:-2px;bottom:0;width:8px;height:8px;background:#9fb398;border:2px solid var(--panel);border-radius:50%}.primary-avatar>span.busy{background:var(--yellow)}.primary-copy{display:grid;gap:5px;min-width:0}.primary-copy strong{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.primary-copy small{font-size:10.5px;color:var(--muted);line-height:1.4}
+  .primary-chat.selected{background:var(--accent-bg);border-color:var(--accent-line)}.primary-chat:hover:not(:disabled){border-color:var(--yellow-deep)}.primary-chat:disabled{opacity:.5;cursor:not-allowed}.primary-avatar{position:relative;flex-shrink:0}.primary-avatar :global(svg){display:block;width:34px;height:auto}.primary-avatar .presence{position:absolute;right:-2px;bottom:0;width:8px;height:8px;background:#9fb398;border:2px solid var(--panel,var(--paper));border-radius:50%}.primary-avatar .presence.busy{background:var(--yellow)}.primary-copy{display:grid;gap:5px;min-width:0}.primary-copy strong{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.primary-copy small{font-size:10.5px;color:var(--muted);line-height:1.4}
 
 
   .chat-workspace{flex:1;min-height:0;min-width:0;display:flex;position:relative}
@@ -1182,8 +1182,8 @@
   .thread-list{list-style:none;padding:0;margin:0;display:grid;gap:3px;min-width:0}
   .thread-list li{position:relative;min-width:0}
   .thread-open{position:relative;width:100%;text-align:left;background:transparent;border:1px solid transparent;color:var(--muted);padding:10px 32px 10px 10px;border-radius:9px;display:block;line-height:1.4}
-  .thread-open:hover:not(:disabled){background:#1d1d19;color:var(--text)}
-  .thread-list li.active .thread-open{background:#26261f;color:var(--text);border-color:#34342c}
+  .thread-open:hover:not(:disabled){background:var(--soft-raised);color:var(--text)}
+  .thread-list li.active .thread-open{background:var(--accent-bg);color:var(--text);border-color:var(--accent-line)}
   .thread-list li.active .thread-open::before{content:'';position:absolute;left:-1px;top:12px;bottom:12px;width:2px;border-radius:2px;background:var(--yellow)}
 
   .thread-delete{position:absolute;top:7px;right:6px;z-index:2;display:grid;place-items:center;width:22px;height:22px;padding:0;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--faint);opacity:0;transition:opacity .13s ease,color .15s ease,border-color .15s ease,background .15s ease}
@@ -1191,13 +1191,13 @@
   .thread-list li:hover .thread-delete,.thread-list li:focus-within .thread-delete,.thread-list li.active .thread-delete{opacity:1}
   .thread-delete:hover:not(:disabled){color:var(--error-text);border-color:var(--error-line);background:var(--error-bg)}
   @media(hover:none){.thread-delete{opacity:1}}
-  .thread-confirm{position:absolute;inset:0;z-index:3;display:grid;align-content:center;gap:7px;padding:9px 11px;background:#1c1c17;border:1px solid var(--error-line);border-radius:9px;box-shadow:0 10px 26px var(--shadow)}
+  .thread-confirm{position:absolute;inset:0;z-index:3;display:grid;align-content:center;gap:7px;padding:9px 11px;background:var(--soft-raised);border:1px solid var(--error-line);border-radius:9px;box-shadow:0 10px 26px var(--shadow)}
   .thread-confirm>span{font-size:10.5px;color:var(--muted);line-height:1.35}
   .thread-confirm-actions{display:flex;gap:6px}
   .thread-confirm-actions button{width:auto;flex:1;text-align:center;padding:5px 8px;font-size:10.5px;line-height:1.3;border:1px solid var(--line-strong);border-radius:6px;background:var(--soft);color:var(--text)}
   .thread-confirm-actions .danger{border-color:var(--error-line);background:var(--error-bg);color:var(--error-text)}
-  .thread-confirm-actions button:hover:not(:disabled){border-color:var(--line-strong);background:#2c2c26}
-  .thread-confirm-actions .danger:hover:not(:disabled){border-color:#7a5a30;background:#33261a}
+  .thread-confirm-actions button:hover:not(:disabled){border-color:var(--line-strong);background:var(--hover-bg)}
+  .thread-confirm-actions .danger:hover:not(:disabled){border-color:var(--error-text);background:var(--error-bg)}
   .thread-title{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .thread-meta{display:flex;gap:7px;margin-top:4px;font-size:10px;color:var(--faint);white-space:nowrap;overflow:hidden}
   .thread-model{overflow:hidden;text-overflow:ellipsis;max-width:115px}
@@ -1212,25 +1212,25 @@
   .title-line{display:flex;align-items:center;gap:9px;min-width:0}
   .status-pill{display:inline-flex;align-items:center;gap:5px;flex-shrink:0;border:1px solid var(--line);border-radius:20px;padding:2px 8px;font-size:9.5px;letter-spacing:.04em;color:var(--muted);white-space:nowrap}
   .status-dot{width:5px;height:5px;border-radius:50%;background:currentColor;flex-shrink:0}
-  .status-pill.tone-working{color:var(--yellow-deep);border-color:#4e4324;background:#211f16}
+  .status-pill.tone-working{color:var(--yellow-deep);border-color:var(--accent-line);background:var(--accent-bg)}
   .status-pill.tone-working .status-dot{background:var(--yellow);animation:pulse 1.4s ease-in-out infinite}
-  .status-pill.tone-input{color:var(--text);border-color:var(--yellow-deep);background:#26241a}
+  .status-pill.tone-input{color:var(--text);border-color:var(--yellow-deep);background:var(--accent-bg)}
   .status-pill.tone-input .status-dot{background:var(--yellow)}
   .status-pill.tone-done .status-dot{background:#9fb398}
   .conversation-title strong{display:block;min-width:0;font-size:15px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .conversation-title span.detail{display:block;font-size:11px;color:var(--muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .chat-message{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 13px;border-radius:9px;font-size:12.5px;margin-bottom:12px;line-height:1.5}
   .chat-message.error{background:var(--error-bg);border:1px solid var(--error-line);color:var(--error-text)}
-  .chat-message.notice{background:#211f16;border:1px solid #4e4324;color:#e8d59e}
+  .chat-message.notice{background:var(--accent-bg);border:1px solid var(--accent-line);color:var(--accent-note)}
   .chat-message button{background:transparent;border:0;color:inherit;padding:0 4px;font-size:16px;line-height:1}
 
   .welcome{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px 12px;width:100%;max-width:640px;align-self:center}
-  .welcome img{width:84px;margin-bottom:22px;filter:drop-shadow(0 0 36px rgba(255,212,92,.22)) drop-shadow(0 0 90px rgba(255,212,92,.1));animation:mascot-bob 5.5s ease-in-out infinite}
+  .welcome .welcome-mark{display:block;width:84px;margin:0 auto 22px;filter:drop-shadow(0 0 36px color-mix(in srgb,var(--companion) 22%,transparent)) drop-shadow(0 0 90px color-mix(in srgb,var(--companion) 10%,transparent));animation:mascot-bob 5.5s ease-in-out infinite}
   .welcome h2{font-size:23px;letter-spacing:-.6px;font-weight:550;margin:0 0 12px}
   .welcome p{color:var(--muted);font-size:14.5px;line-height:1.7;margin:0 0 21px}
   .welcome small{display:block;margin-top:18px;color:var(--faint);font-size:11px;line-height:1.6}
   .welcome .primary{background:var(--yellow);border:1px solid var(--yellow);color:var(--black);font-weight:600;padding:11px 18px;border-radius:9px;font-size:13px}
-  .welcome .primary:hover:not(:disabled){background:#ffdd7f;border-color:#ffdd7f}
+  .welcome .primary:hover:not(:disabled){background:var(--accent-bright);border-color:var(--accent-bright)}
   .welcome .sample-hint{margin:24px 0 0;font-size:11.5px;color:var(--faint);line-height:1.5}
   .welcome .sample-echo{margin:18px 0 0;max-width:430px;padding:10px 14px;border:1px dashed var(--line-strong);border-radius:10px;font-size:11.5px;line-height:1.6;color:var(--muted);text-align:left}
   .secondary{background:transparent;margin-left:8px}
@@ -1245,10 +1245,10 @@
   .message{display:flex;gap:12px;padding:14px 0 20px;border-bottom:1px solid var(--line);animation:msg-in .32s cubic-bezier(.2,.7,.3,1)}
   .message:last-child{border-bottom:0}
   .message.user{justify-content:flex-end}
-  .avatar{width:27px;height:27px;margin-top:2px;flex-shrink:0;transform-origin:50% 80%}
-  .avatar.busy{animation:avatar-think 1.4s ease-in-out infinite;filter:drop-shadow(0 0 9px rgba(255,212,92,.35))}
+  .avatar{display:block;width:27px;margin-top:2px;flex-shrink:0;transform-origin:50% 80%}
+  .avatar.busy{animation:avatar-think 1.4s ease-in-out infinite;filter:drop-shadow(0 0 9px color-mix(in srgb,var(--companion) 35%,transparent))}
   .message-body{min-width:0;max-width:92%}
-  .message.user .message-body{max-width:82%;background:#23231e;border:1px solid #33332a;border-radius:13px;padding:10px 14px}
+  .message.user .message-body{max-width:82%;background:var(--soft);border:1px solid color-mix(in srgb,var(--text) 8%,var(--soft));border-radius:13px;padding:10px 14px}
   .message-role{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-bottom:6px;letter-spacing:.01em}
   .message.user .message-role{justify-content:flex-end;margin-bottom:4px}
   .message.streaming .message-role>span:first-child{color:var(--yellow)}
@@ -1276,7 +1276,7 @@
   .queued p{margin:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .composer{flex-shrink:0;border:1px solid var(--line-strong);border-radius:15px;padding:15px 16px 13px;background:var(--paper);box-shadow:0 12px 32px var(--shadow);margin-top:10px;transition:border-color .15s ease,background .15s ease}
 
-  .composer.dragging{border-color:var(--yellow-deep);background:#1d1c16}
+  .composer.dragging{border-color:var(--yellow-deep);background:var(--accent-bg)}
   .drafts{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 11px}
   .draft{position:relative;width:62px;height:62px;border:1px solid var(--line-strong);border-radius:10px;overflow:hidden;background:var(--soft)}
   .draft img{width:100%;height:100%;object-fit:cover;display:block}
@@ -1294,7 +1294,7 @@
   .lightbox-backdrop{position:absolute;inset:0;padding:0;border:0;background:transparent;cursor:default}
   .lightbox img{position:relative;max-width:100%;max-height:100%;border-radius:12px;box-shadow:0 30px 80px rgba(0,0,0,.6)}
   .lightbox-close{position:absolute;top:18px;right:18px;width:32px;height:32px;padding:0;display:grid;place-items:center;font-size:17px;border-radius:50%;border:1px solid var(--line-strong);background:var(--paper);color:var(--text)}
-  .composer:focus-within{border-color:#4b4b40}
+  .composer:focus-within{border-color:var(--hover-line)}
   .composer textarea{display:block;border:0;resize:none;background:transparent;color:var(--text);width:100%;height:54px;min-height:54px;max-height:220px;font-size:15px;line-height:1.65;padding:2px 2px 8px;overflow-y:auto}
   .composer-note{font-size:11px;color:var(--error-text);margin:0 2px 9px;padding-bottom:9px;border-bottom:1px solid var(--line)}
   .composer-note button{background:transparent;border:0;color:var(--yellow);padding:0;margin-left:5px;text-decoration:underline;font-size:11px}
@@ -1317,19 +1317,19 @@
   .picker-empty{margin:2px;padding:8px 10px;font-size:12px;color:var(--faint)}
   .picker-group{font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);padding:9px 10px 5px}
   .picker-option{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:transparent;border:0;border-radius:8px;padding:8px 10px;font-size:12.5px;color:var(--text);cursor:pointer;line-height:1.4}
-  .picker-option.active{background:#24241e}
+  .picker-option.active{background:var(--soft)}
   .picker-option.disabled{opacity:.45;cursor:not-allowed}
   .picker-dot{width:6px;height:6px;border-radius:50%;border:1px solid var(--line-strong);flex-shrink:0}
   .picker-option.selected .picker-dot{background:var(--yellow);border-color:var(--yellow)}
   .picker-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
   .picker-option.selected .picker-name{font-weight:600}
-  .picker-tag{font-size:9px;color:var(--yellow-deep);border:1px solid #4e4324;border-radius:20px;padding:2px 7px;white-space:nowrap;flex-shrink:0}
+  .picker-tag{font-size:9px;color:var(--yellow-deep);border:1px solid var(--accent-line);border-radius:20px;padding:2px 7px;white-space:nowrap;flex-shrink:0}
   .picker-status{font-size:10px;color:var(--faint)}
 
   .thinking-wrap{position:relative;min-width:0}
   .thinking-pill{display:flex;align-items:center;gap:6px;border:1px solid var(--line-strong);background:var(--soft);color:var(--muted);border-radius:9px;padding:0 8px;height:32px;cursor:pointer;transition:border-color .15s ease}
-  .thinking-pill:hover:not(:disabled){border-color:#4a4a41;color:var(--text)}
-  .thinking-pill:focus-visible{border-color:#4b4b40}
+  .thinking-pill:hover:not(:disabled){border-color:var(--hover-line);color:var(--text)}
+  .thinking-pill:focus-visible{border-color:var(--hover-line)}
   .thinking-pill:disabled{opacity:.45;cursor:not-allowed}
   .thinking-name{font-size:10px;color:var(--faint);flex-shrink:0}
   .thinking-value{font-size:11px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
@@ -1337,7 +1337,7 @@
   .thinking-pill[aria-expanded="true"] .thinking-chevron{transform:rotate(180deg)}
   .thinking-menu{position:absolute;right:0;bottom:calc(100% + 8px);z-index:40;min-width:140px;background:var(--paper);border:1px solid var(--line-strong);border-radius:12px;padding:6px;box-shadow:0 18px 48px rgba(0,0,0,.55)}
   .thinking-option{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:8px;font-size:12px;color:var(--text);cursor:pointer;line-height:1.4}
-  .thinking-option.active{background:#24241e}
+  .thinking-option.active{background:var(--soft)}
   .thinking-option .picker-dot{width:6px;height:6px;border-radius:50%;border:1px solid var(--line-strong);flex-shrink:0}
   .thinking-option.selected .picker-dot{background:var(--yellow);border-color:var(--yellow)}
   .thinking-option.selected{font-weight:600}
@@ -1351,7 +1351,7 @@
   .attach:hover:not(:disabled){color:var(--text);border-color:var(--line-strong);background:var(--soft)}
   .send svg{width:16px;height:16px;display:block;transition:transform .18s ease}
   .send[aria-busy="true"] svg{animation:lift 1.1s ease-in-out infinite}
-  .send:hover:not(:disabled){background:#ffdd7f}
+  .send:hover:not(:disabled){background:var(--accent-bright)}
   .send:hover:not(:disabled) svg{transform:translateY(-1.5px)}
   .send:active:not(:disabled) svg{transform:translateY(1px) scale(.9)}
   .stop{background:transparent;border:1px solid var(--line-strong);color:var(--text);border-radius:9px;padding:7px 12px;font-size:11px;line-height:1.3}
@@ -1366,7 +1366,7 @@
   @keyframes msg-in{from{opacity:0;transform:translateY(7px)}}
   @keyframes avatar-think{0%,100%{transform:rotate(-4deg) translateY(.5px)}50%{transform:rotate(4deg) translateY(-1.5px)}}
   @keyframes mascot-bob{0%,100%{transform:translateY(1px) rotate(-1.5deg)}50%{transform:translateY(-3px) rotate(1.5deg)}}
-  @keyframes stop-pulse{50%{border-color:var(--yellow-deep);box-shadow:0 0 0 3px rgba(255,212,92,.08)}}
+  @keyframes stop-pulse{50%{border-color:var(--yellow-deep);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 8%,transparent)}}
   @media(max-width:980px){
     .chat-layout{--rail-w:216px}
     .conversation{padding-left:12px}
@@ -1388,7 +1388,7 @@
     .picker-chevron,.rail-inner,.conversation{transition:none}
   }
   @media(prefers-reduced-motion:reduce){
-    .avatar.busy,.welcome img,.stop,.browser-dot,.message{animation:none}
+    .avatar.busy,.welcome .welcome-mark,.stop,.browser-dot,.message{animation:none}
     .send svg{transition:none}
   }
 </style>

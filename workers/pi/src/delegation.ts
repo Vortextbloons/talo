@@ -13,6 +13,7 @@ const parameters = Type.Object({
     Type.Literal('cancel_all'),
   ]),
   title: Type.Optional(Type.String({ maxLength: 120 })),
+  name: Type.Optional(Type.String({ maxLength: 40 })),
   brief: Type.Optional(Type.String({ maxLength: 4000 })),
   depth: Type.Optional(Type.Union([Type.Literal('flash'), Type.Literal('smart')])),
   taskId: optionalId,
@@ -21,7 +22,7 @@ const parameters = Type.Object({
 const description = [
   'Delegate one bounded, independent subtask to a child task in this conversation.',
   'Operations:',
-  'start — create a child with a short title and a self-contained brief. Returns a stable task ID immediately; the child keeps running independently. Give every child the full context it needs, because it does not receive this transcript. Pass depth "flash" for quick lookups and "smart" for hard analysis; omit it to follow the performance tier.',
+  'start — create a child with a short title, a personal name for the child agent, and a self-contained brief. Returns a stable task ID immediately; the child keeps running independently. Give every child the full context it needs, because it does not receive this transcript. Give each child a distinct personal name so the user can tell them apart. Pass depth "flash" for quick lookups and "smart" for hard analysis; omit it to follow the performance tier.',
   'list — inspect this conversation’s delegated tasks and their current states.',
   'cancel — stop one delegated task without touching siblings, this chat, or other chats.',
   'cancel_all — stop every active delegated task owned by this conversation.',

@@ -31,6 +31,7 @@ pub struct DelegationTask {
     pub delivered: bool,
     pub thinking_level: Option<String>,
     pub current_activity: Option<String>,
+    pub agent_name: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -98,6 +99,15 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
     if has_activity == 0 {
         db.execute_batch("ALTER TABLE agent_delegations ADD COLUMN current_activity TEXT")?;
     }
+    let has_name: i64 = db
+        .query_row(
+            "SELECT count(*) FROM pragma_table_info('agent_delegations') WHERE name='agent_name'",
+            [],
+            |row| row.get(0),
+        )?;
+    if has_name == 0 {
+        db.execute_batch("ALTER TABLE agent_delegations ADD COLUMN agent_name TEXT")?;
+    }
     Ok(())
 }
 
@@ -116,10 +126,11 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DelegationTask> {
         updated_at: row.get(10)?,
         thinking_level: row.get(11)?,
         current_activity: row.get(12)?,
+        agent_name: row.get(13)?,
     })
 }
 
-const TASK_COLUMNS: &str = "id,parent_conversation_id,child_conversation_id,title,brief,state,result,error,delivered,created_at,updated_at,thinking_level,current_activity";
+const TASK_COLUMNS: &str = "id,parent_conversation_id,child_conversation_id,title,brief,state,result,error,delivered,created_at,updated_at,thinking_level,current_activity,agent_name";
 
 pub fn list(db: &Connection, parent: &str) -> Result<Vec<Value>, String> {
     let mut statement = db
@@ -425,6 +436,7 @@ pub fn start(
     title: &str,
     brief: &str,
     depth: Option<&str>,
+    name: Option<&str>,
 ) -> Result<DelegationTask, String> {
     let parent = storage::get_conversation(db, parent_id).map_err(|_| "That conversation no longer exists".to_string())?;
     if parent.selection.is_none() {
@@ -445,6 +457,7 @@ pub fn start(
     }
     let title = clean(title, MAX_TITLE, false).ok_or("title must be 1–120 characters")?;
     let brief = clean(brief, MAX_BRIEF, true).ok_or("brief must be 1–4000 characters")?;
+    let agent_name = name.and_then(|value| clean(value, 40, false));
     let (per_parent, total) = active_counts(db, parent_id)?;
     if per_parent >= MAX_ACTIVE_PER_PARENT {
         return Err(format!(
@@ -497,9 +510,9 @@ pub fn start(
         .map_err(|_| "The child conversation could not be attached".to_string())?;
     let stamp = now();
     db.execute(
-        "INSERT INTO agent_delegations(id,parent_conversation_id,child_conversation_id,title,brief,state,delivered,created_at,updated_at,thinking_level)
-         VALUES(?1,?2,?3,?4,?5,'queued',0,?6,?6,?7)",
-        params![id, parent_id, child_id, title, brief, stamp, routed_level],
+        "INSERT INTO agent_delegations(id,parent_conversation_id,child_conversation_id,title,brief,state,delivered,created_at,updated_at,thinking_level,agent_name)
+         VALUES(?1,?2,?3,?4,?5,'queued',0,?6,?6,?7,?8)",
+        params![id, parent_id, child_id, title, brief, stamp, routed_level, agent_name],
     )
     .map_err(|_| "The delegated task could not be saved".to_string())?;
     crate::telegram::track_task(db, &id, parent_id).map_err(|_| "The task's reply channel could not be saved".to_string())?;
@@ -515,6 +528,7 @@ pub fn start(
         delivered: false,
         thinking_level: routed_level,
         current_activity: None,
+        agent_name,
         created_at: stamp.clone(),
         updated_at: stamp,
     })
@@ -766,7 +780,8 @@ pub fn message(host: &mut Host, app: &tauri::AppHandle, message: Value) {
                 let title = p["title"].as_str().unwrap_or("");
                 let brief = p["brief"].as_str().unwrap_or("");
                 let depth = p["depth"].as_str().filter(|value| matches!(*value, "flash" | "smart"));
-                let task = start(&host.db, &conversation, title, brief, depth)?;
+                let name = p["name"].as_str();
+                let task = start(&host.db, &conversation, title, brief, depth, name)?;
                 emit_task(app, &task);
                 Ok(json!({"id":task.id,"title":task.title,"state":task.state}))
             }
@@ -902,16 +917,18 @@ mod tests {
         let db = database();
         let selection = storage::ModelSelection { connection_id: "conn".into(), model_id: "model".into() };
         storage::create_conversation(&db, "parent", "Parent", Some(&selection)).unwrap();
-        let first = start(&db, "parent", "One", "Read source A", None).unwrap();
-        let second = start(&db, "parent", "Two", "Read source B", None).unwrap();
+        let first = start(&db, "parent", "One", "Read source A", None, Some("Scout")).unwrap();
+        let second = start(&db, "parent", "Two", "Read source B", None, None).unwrap();
         assert_eq!(first.state, "queued");
+        assert_eq!(first.agent_name.as_deref(), Some("Scout"));
+        assert!(second.agent_name.is_none());
         assert!(storage::get_conversation(&db, &first.child_conversation_id).is_ok());
         assert!(storage::list_conversations(&db).unwrap().iter().all(|c| c.id != first.child_conversation_id));
-        assert!(start(&db, "parent", "Three", "Too many", None).is_err());
+        assert!(start(&db, "parent", "Three", "Too many", None, None).is_err());
 
         finish(&db, &first.id, "completed", Some("A done"), None).unwrap();
         set_state(&db, &second.id, "running", None, None).unwrap();
-        let third = start(&db, "parent", "Three", "Now there is room", None).unwrap();
+        let third = start(&db, "parent", "Three", "Now there is room", None, None).unwrap();
         assert_eq!(third.state, "queued");
         assert!(storage::conversation_is_delegated(&db, &third.child_conversation_id).unwrap());
     }
@@ -921,8 +938,8 @@ mod tests {
         let mut db = database();
         let selection = storage::ModelSelection { connection_id: "conn".into(), model_id: "model".into() };
         storage::create_conversation(&db, "parent", "Parent", Some(&selection)).unwrap();
-        let first = start(&db, "parent", "One", "Read source A", None).unwrap();
-        let second = start(&db, "parent", "Two", "Read source B", None).unwrap();
+        let first = start(&db, "parent", "One", "Read source A", None, None).unwrap();
+        let second = start(&db, "parent", "Two", "Read source B", None, None).unwrap();
         finish(&db, &first.id, "completed", Some("A done"), None).unwrap();
         finish(&db, &second.id, "failed", None, Some("B failed")).unwrap();
 
@@ -942,7 +959,7 @@ mod tests {
         let db = database();
         let selection = storage::ModelSelection { connection_id: "conn".into(), model_id: "model".into() };
         storage::create_conversation(&db, "parent", "Parent", Some(&selection)).unwrap();
-        let task = start(&db, "parent", "One", "Read source A", None).unwrap();
+        let task = start(&db, "parent", "One", "Read source A", None, None).unwrap();
         set_generation(&db, &task.id, "gen-child", "running").unwrap();
         record_activity(
             &db,
@@ -970,7 +987,7 @@ mod tests {
         let db = database();
         let selection = storage::ModelSelection { connection_id: "conn".into(), model_id: "model".into() };
         storage::create_conversation(&db, "parent", "Parent", Some(&selection)).unwrap();
-        let task = start(&db, "parent", "One", "Read source A", None).unwrap();
+        let task = start(&db, "parent", "One", "Read source A", None, None).unwrap();
         set_state(&db, &task.id, "running", None, None).unwrap();
         set_generation(&db, &task.id, "gen-child", "running").unwrap();
         assert_eq!(recover(&db).unwrap(), 1);
@@ -997,14 +1014,14 @@ mod tests {
         let selection = storage::ModelSelection { connection_id: "conn".into(), model_id: "pilot-model".into() };
         storage::create_conversation(&db, "parent", "Parent", Some(&selection)).unwrap();
 
-        let economy = start(&db, "parent", "One", "Quick lookup", None).unwrap();
+        let economy = start(&db, "parent", "One", "Quick lookup", None, None).unwrap();
         assert_eq!(economy.thinking_level.as_deref(), Some("low"));
         let child = storage::get_conversation(&db, &economy.child_conversation_id).unwrap();
         let child_selection = child.selection.expect("routed child keeps a selection");
         assert_eq!(child_selection.connection_id, "conn");
         assert_eq!(child_selection.model_id, "openrouter/free");
 
-        let smart = start(&db, "parent", "Two", "Hard analysis", Some("smart")).unwrap();
+        let smart = start(&db, "parent", "Two", "Hard analysis", Some("smart"), None).unwrap();
         assert_eq!(smart.thinking_level.as_deref(), Some("max"));
         let child = storage::get_conversation(&db, &smart.child_conversation_id).unwrap();
         assert_eq!(child.selection.unwrap().model_id, "deepseek/deepseek-v4.1-flash");
@@ -1026,7 +1043,7 @@ mod tests {
         .unwrap();
         let selection = storage::ModelSelection { connection_id: "conn".into(), model_id: "pilot-model".into() };
         storage::create_conversation(&db, "parent", "Parent", Some(&selection)).unwrap();
-        let manual = start(&db, "parent", "One", "Read source A", Some("smart")).unwrap();
+        let manual = start(&db, "parent", "One", "Read source A", Some("smart"), None).unwrap();
         assert_eq!(manual.thinking_level, None);
         let child = storage::get_conversation(&db, &manual.child_conversation_id).unwrap();
         assert_eq!(child.selection.unwrap().model_id, "pilot-model");
@@ -1034,7 +1051,7 @@ mod tests {
         let unmapped = database();
         let selection = storage::ModelSelection { connection_id: "other".into(), model_id: "pilot-model".into() };
         storage::create_conversation(&unmapped, "parent", "Parent", Some(&selection)).unwrap();
-        let inherited = start(&unmapped, "parent", "Two", "Read source B", None).unwrap();
+        let inherited = start(&unmapped, "parent", "Two", "Read source B", None, None).unwrap();
         assert_eq!(inherited.thinking_level, None);
         let child = storage::get_conversation(&unmapped, &inherited.child_conversation_id).unwrap();
         assert_eq!(child.selection.unwrap().model_id, "pilot-model");

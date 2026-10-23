@@ -50,6 +50,7 @@ import {
   setProviderKey,
   syncModelsJson,
   validateProvider,
+  generateTheme,
   type ProviderPreference,
 } from './providers.js';
 import {
@@ -159,6 +160,7 @@ const WORKER_METHODS = new Set<WorkerMethod>([
   'shutdown',
   'models.list',
   'provider.validate',
+  'theme.draft',
   'chatgpt.begin', 'chatgpt.poll', 'chatgpt.refresh', 'chatgpt.revoke',
   'session.open',
   'session.prompt',
@@ -1394,6 +1396,23 @@ async function handle(request: WorkerRequest): Promise<void> {
           type: 'response',
           id: request.id,
           result: await validateProvider(runtime, provider, model, apiKey, baseUrl, reasoning),
+        });
+        return;
+      }
+      case 'theme.draft': {
+        const { runtime, preference } = await prepareRuntime();
+        const provider = normalizeProviderId(params.provider, preference.provider);
+        const model = normalizeModelId(params.model) || undefined;
+        const apiKey = normalizeApiKey(params.apiKey);
+        if (apiKey) rememberSecret(apiKey);
+        const baseUrl = normalizeBaseUrl(params.baseUrl);
+        const reasoning = normalizeReasoning(params.reasoning, provider === preference.provider ? preference.reasoning : false);
+        const description = typeof params.description === 'string' ? params.description.trim().slice(0, 400) : '';
+        if (!description) throw new Error('Describe the theme you want first');
+        send({
+          type: 'response',
+          id: request.id,
+          result: await generateTheme(runtime, provider, model, apiKey, baseUrl, reasoning, description),
         });
         return;
       }

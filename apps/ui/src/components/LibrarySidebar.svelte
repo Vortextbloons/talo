@@ -53,7 +53,7 @@
 <style>
   .library-controls{padding:2px 2px 12px;display:grid;gap:9px;border-bottom:1px solid var(--line);margin-bottom:12px;font-size:12px}
   .controls-toggle{display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid var(--line);background:var(--soft);color:var(--muted);border-radius:8px;padding:7px 11px;font-size:11.5px;cursor:pointer;line-height:1.35}
-  .controls-toggle:hover{border-color:#4a4a41;color:var(--text)}
+  .controls-toggle:hover{border-color:var(--hover-line);color:var(--text)}
   .controls-toggle span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .chevron{width:11px;height:11px;flex-shrink:0;transition:transform .15s ease}
   .controls-toggle[aria-expanded="true"] .chevron{transform:rotate(180deg)}
@@ -61,12 +61,12 @@
   label{display:grid;gap:5px;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
   input,select{display:block;width:100%;padding:8px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--soft);color:var(--text);font:inherit;font-size:12px;box-sizing:border-box;min-width:0}
   input[type=checkbox]{width:auto;accent-color:var(--yellow);padding:0}
-  input:hover:not([type=checkbox]):not(:disabled),select:hover:not(:disabled){border-color:#4a4a41}
+  input:hover:not([type=checkbox]):not(:disabled),select:hover:not(:disabled){border-color:var(--hover-line)}
   form{display:flex;gap:6px}
   form input{flex:1}
   form button{flex-shrink:0;padding:7px 12px}
   button{border:1px solid var(--line-strong);background:var(--soft);color:var(--text);border-radius:8px;padding:7px 11px;font-size:11.5px;cursor:pointer;line-height:1.35;min-width:0}
-  button:hover:not(:disabled){background:#2c2c27;border-color:#4a4a41}
+  button:hover:not(:disabled){background:var(--hover-bg);border-color:var(--hover-line)}
   button:disabled{opacity:.45;cursor:not-allowed}
   .archive{display:flex;align-items:center;gap:8px;font-size:12px;letter-spacing:0;text-transform:none;color:var(--muted);cursor:pointer;user-select:none}
   .manage{text-align:left;width:100%}
@@ -76,7 +76,7 @@
   .edit-chat button{text-align:left}
   .search-results{display:grid;gap:6px;max-height:260px;overflow:auto;scrollbar-gutter:stable}
   .search-results button{text-align:left;display:grid;gap:4px;background:transparent;border:1px solid var(--line);padding:8px 10px}
-  .search-results button:hover:not(:disabled){border-color:var(--yellow-deep);background:#1d1d19}
+  .search-results button:hover:not(:disabled){border-color:var(--yellow-deep);background:var(--soft-raised)}
   .search-results strong{font-size:12px;font-weight:550;color:var(--text)}
   .search-results small{font-size:11px;color:var(--muted);overflow:hidden;display:-webkit-box;line-clamp:2;-webkit-line-clamp:2;-webkit-box-orient:vertical}
   .clear{background:transparent;border:0;padding:2px 0;color:var(--faint);font-size:11px;justify-self:start;width:auto}

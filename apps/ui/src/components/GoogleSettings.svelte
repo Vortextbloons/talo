@@ -127,7 +127,7 @@
   .heading p{font-size:12px}
   .status{margin-left:auto;font-size:10.5px;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:5px 9px;white-space:nowrap}
   .status.on{color:#b9d8b0;border-color:#40533c;background:#253021}
-  .status.waiting{color:#e8cd77;border-color:#5b5029;background:#2a2618}
+  .status.waiting{color:var(--accent-note);border-color:var(--accent-line);background:var(--accent-bg)}
   .body{display:grid;gap:20px;padding:24px 25px}
   .body>p{max-width:590px}
   strong{font-size:13px;font-weight:550}
@@ -143,9 +143,9 @@
   .connect{display:grid;gap:12px;justify-items:start}
   .connect p{max-width:560px}
   button{background:var(--soft);border:1px solid var(--line-strong);border-radius:8px;color:var(--text);padding:9px 13px;font-size:12px}
-  button.primary{background:var(--yellow);border-color:var(--yellow);color:#222014;font-weight:550;padding:11px 16px}
+  button.primary{background:var(--yellow);border-color:var(--yellow);color:var(--black);font-weight:550;padding:11px 16px}
   button:hover:not(:disabled){filter:brightness(1.08)}
-  .waiting-card{border:1px solid #5b5029;background:#2a2618;border-radius:10px;padding:16px;display:grid;gap:10px;justify-items:start}
+  .waiting-card{border:1px solid var(--accent-line);background:var(--accent-bg);border-radius:10px;padding:16px;display:grid;gap:10px;justify-items:start}
   .notice{border:1px solid var(--line);border-radius:10px;padding:16px;display:grid;gap:7px}
   .notice p{font-size:12px}
   .boundary{font-size:11.5px;color:var(--faint);border-top:1px solid var(--line);padding-top:16px}

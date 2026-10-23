@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
-  import { isTauri } from '@tauri-apps/api/core';
+  import { invoke, isTauri } from '@tauri-apps/api/core';
   import ProviderSettings from './ProviderSettings.svelte';
   import ToolsSettings from './ToolsSettings.svelte';
   import IntegrationsSettings from './IntegrationsSettings.svelte';
+  import { PRESETS, themes, selectTheme, createTheme, deleteTheme, activeTheme, addTheme } from '../lib/theme.svelte';
+  import type { Theme } from '../lib/theme.svelte';
   import { chat, selectionLabel, routing } from '../lib/chat.svelte';
   import { rolesFor } from '../../../../packages/contracts/src/index';
   import { library } from '../lib/library.svelte';
@@ -29,10 +31,11 @@
     onRerunSetup: () => void;
   } = $props();
 
-  const TABS = ['You', 'Models', 'Capabilities', 'Integrations', 'Advanced'] as const;
+  const TABS = ['You', 'Appearance', 'Models', 'Capabilities', 'Integrations', 'Advanced'] as const;
   type Tab = typeof TABS[number];
   const SECTIONS: Record<Tab, { label: string; icon: string }> = {
     You: { label: 'Personalization', icon: 'M20 21v-2a7 7 0 0 0-14 0v2M13 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z' },
+    Appearance: { label: 'Themes & colors', icon: 'M12 3c2.7 3 6 7 6 11a6 6 0 0 1-12 0c0-4 3.3-8 6-11Z' },
     Models: { label: 'Models & providers', icon: 'm12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5' },
     Capabilities: { label: 'Tools & permissions', icon: 'm12 3 8 4v5c0 5-8 9-8 9s-8-4-8-9V7l8-4Zm-4 9 3 3 5-6' },
     Integrations: { label: 'Connected apps', icon: 'M9 7V3m6 4V3M7 7h10v5a5 5 0 0 1-10 0V7Zm5 10v4' },
@@ -172,6 +175,70 @@
   async function toggleTool(id: string, enabled: boolean): Promise<void> {
     await toolAction('toggle', { id, enabled });
   }
+
+  let draftThemeBase = $state('');
+  let draftThemeName = $state('');
+  let draftThemeColor = $state(activeTheme().accent);
+  function createCustomTheme(): void {
+    const base = [...PRESETS, ...themes.custom].find(option => option.id === draftThemeBase);
+    createTheme(draftThemeName, draftThemeColor, base);
+    draftThemeName = '';
+    draftThemeColor = activeTheme().accent;
+    draftThemeBase = '';
+  }
+
+  let draftImport = $state('');
+  let importName = $state('');
+  let importError = $state('');
+  async function loadThemeFile(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      draftImport = await file.text();
+      importName = file.name;
+      importError = '';
+    } catch {
+      importError = 'That file could not be read.';
+    } finally {
+      input.value = '';
+    }
+  }
+  function importThemeJson(): void {
+    importError = '';
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(draftImport);
+    } catch {
+      importError = 'That is not valid JSON.';
+      return;
+    }
+    try {
+      addTheme(parsed);
+      draftImport = '';
+      importName = '';
+    } catch (error) {
+      importError = error instanceof Error && error.message ? error.message : 'That is not a valid theme.';
+    }
+  }
+
+  let draftAiTheme = $state('');
+  let draftingTheme = $state(false);
+  let themeAiError = $state('');
+  async function generateThemeWithAi(): Promise<void> {
+    if (draftingTheme) return;
+    if (!isTauri()) { themeAiError = 'The desktop app creates AI themes.'; return; }
+    draftingTheme = true;
+    themeAiError = '';
+    try {
+      addTheme(await invoke<unknown>('theme_draft', { description: draftAiTheme.trim() }));
+      draftAiTheme = '';
+    } catch (error) {
+      themeAiError = typeof error === 'string' ? error : 'The theme could not be created. Try again.';
+    } finally {
+      draftingTheme = false;
+    }
+  }
 </script>
 
 <div class="settings">
@@ -248,6 +315,69 @@
           <span>Backups</span><b class="muted">Not set up yet</b>
         </div>
       </details>
+    </div>
+  {/if}
+
+  {#if tab === 'Appearance'}
+    <div class="tabpanel cols">
+      <section class="group full">
+        <h2>Color themes</h2>
+        <p class="group-note">A theme colors the app's surfaces, buttons and highlights. The named themes restyle everything; the tints keep the classic dark and change the accent. Your agent wears its own color — pick it on its panel in the chat.</p>
+        <div class="theme-grid">
+          {#each PRESETS as preset (preset.id)}
+            <button type="button" class="theme-card" class:selected={themes.activeId === preset.id} aria-pressed={themes.activeId === preset.id} onclick={() => selectTheme(preset.id)}>
+              <span class="theme-swatch" style:background={preset.surfaces?.['--paper'] ?? 'var(--soft)'}><span class="theme-dot" style:background={preset.accent}></span></span>
+              <span class="theme-name">{preset.name}</span>
+            </button>
+          {/each}
+          {#each themes.custom as preset (preset.id)}
+            <div class="theme-card" class:selected={themes.activeId === preset.id}>
+              <button type="button" class="theme-pick" aria-pressed={themes.activeId === preset.id} onclick={() => selectTheme(preset.id)}>
+                <span class="theme-swatch" style:background={preset.surfaces?.['--paper'] ?? 'var(--soft)'}><span class="theme-dot" style:background={preset.accent}></span></span>
+                <span class="theme-name">{preset.name}</span>
+              </button>
+              <button type="button" class="theme-delete" aria-label={`Delete ${preset.name}`} title="Delete theme" onclick={() => deleteTheme(preset.id)}>×</button>
+            </div>
+          {/each}
+        </div>
+      </section>
+
+      <section class="group full">
+        <h2>Make your own</h2>
+        <form class="theme-form" onsubmit={(event) => { event.preventDefault(); createCustomTheme(); }}>
+          <label>Start from<select bind:value={draftThemeBase}>
+            {#each [{ id: '', name: 'Classic dark' }, ...PRESETS, ...themes.custom] as option (option.id || 'classic-base')}
+              <option value={option.id}>{option.name}</option>
+            {/each}
+          </select></label>
+          <label>Theme name<input bind:value={draftThemeName} maxlength="24" placeholder="My theme" autocomplete="off" /></label>
+          <label>Color<input type="color" bind:value={draftThemeColor} aria-label="Theme color" /></label>
+          <span class="theme-preview"><span class="theme-dot" style:background={draftThemeColor}></span></span>
+          <button class="primary" type="submit">Create theme</button>
+        </form>
+        <p class="group-note">Pick a starting look, name it and choose the accent. Saved on this PC, next to the presets.</p>
+      </section>
+
+      <section class="group full">
+        <h2>Import a theme</h2>
+        <p class="group-note">Paste a theme another Talo user shared, or load one from a file. It is checked, then added to your list.</p>
+        <form class="theme-form" onsubmit={(event) => { event.preventDefault(); importThemeJson(); }}>
+          <label>Theme JSON<textarea bind:value={draftImport} rows="4" spellcheck="false" placeholder='&#123;"name":"Nord-like","accent":"#88c0d0","surfaces":&#123;"--bg":"#2e3440"&#125;&#125;'></textarea></label>
+          <label class="theme-file">Load a file<input type="file" accept=".json,application/json" onchange={loadThemeFile} />{#if importName}<span>{importName}</span>{/if}</label>
+          <button class="primary" type="submit" disabled={!draftImport.trim()}>Import</button>
+        </form>
+        {#if importError}<p class="theme-error" role="alert">{importError}</p>{/if}
+      </section>
+
+      <section class="group full">
+        <h2>Create with AI</h2>
+        <p class="group-note">Describe a look and your connected model designs a full theme. The request runs on its own — none of your chats are included.</p>
+        <form class="theme-form" onsubmit={(event) => { event.preventDefault(); void generateThemeWithAi(); }}>
+          <label>Describe it<input class="wide" bind:value={draftAiTheme} maxlength="400" placeholder="Calm deep-sea blues with a soft glow" autocomplete="off" /></label>
+          <button class="primary" type="submit" disabled={draftingTheme || !draftAiTheme.trim()}>{draftingTheme ? 'Designing…' : 'Create with AI'}</button>
+        </form>
+        {#if themeAiError}<p class="theme-error" role="alert">{themeAiError}</p>{/if}
+      </section>
     </div>
   {/if}
 
@@ -490,6 +620,31 @@
   .quiet:hover:not(:disabled){color:var(--text);background:var(--soft)}
   .inline{width:280px;padding:9px 12px;border:1px solid var(--line-strong);border-radius:8px;background:var(--soft);color:var(--text);font-size:14px}
 
+  .theme-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:10px;margin:0 0 20px}
+  .theme-card{position:relative;display:grid;justify-items:center;padding:14px 10px 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text)}
+  .theme-card:hover{border-color:var(--line-strong)}
+  .theme-card.selected{border-color:var(--yellow);box-shadow:0 0 0 1px var(--yellow)}
+  .theme-pick{display:grid;justify-items:center;gap:9px;width:100%;border:0;background:transparent;padding:0;color:inherit;font:inherit}
+  .theme-swatch{display:grid;place-items:center;width:46px;height:46px;border-radius:50%;background:var(--soft);border:1px solid var(--line)}
+  .theme-dot{width:20px;height:20px;border-radius:50%}
+  .theme-name{max-width:100%;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .theme-card.selected .theme-name{color:var(--text)}
+  .theme-delete{position:absolute;top:5px;right:5px;display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--faint);font-size:14px;line-height:1}
+  .theme-delete:hover{color:var(--error-text);background:var(--error-bg)}
+  .theme-form{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;padding-bottom:18px}
+  .theme-form label{display:grid;gap:7px;margin:0;font-size:11px;font-weight:500;color:var(--muted)}
+  .theme-form input{width:200px;padding:9px 11px;border:1px solid var(--line-strong);border-radius:8px;background:var(--soft);color:var(--text);font-size:13px}
+  .theme-form input[type="color"]{width:64px;height:38px;padding:4px;cursor:pointer}
+  .theme-form input.wide{width:340px}
+  .theme-form select{width:200px;padding:9px 11px;border:1px solid var(--line-strong);border-radius:8px;background:var(--soft);color:var(--text);font-size:13px}
+  .theme-form textarea{width:340px;min-height:88px;resize:vertical;padding:9px 11px;border:1px solid var(--line-strong);border-radius:8px;background:var(--soft);color:var(--text);font-size:12px;font-family:ui-monospace,'Cascadia Code',Consolas,monospace;line-height:1.5}
+  .theme-form label.theme-file{position:relative;display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line-strong);border-radius:8px;padding:9px 13px;color:var(--muted);font-size:12.5px;cursor:pointer}
+  .theme-form label.theme-file:hover{color:var(--text);background:var(--hover-bg)}
+  .theme-form label.theme-file input{position:absolute;inset:0;width:auto;opacity:0;cursor:pointer}
+  .theme-form label.theme-file span{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .theme-error{font-size:12px;color:var(--error-text);margin:0 0 16px}
+  .theme-preview{display:grid;place-items:center;width:46px;height:46px;border-radius:50%;background:var(--soft);border:1px solid var(--line)}
+
   .seg{display:inline-flex;gap:3px;padding:3px;border:1px solid var(--line);background:var(--bg);border-radius:9px;max-width:100%;flex-wrap:wrap}
   .seg button{border:1px solid transparent;background:transparent;color:var(--muted);font-size:12px;padding:7px 12px;border-radius:6px}
   .seg button:hover{background:var(--paper);color:var(--text)}
@@ -497,7 +652,7 @@
 
   .switch{width:42px;height:24px;flex-shrink:0;border-radius:99px;border:1px solid var(--line-strong);background:var(--soft);position:relative;padding:0;transition:background .16s ease,border-color .16s ease}
   .switch::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--faint);transition:transform .16s ease,background .16s ease}
-  .switch[aria-checked="true"]{background:rgba(255,212,92,.16);border-color:rgba(255,212,92,.45)}
+  .switch[aria-checked="true"]{background:color-mix(in srgb,var(--accent) 16%,transparent);border-color:color-mix(in srgb,var(--accent) 45%,transparent)}
   .switch[aria-checked="true"]::after{transform:translateX(18px);background:var(--yellow)}
   .switch.small{width:36px;height:21px}
   .switch.small::after{width:15px;height:15px}
@@ -509,7 +664,7 @@
   .progress{width:min(260px,40vw);height:6px;border-radius:99px;background:var(--soft);overflow:hidden;border:1px solid var(--line)}
   .progress span{display:block;height:100%;background:var(--yellow);transition:width .2s ease}
   .primary{background:var(--yellow);border:1px solid var(--yellow);color:var(--black);font-weight:600;padding:8px 14px;border-radius:8px;font-size:12.5px}
-  .primary:hover:not(:disabled){background:#ffdd7f;border-color:#ffdd7f}
+  .primary:hover:not(:disabled){background:var(--accent-bright);border-color:var(--accent-bright)}
   .state.live{color:var(--yellow)}
 
   .disclosure{border-bottom:1px solid var(--line)}

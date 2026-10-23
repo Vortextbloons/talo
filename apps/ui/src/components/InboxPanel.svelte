@@ -137,10 +137,10 @@
   .pinned{margin:7px 0 0;padding-left:17px;font-size:11.5px;color:var(--muted);line-height:1.65}
   .actions{display:flex;gap:8px;flex-wrap:wrap}
   button{font:inherit;font-size:12px;border:1px solid var(--line-strong);border-radius:8px;padding:8px 13px;background:var(--paper);color:var(--text);cursor:pointer}
-  button:hover:not(:disabled){background:#2c2c27}
+  button:hover:not(:disabled){background:var(--hover-bg)}
   button:disabled{opacity:.45;cursor:not-allowed}
   .primary{background:var(--yellow);border-color:var(--yellow);color:var(--black);font-weight:600}
-  .primary:hover:not(:disabled){background:#ffdd7f;border-color:#ffdd7f}
+  .primary:hover:not(:disabled){background:var(--accent-bright);border-color:var(--accent-bright)}
   .link{background:none;border:0;padding:0;margin-left:5px;color:var(--yellow);font:inherit;font-size:11px;text-decoration:underline;cursor:pointer}
   .hint{font-size:12px;color:var(--muted);line-height:1.65;margin:0}
   .field{display:grid;gap:6px;font-size:11px;font-weight:550;color:var(--muted);margin-top:9px}

@@ -12,6 +12,7 @@ export type DelegationState = 'queued' | 'running' | 'waiting' | 'completed' | '
 export interface DelegationTask {
   id: string; parentConversationId: string; childConversationId: string;
   title: string; brief: string; state: DelegationState;
+  agentName?: string;
   result?: string; error?: string; delivered: boolean;
 
   currentActivity?: string;
@@ -76,7 +77,7 @@ export interface ResearchActivity {
 }
 
 
-export type WorkerMethod = 'ping' | 'shutdown' | 'models.list' | 'provider.validate' |
+export type WorkerMethod = 'ping' | 'shutdown' | 'models.list' | 'provider.validate' | 'theme.draft' |
   'chatgpt.begin' | 'chatgpt.poll' | 'chatgpt.refresh' | 'chatgpt.revoke' |
   'session.open' | 'session.prompt' | 'session.retry' | 'session.deliver' | 'session.abort' | 'session.snapshot' |
   'session.history' | 'session.thinking' | 'tools.configure' | 'tools.status' | 'tools.test' | 'tools.cancel';

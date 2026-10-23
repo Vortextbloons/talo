@@ -8,6 +8,7 @@ import type {
   CredentialStore,
   Model,
 } from '@earendil-works/pi-ai';
+import { extractText } from './messages.js';
 
 
 const PREFERENCE_FILE = 'provider.json';
@@ -474,6 +475,101 @@ export async function validateProvider(
       authenticated: true,
       latencyMs: Date.now() - startedAt,
     };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const THEME_TIMEOUT_MS = 60_000;
+const THEME_MAX_TOKENS = 2_000;
+const THEME_SURFACES = new Set<string>([
+  '--bg', '--paper', '--soft', '--sidebar', '--text', '--muted', '--faint', '--line', '--line-strong', '--black',
+]);
+
+const THEME_PROMPT = [
+  'You design a color theme for Talo, a dark desktop AI assistant. Answer with ONLY a JSON object - no markdown fences, no commentary - shaped exactly like:',
+  '{"name":"Theme name","accent":"#rrggbb","surfaces":{"--bg":"#rrggbb","--paper":"#rrggbb","--soft":"#rrggbb","--sidebar":"#rrggbb","--text":"#rrggbb","--muted":"#rrggbb","--faint":"#rrggbb","--line":"#rrggbb","--line-strong":"#rrggbb","--black":"#rrggbb"}}',
+  'The accent tints buttons, highlights and focus rings and carries dark text, so keep it bright enough for near-black text on top. Surfaces go darkest at --bg and --sidebar, raised at --paper and --soft; --text is the brightest, --muted is softer, --faint is the dimmest; --line and --line-strong sit between the surfaces; --black is the darkest ink, used on accent buttons. Keep every color in one coherent palette that honors the request. Omit "surfaces" only when the request asks for a plain accent tint.',
+].join('\n');
+
+export interface ThemeDraft { name: string; accent: string; surfaces?: Record<string, string> }
+
+function normalizeHexColor(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim().toLowerCase();
+  const short = /^#([0-9a-f]{3})$/u.exec(text);
+  if (short) return `#${short[1].split('').map(character => character + character).join('')}`;
+  return /^#[0-9a-f]{6}$/u.test(text) ? text : undefined;
+}
+
+function extractJsonObject(text: string): unknown {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const source = fenced ? fenced[1] : text;
+  const start = source.indexOf('{');
+  const end = source.lastIndexOf('}');
+  if (start === -1 || end <= start) throw new Error('The model did not return a theme');
+  return JSON.parse(source.slice(start, end + 1));
+}
+
+function normalizeThemeDraft(value: unknown): ThemeDraft {
+  if (typeof value !== 'object' || value === null) throw new Error('The model did not return a theme');
+  const source = value as Record<string, unknown>;
+  const accent = normalizeHexColor(source.accent);
+  if (!accent) throw new Error('The model returned an invalid theme color');
+  const name = typeof source.name === 'string' ? source.name.replace(/\s+/gu, ' ').trim() : '';
+  const surfaces: Record<string, string> = {};
+  if (typeof source.surfaces === 'object' && source.surfaces !== null) {
+    for (const [key, color] of Object.entries(source.surfaces as Record<string, unknown>)) {
+      const normalized = normalizeHexColor(color);
+      if (THEME_SURFACES.has(key) && normalized) surfaces[key] = normalized;
+    }
+  }
+  return {
+    name: (name || 'AI theme').slice(0, 24),
+    accent,
+    ...(Object.keys(surfaces).length ? { surfaces } : {}),
+  };
+}
+
+export async function generateTheme(
+  runtime: ModelRuntime,
+  provider: string,
+  modelId: string | undefined,
+  apiKey: string | undefined,
+  baseUrl: string | undefined,
+  reasoning: boolean,
+  description: string,
+): Promise<ThemeDraft> {
+  registerProviderEndpoint(runtime, { provider, model: modelId, baseUrl, reasoning });
+  const model = resolveModel(runtime, provider, modelId);
+  const key = effectiveApiKey(apiKey, provider, baseUrl || model.baseUrl);
+  if (key) rememberSecret(key);
+  if (!key) {
+    const auth = await runtime.getAuth(model);
+    if (!auth) throw new Error(`Provider is not configured: ${provider}`);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), THEME_TIMEOUT_MS);
+  try {
+    const message = await runtime.completeSimple(model, {
+      messages: [{ role: 'user', content: `${THEME_PROMPT}\n\nTheme request: ${description}`, timestamp: Date.now() }],
+    }, {
+      ...(key ? { apiKey: key } : {}),
+      maxTokens: THEME_MAX_TOKENS,
+      signal: controller.signal,
+      sessionId: 'talo-theme-draft',
+    });
+    if (message.stopReason === 'error') {
+      throw new Error(message.errorMessage || 'The theme request failed');
+    }
+    if (message.stopReason === 'aborted') {
+      throw new Error(controller.signal.aborted
+        ? 'The theme request timed out'
+        : 'The theme request was cancelled');
+    }
+    const text = extractText(message).trim();
+    if (!text) throw new Error('The model returned an empty theme');
+    return normalizeThemeDraft(extractJsonObject(text));
   } finally {
     clearTimeout(timer);
   }

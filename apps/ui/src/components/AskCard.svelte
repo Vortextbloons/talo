@@ -119,8 +119,8 @@
   legend{font-size:12.5px;font-weight:550;color:var(--text);padding:0 0 6px}
   .options{display:grid;gap:6px}
   .option{display:flex;gap:9px;align-items:start;padding:7px 10px;border:1px solid var(--line);border-radius:9px;background:var(--soft);cursor:pointer;font-size:12.5px;line-height:1.5}
-  .option:hover{border-color:#4a4a41}
-  .option.selected{border-color:var(--yellow-deep);background:#211f16}
+  .option:hover{border-color:var(--hover-line)}
+  .option.selected{border-color:var(--yellow-deep);background:var(--accent-bg)}
   .option input{accent-color:var(--yellow);margin-top:2px;flex-shrink:0}
   .option strong{display:block;font-weight:550;color:var(--text)}
   .rec{display:inline-block;font-style:normal;font-size:10px;color:var(--yellow);margin-left:6px;letter-spacing:.03em}
@@ -130,6 +130,6 @@
   button{font:inherit;font-size:12px;border:1px solid var(--line-strong);border-radius:8px;padding:8px 13px;background:var(--soft);color:var(--text);cursor:pointer}
   button:disabled{opacity:.45;cursor:not-allowed}
   .primary{background:var(--yellow);border-color:var(--yellow);color:var(--black);font-weight:600}
-  .primary:hover:not(:disabled){background:#ffdd7f;border-color:#ffdd7f}
+  .primary:hover:not(:disabled){background:var(--accent-bright);border-color:var(--accent-bright)}
   .error{font-size:11.5px;color:var(--error-text);margin:8px 0 0}
 </style>

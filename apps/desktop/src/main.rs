@@ -812,7 +812,8 @@ fn main() {
             chatgpt::chatgpt_begin,
             chatgpt::chatgpt_poll,
             chat::provider_disconnect,
-            chat::provider_models
+            chat::provider_models,
+            chat::theme_draft
         ])
         .setup(|app| {
             let data = app.path().app_data_dir()?;

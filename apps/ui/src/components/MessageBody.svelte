@@ -236,19 +236,19 @@
   .md-heading.h3{font-size:15.5px}
   .md-heading.h4,.md-heading.h5,.md-heading.h6{font-size:14.5px;color:var(--muted)}
   .md-heading.h5,.md-heading.h6{font-size:14px;text-transform:none}
-  .md-link{color:var(--yellow);text-decoration:underline;text-decoration-color:rgba(255,212,92,.4);text-underline-offset:2px;cursor:copy}
+  .md-link{color:var(--yellow);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--accent) 40%,transparent);text-underline-offset:2px;cursor:copy}
   .md-link:hover{text-decoration-color:var(--yellow)}
   .md-link.copied{text-decoration-color:var(--yellow)}
   .md-link.copied::after{content:' · copied';color:var(--faint);font-size:11px;text-decoration:none;white-space:nowrap}
-  .md-image{display:inline-flex;align-items:center;gap:5px;color:var(--yellow);text-decoration:underline;text-decoration-color:rgba(255,212,92,.4);text-underline-offset:2px;cursor:copy}
+  .md-image{display:inline-flex;align-items:center;gap:5px;color:var(--yellow);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--accent) 40%,transparent);text-underline-offset:2px;cursor:copy}
   .md-image:hover{text-decoration-color:var(--yellow)}
   .md-image-mark{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
   .md-image.copied::after{content:' · copied';color:var(--faint);font-size:11px;text-decoration:none}
-  .md-code{background:var(--soft);border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-family:ui-monospace,'Cascadia Code',Consolas,monospace;font-size:13px;color:#e6e4dc;white-space:break-spaces}
+  .md-code{background:var(--soft);border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-family:ui-monospace,'Cascadia Code',Consolas,monospace;font-size:13px;color:var(--text);white-space:break-spaces}
   .md-code-block{display:flex;flex-direction:column;gap:0;background:var(--sidebar);border:1px solid var(--line);border-radius:10px;overflow:hidden}
   .md-code-language{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:7px 14px 0;font-family:ui-monospace,'Cascadia Code',Consolas,monospace}
   .md-code-block .md-pre{margin:0;border:0;border-radius:0;background:transparent;padding:12px 16px 14px}
-  .md-pre{padding:14px 16px;background:var(--sidebar);border:1px solid var(--line);border-radius:10px;overflow-x:auto;font-family:ui-monospace,'Cascadia Code',Consolas,monospace;font-size:13px;line-height:1.65;color:#e6e4dc;white-space:pre}
+  .md-pre{padding:14px 16px;background:var(--sidebar);border:1px solid var(--line);border-radius:10px;overflow-x:auto;font-family:ui-monospace,'Cascadia Code',Consolas,monospace;font-size:13px;line-height:1.65;color:var(--text);white-space:pre}
   .md-pre code{font:inherit}
   blockquote{margin:0;padding:2px 0 2px 14px;border-left:2px solid var(--line-strong);color:var(--muted)}
   blockquote > * + *{margin-top:8px}
@@ -276,5 +276,5 @@
   strong{font-weight:650}
   em{font-style:italic}
   del{color:var(--faint)}
-  .markdown :is(p,li,blockquote,td,th) .md-link:hover{color:#ffdd7f}
+  .markdown :is(p,li,blockquote,td,th) .md-link:hover{color:var(--accent-bright)}
 </style>

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { DelegationTask } from '../../../../packages/contracts/src/chat';
-  import mascot from '../../../../packages/design/mascot.svg';
+  import AgentMark from './AgentMark.svelte';
+  import { agentIdentity } from '../lib/agents';
 
   let { tasks, onOpen, onCancel, onCancelAll }: {
     tasks: DelegationTask[];
@@ -26,6 +27,10 @@
     if (task.state === 'queued') return 'Waiting to start';
     return task.currentActivity || 'Working on it';
   }
+
+  function busyBorder(color: string): string {
+    return `color-mix(in srgb, ${color} 45%, var(--line))`;
+  }
 </script>
 
 {#if shown.length}
@@ -38,18 +43,25 @@
     </header>
     {#each shown as task (task.id)}
       {@const busy = task.state === 'queued' || task.state === 'running' || task.state === 'waiting'}
-      <article class="task" class:busy class:failed={task.state === 'failed' || task.state === 'interrupted'}>
+      {@const agent = agentIdentity(task, tasks)}
+      <article
+        class="task"
+        class:busy
+        class:failed={task.state === 'failed' || task.state === 'interrupted'}
+        style:border-color={busy ? busyBorder(agent.color) : undefined}
+      >
         <button type="button" class="card-open" aria-label={`Open ${task.title}`} onclick={() => onOpen(task)}></button>
-        <img class="agent-avatar" class:busy src={mascot} alt="" aria-hidden="true" />
+        <span class="agent-avatar" class:busy><AgentMark size={18} color={agent.color} /></span>
         <div class="task-main">
           <div class="line">
             <strong class="title">{task.title}</strong>
+            <span class="agent-chip" style:color={agent.color}>{agent.name}</span>
             <span class="state">{label(task.state)}</span>
           </div>
           {#if task.error}
             <p class="detail failed-text">{task.error}</p>
           {:else if busy}
-            <p class="detail"><span class="pulse" aria-hidden="true"></span>{current(task)}</p>
+            <p class="detail"><span class="pulse" style:background={agent.color} aria-hidden="true"></span>{current(task)}</p>
           {/if}
         </div>
         {#if busy}
@@ -76,22 +88,21 @@
   .cancel-all:hover{color:var(--error-text)}
   .task{position:relative;display:flex;align-items:center;gap:7px;padding:5px 6px;border:1px solid var(--line);border-radius:8px;background:var(--soft);transition:border-color .15s ease}
   .task:hover,.task:has(.card-open:focus-visible){border-color:var(--line-strong)}
-  .task.busy{border-color:#4e4324}
-  .task.failed{border-color:var(--error-line)}
   .card-open{position:absolute;inset:0;padding:0;border:0;border-radius:8px;background:transparent;cursor:pointer;z-index:0}
   .card-open:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
   .agent-avatar,.task-main,.stop{position:relative;z-index:1}
-  .agent-avatar{width:18px;height:18px;flex-shrink:0;pointer-events:none}
+  .agent-avatar{display:block;width:18px;flex-shrink:0;pointer-events:none}
   .agent-avatar.busy{animation:agent-think 1.4s ease-in-out infinite}
   .task-main{min-width:0;flex:1;pointer-events:none}
   .line{display:flex;align-items:center;gap:6px;min-width:0}
   .title{flex:1;min-width:0;font-size:11px;font-weight:550;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .agent-chip{flex-shrink:0;font-size:9px;font-weight:620;letter-spacing:.02em;white-space:nowrap}
   .state{flex-shrink:0;font-size:9px;color:var(--faint);white-space:nowrap}
   .task.busy .state{color:var(--yellow-deep)}
   .task.failed .state{color:var(--error-text)}
   .detail{display:flex;align-items:center;gap:5px;margin:1px 0 0;font-size:9.5px;line-height:1.4;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .failed-text{color:var(--error-text);white-space:normal}
-  .pulse{width:4px;height:4px;border-radius:50%;background:var(--yellow);flex-shrink:0;animation:pulse 1.2s ease-in-out infinite}
+  .pulse{width:4px;height:4px;border-radius:50%;flex-shrink:0;animation:pulse 1.2s ease-in-out infinite}
   .stop{display:grid;place-items:center;width:16px;height:16px;flex-shrink:0;padding:0;border:0;border-radius:5px;background:transparent;color:var(--faint)}
   .stop svg{width:10px;height:10px}
   .stop:hover{color:var(--error-text);background:var(--error-bg)}

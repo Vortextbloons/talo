@@ -62,7 +62,7 @@
   button{padding:7px 11px;border-radius:7px;border:1px solid var(--line-strong);background:transparent;color:var(--muted);font-size:12px}
   button:hover:not(:disabled){color:var(--text);background:var(--soft)}
   .primary{background:var(--yellow);color:var(--black);border-color:var(--yellow);font-weight:600;justify-self:start}
-  .primary:hover:not(:disabled){background:#ffdd7f;color:var(--black)}
+  .primary:hover:not(:disabled){background:var(--accent-bright);color:var(--black)}
   button:disabled{opacity:.45}
   form{display:grid;gap:12px;border-left:2px solid var(--yellow);padding:14px 16px;margin:16px 0;background:var(--paper)}
   label{display:grid;gap:6px;font-size:11.5px;color:var(--muted)}

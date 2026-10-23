@@ -130,13 +130,13 @@
   form{gap:13px}
   label{font-size:12px;color:var(--muted);font-weight:550}
   input:not([type=checkbox]),textarea,select{width:100%;box-sizing:border-box;border:1px solid var(--line-strong);background:var(--soft);border-radius:8px;padding:9px 11px;color:var(--text);font:inherit;font-size:12.5px;min-width:0}
-  input:not([type=checkbox]):hover,textarea:hover,select:hover{border-color:#4a4a41}
+  input:not([type=checkbox]):hover,textarea:hover,select:hover{border-color:var(--hover-line)}
   textarea{resize:vertical;line-height:1.6;font-family:var(--font-mono,inherit)}
   button{font:inherit;font-size:12px;border:1px solid var(--line-strong);border-radius:8px;padding:8px 13px;background:var(--soft);color:var(--text);cursor:pointer;line-height:1.35}
-  button:hover:not(:disabled){background:#2c2c27;border-color:#4a4a41}
+  button:hover:not(:disabled){background:var(--hover-bg);border-color:var(--hover-line)}
   button:disabled{opacity:.45;cursor:not-allowed}
   .primary{background:var(--yellow);border-color:var(--yellow);color:var(--black);font-weight:600;padding:9px 16px}
-  .primary:hover:not(:disabled){background:#ffdd7f;border-color:#ffdd7f}
+  .primary:hover:not(:disabled){background:var(--accent-bright);border-color:var(--accent-bright)}
   .danger{border-color:var(--error-line);color:var(--error-text)}
   .actions{display:flex;flex-wrap:wrap;gap:8px}
   .hint{font-size:11.5px;color:var(--faint);line-height:1.6;margin:8px 0 0}

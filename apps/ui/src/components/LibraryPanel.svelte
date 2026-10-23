@@ -60,15 +60,15 @@
   form{gap:15px}
   label{font-size:12px;color:var(--muted);font-weight:550}
   input:not([type=checkbox]),textarea,select{width:100%;box-sizing:border-box;border:1px solid var(--line-strong);background:var(--soft);border-radius:8px;padding:9px 11px;color:var(--text);font:inherit;font-size:12.5px;min-width:0}
-  input:not([type=checkbox]):hover,textarea:hover,select:hover{border-color:#4a4a41}
+  input:not([type=checkbox]):hover,textarea:hover,select:hover{border-color:var(--hover-line)}
   textarea{resize:vertical;line-height:1.6}
   .check{display:flex;gap:9px;align-items:start;line-height:1.5;font-weight:400;color:var(--muted);cursor:pointer}
   .check input{accent-color:var(--yellow);margin-top:2px;flex-shrink:0}
   button{font:inherit;font-size:12px;border:1px solid var(--line-strong);border-radius:8px;padding:8px 13px;background:var(--soft);color:var(--text);cursor:pointer;line-height:1.35}
-  button:hover:not(:disabled){background:#2c2c27;border-color:#4a4a41}
+  button:hover:not(:disabled){background:var(--hover-bg);border-color:var(--hover-line)}
   button:disabled{opacity:.45;cursor:not-allowed}
   .primary{background:var(--yellow);border-color:var(--yellow);color:var(--black);font-weight:600;padding:9px 16px}
-  .primary:hover:not(:disabled){background:#ffdd7f;border-color:#ffdd7f}
+  .primary:hover:not(:disabled){background:var(--accent-bright);border-color:var(--accent-bright)}
   .actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
   fieldset{border:1px solid var(--line);border-radius:12px;padding:14px 16px 16px;margin:0;display:grid;gap:13px}
   legend{font-size:12px;font-weight:600;color:var(--text);padding:0 6px}
