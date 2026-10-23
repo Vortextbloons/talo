@@ -36,8 +36,8 @@
   }
 </script>
 
-<!-- This custom remote browser application forwards focus, pointer and keyboard input during manual takeover. -->
-<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+
+
 <div class:manual class="surface" role="application" tabindex={manual ? 0 : -1}
   aria-label={manual ? 'Interactive browser page. Type or click to browse. Paste supports text.' : 'Live browser page, watch only. Choose Take Over to interact.'}
   onpointerdown={event => pointer(event, 'mousePressed')} onpointerup={event => pointer(event, 'mouseReleased')}

@@ -1,6 +1,6 @@
 :root{font-family:'Segoe UI Variable','Segoe UI',sans-serif;color-scheme:dark;color:var(--text);background:var(--bg);font-synthesis:none;--bg:#121211;--paper:#191917;--soft:#232320;--sidebar:#0b0b0a;--text:#f1f0eb;--muted:#9c9c94;--faint:#6e6e67;--line:#2b2b27;--line-strong:#3b3b35;--black:#0b0b0a;--yellow:#ffd45c;--yellow-deep:#d8a92c;--focus:#ffd45c;--shadow:rgba(0,0,0,.45);--overlay:rgba(5,5,4,.68);--error-bg:#2b2016;--error-line:#5d4426;--error-text:#f3c78f}*{box-sizing:border-box}html,body{background:var(--bg);color:var(--text)}body{margin:0}button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.45}::placeholder{color:var(--faint)}::selection{background:#5a4720;color:var(--text)}:focus-visible{outline:2px solid var(--focus);outline-offset:3px}*{scrollbar-color:var(--line-strong) transparent;scrollbar-width:thin}
 .card{background:var(--paper);border:1px solid var(--line);border-radius:16px;padding:22px 24px;min-width:0}
-/* Native select popups are OS-drawn; author styles on option/optgroup darken them. */
+
 select{color-scheme:dark}
 option{background:#191917;color:#f1f0eb}
 option:checked{background:#26261f;color:#f1f0eb}

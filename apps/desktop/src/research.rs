@@ -1,4 +1,4 @@
-//! Isolated, lazy MCP worker. The supervisor assigns its entire process tree to its Job.
+
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, VecDeque},
@@ -28,7 +28,7 @@ pub fn command(root: &Path, data: &Path) -> Result<Command, String> {
     let model_dir = cache.join("rerank");
     std::fs::create_dir_all(&model_dir).map_err(|e| e.to_string())?;
     for file in ["model_quantized.onnx", "tokenizer.json"] {
-        // Always seed from the installer; never let missing state trigger model downloads.
+
         std::fs::copy(
             root.join("bundle/research-models/rerank").join(file),
             model_dir.join(file),
@@ -36,8 +36,8 @@ pub fn command(root: &Path, data: &Path) -> Result<Command, String> {
         .map_err(|e| format!("Packaged research model unavailable: {e}"))?;
     }
     let mut cmd = Command::new(root.join("bundle/node_modules/donsetch/binaries/donsetch.exe"));
-    // Allowlist environment: never inherit provider keys, proxies, personal browser profiles,
-    // DonSeTch user config, imported cookies or key stores.
+
+
     cmd.env_clear();
     for name in ["SystemRoot", "WINDIR", "SystemDrive", "TEMP", "TMP"] {
         if let Some(value) = std::env::var_os(name) {
@@ -94,7 +94,7 @@ impl Research {
         let stdout = child.stdout.take().ok_or("Web worker stdout unavailable")?;
         let (tx, incoming) = mpsc::channel();
         std::thread::spawn(move || {
-            // Read with a hard frame limit before allocating an unbounded line.
+
             let mut reader = BufReader::new(stdout);
             loop {
                 let mut bytes = Vec::new();
@@ -136,7 +136,7 @@ impl Research {
     pub fn send(&mut self, value: Value) -> Result<(), String> {
         let method = value.get("method").and_then(Value::as_str).unwrap_or("");
         if method == "notifications/cancelled" {
-            // Keep cancelled calls active until the server acknowledges or is reaped.
+
             let id = value
                 .pointer("/params/requestId")
                 .and_then(Value::as_str)
@@ -200,7 +200,7 @@ impl Research {
         }
         failed |= self.child.try_wait().ok().flatten().is_some();
         failed |= !self.initialized && self.started.elapsed() > Duration::from_secs(20);
-        // A stuck/cancelled request is not idle. Fail it explicitly before recovery.
+
         failed |= self
             .pending
             .values()
@@ -218,7 +218,7 @@ impl Research {
 
 impl Drop for Research {
     fn drop(&mut self) {
-        // This nested Job also kills renderers after their parent worker has crashed.
+
         #[cfg(windows)]
         {
             self.job.take();

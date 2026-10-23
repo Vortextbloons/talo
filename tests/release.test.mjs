@@ -1,5 +1,5 @@
-// Release gate: fails when installer inputs, licensing coverage or wired scripts are broken.
-// Vendor-dependent checks skip cleanly when `npm run vendor` has not been run yet.
+
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -18,12 +18,12 @@ test('installer config: NSIS target, brand and icons resolve', async () => {
   for (const icon of config.bundle.icon) {
     assert.ok(existsSync(path.join(root, 'apps/desktop', icon)), `missing bundle icon ${icon}`);
   }
-  // The tray icon is embedded at compile time from the same set.
+
   assert.ok(existsSync(path.join(root, 'apps/desktop/icons/icon.png')), 'tray icon source missing');
 });
 
 test('vendored runtime resources referenced by the installer exist', async () => {
-  if (!vendored) return; // npm run vendor has not run on this checkout yet
+  if (!vendored) return;
   const config = JSON.parse(await read('apps/desktop/tauri.conf.json'));
   for (const resource of Object.keys(config.bundle.resources ?? {})) {
     const source = path.join(root, 'apps/desktop', resource.replace(/\/+$/, ''));
@@ -37,7 +37,7 @@ test('third-party notices cover every vendored runtime component', async () => {
   for (const component of required) {
     assert.ok(notices.includes(component), `THIRD-PARTY-NOTICES.md is missing ${component}`);
   }
-  // Bun's MIT license must travel with the binary once vendored.
+
   if (vendored) {
     assert.ok(
       existsSync(path.join(root, 'vendor/runtime/bun/LICENSE.md')) || existsSync(path.join(root, 'vendor/runtime/bun/LICENSE')),

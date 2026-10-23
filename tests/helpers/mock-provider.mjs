@@ -1,9 +1,9 @@
 import http from 'node:http';
 
-/**
- * Small OpenAI-compatible provider used to exercise real SDK streaming, auth,
- * cancellation, and retry behavior without making network requests.
- */
+
+
+
+
 export async function startMockProvider(options = {}) {
   const state = {
     key: options.key ?? 'test-secret-key',

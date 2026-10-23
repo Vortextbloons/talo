@@ -1,15 +1,15 @@
 import { PROVIDERS, providerDescriptor } from '../../../../packages/contracts/src/index';
 import type { ProviderDescriptor } from '../../../../packages/contracts/src/index';
 
-/**
- * Providers offered by the secure connection form.
- *
- * These are Pi's native provider IDs, so the bundled catalog keeps supplying each model's
- * endpoint and reasoning metadata. The shared contract catalog is preferred when it already
- * describes a provider; the direct entries below cover the hosted providers Talo connects to
- * with an API key. A missing contract entry is still connectable because `provider_connect`
- * takes a provider ID rather than a closed enum.
- */
+
+
+
+
+
+
+
+
+
 export interface ProviderChoice {
   id: string;
   name: string;
@@ -17,9 +17,9 @@ export interface ProviderChoice {
   keysUrl: string;
   docsUrl: string;
   apiBaseUrl: string;
-  /** Environment variable Pi falls back to when no Talo credential exists. */
+
   envVar: string;
-  /** A placeholder choice that explains what is not connected yet. */
+
   placeholder: boolean;
   suggestedModels: readonly string[];
 }
@@ -110,7 +110,7 @@ function fromDirect(choice: DirectChoice): ProviderChoice {
   return { ...choice, placeholder: false };
 }
 
-/** Hosted providers first, then any additional providers described by the shared catalog. */
+
 export const PROVIDER_CHOICES: readonly ProviderChoice[] = (() => {
   const combined = new Map<string, ProviderChoice>();
   for (const choice of DIRECT) combined.set(choice.id, fromDirect(choice));
@@ -127,7 +127,7 @@ export function providerChoice(providerId: string): ProviderChoice {
     ?? fromDescriptor(providerDescriptor(providerId));
 }
 
-/** A friendly provider name even when the connection predates the current catalog. */
+
 export function providerName(providerId: string): string {
   return PROVIDER_CHOICES.find(choice => choice.id === providerId)?.name ?? providerId;
 }

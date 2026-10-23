@@ -1,4 +1,4 @@
-// Build a self-contained copy of the actual UI for static visual inspection tools.
+
 import { readFile, readdir } from 'node:fs/promises';
 const assets=await readdir('apps/ui/dist/assets');
 const css=await readFile(`apps/ui/dist/assets/${assets.find(f=>f.endsWith('.css'))}`,'utf8');

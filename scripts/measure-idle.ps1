@@ -1,7 +1,7 @@
-# Measures CPU and memory across Talo's process tree (host, WebView2, Pi worker, Chromium).
-# Usage:
-#   powershell -ExecutionPolicy Bypass -File scripts/measure-idle.ps1 -Samples 6 -IntervalSeconds 10
-# Run while Talo sits idle (window open or closed to tray) to record the Slice 8 idle footprint.
+
+
+
+
 param(
   [int]$Samples = 6,
   [int]$IntervalSeconds = 10,
@@ -12,7 +12,7 @@ $ErrorActionPreference = 'Stop'
 $roots = @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)
 if (-not $roots.Count) { Write-Output "No '$ProcessName' process found. Start Talo first."; exit 1 }
 
-# Walk descendants by parent PID so WebView2, Bun/Pi and Chromium children are included.
+
 $all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name
 $ids = New-Object System.Collections.Generic.HashSet[uint32]
 foreach ($root in $roots) { [void]$ids.Add([uint32]$root.Id) }

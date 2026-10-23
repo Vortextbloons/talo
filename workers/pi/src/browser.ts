@@ -29,7 +29,7 @@ const descriptions = {
 export function createBrowserTools(transport: WebTransport, model: () => BrowserModel, activity: (event: WebActivity) => void, sessionId = 'primary', generationId: () => string | undefined = () => undefined): ToolDefinition[] {
   return BROWSER_TOOLS.map(name => ({ name, label: name.replace('browser_', 'Browser '), description: descriptions[name], parameters: parameters[name],
     async execute(id, input: any, signal) {
-      // Never emit text being typed, extracted data, credentials or raw instructions in activity logs.
+
       const event: WebActivity = { id, tool: name, input: name === 'browser_open' ? cleanUrl(input.url) : String(input.action ?? 'chat session'), state: 'running' };
       activity(event);
       try {

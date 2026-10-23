@@ -4,8 +4,8 @@ use serde_json::Value;
 
 #[derive(Debug,PartialEq)]
 pub enum Decision { Allow, Prompt, Deny }
-/// Shared native/browser/MCP policy. Server annotations and model flags never
-/// authorize an operation. Persistent grants are exact and host-protected.
+
+
 pub fn policy(action:&str,scope:&str,grants:&Value,attended:bool)->Decision{
     if action=="web.public" {return Decision::Allow;}
     if !["mcp.call","files.read","files.write","files.edit","browser.action"].contains(&action){return Decision::Deny;}

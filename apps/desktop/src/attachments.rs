@@ -1,24 +1,24 @@
-//! Image attachments for chat messages.
-//!
-//! Bytes arrive inline from the composer, are validated here, and land in Pi's own working
-//! directory (`agent-workspace/attachments/<conversation>/…`). That placement is deliberate:
-//! the model gets the image as native content, and a model without image input can still open
-//! the file with its own tools because the path sits inside its cwd. SQLite keeps only the
-//! metadata (`services/storage/schema.sql`), so a projection rebuild never loses a picture.
+
+
+
+
+
+
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Pasting four screenshots in one turn is generous; more turns a message into a file dump.
+
 pub const MAX_IMAGES: usize = 4;
-/// One image after base64 decoding. Larger pictures are resized by Pi before they reach a model.
+
 pub const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
-/// Everything attached to one turn, decoded.
+
 pub const MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
-/// Past this size the UI shows a file chip instead of a picture.
+
 pub const MAX_DISPLAY_BYTES: i64 = 6 * 1024 * 1024;
 
-/// Raster formats every bundled provider accepts. SVG is excluded on purpose: it is a
-/// document that can carry script, not a picture.
+
+
 const MIME_EXTENSIONS: [(&str, &str); 4] = [
     ("image/png", "png"),
     ("image/jpeg", "jpg"),
@@ -26,18 +26,18 @@ const MIME_EXTENSIONS: [(&str, &str); 4] = [
     ("image/gif", "gif"),
 ];
 
-/// An image that passed validation and now exists on disk.
+
 pub struct StoredImage {
     pub id: String,
     pub name: String,
     pub mime_type: String,
     pub bytes: usize,
     pub path: PathBuf,
-    /// Base64 without the `data:` prefix, ready for the worker's prompt params.
+
     pub data: String,
 }
 
-/// Rejects anything that is not a small raster image before a byte touches the disk.
+
 pub fn validate<'a>(
     images: impl IntoIterator<Item = (&'a str, &'a str, Option<&'a str>)>,
 ) -> Result<Vec<(String, String, Vec<u8>, String)>, String> {
@@ -69,7 +69,7 @@ pub fn validate<'a>(
     Ok(accepted)
 }
 
-/// Writes each validated image under Pi's workspace and returns what the worker and UI need.
+
 pub fn store(
     workspace: &Path,
     conversation_id: &str,
@@ -97,7 +97,7 @@ pub fn store(
     Ok(stored)
 }
 
-/// A native URL for an image already on disk, or `None` when it is too big to preview.
+
 pub fn display_url(id: &str, bytes: i64) -> Option<String> {
     if bytes > MAX_DISPLAY_BYTES {
         return None;

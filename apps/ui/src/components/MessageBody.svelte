@@ -8,13 +8,13 @@
 
   let { text }: { text: string } = $props();
 
-  // Markdown arrives as tokens and is rendered as real Svelte elements, so model output can never
-  // inject markup into the desktop webview. Math is the one exception: KaTeX turns TeX into its
-  // own DOM with trust disabled, which escapes anything that is not a rendering instruction.
 
-  // Streaming deltas mutate `text` many times a second, and re-lexing the whole message on
-  // every delta is quadratic in the response length. Parse at most every 150ms while it
-  // changes; the trailing parse always catches up, so settled text is fully rendered.
+
+
+
+
+
+
   const PARSE_INTERVAL = 150;
   let tree = $state.raw<Block[]>([]);
   let lastParse = 0;
@@ -42,7 +42,7 @@
     }
   }
 
-  /* Open HTTP(S) sources inside Talo; copying remains the fallback. */
+
   let copied = $state('');
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -98,7 +98,7 @@
 </script>
 
 {#snippet mathHtml(tex: string, display: boolean)}
-  <!-- The only {@html} in the app: KaTeX output with trust disabled. -->
+
   {@html renderMath(tex, display)}
 {/snippet}
 

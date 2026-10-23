@@ -1,8 +1,8 @@
-// Points the updater at the repository that actually publishes releases.
-//
-// The checked-in endpoint intentionally carries an OWNER placeholder so nobody ships a build that
-// silently checks someone else's repo. Release builds rewrite it from GITHUB_REPOSITORY; the
-// change stays in the workspace and is never committed.
+
+
+
+
+
 import { readFile, writeFile } from 'node:fs/promises';
 
 const repository = process.env.GITHUB_REPOSITORY;

@@ -17,7 +17,7 @@ const ajv = new Ajv({ strict: false, allErrors: false, validateFormats: false })
 const jiti = createJiti(import.meta.url);
 let factory: Promise<any> | undefined;
 function adapterFactory() {
-  // Same TS loader as Pi. Never load the normal extension or ambient configs.
+
   return factory ??= jiti.import('pi-mcp-adapter/host-managed').then((m: any) => m.createHostManagedMcpAdapter);
 }
 export function validateServers(value: unknown): McpServerDefinition[] {
@@ -187,8 +187,8 @@ function containedStdio(server:McpServerDefinition){
   const close=transport.close.bind(transport);let closing:Promise<void>|undefined;
   transport.close=()=>closing??=(async()=>{
     const pid=transport.pid;
-    // Kill descendants while the root PID still exists. The desktop Job Object
-    // also contains this tree if the worker or host crashes.
+
+
     if(process.platform==='win32'&&pid)await new Promise<void>(resolve=>{
       execFile(path.join(process.env.SystemRoot??'C:\\Windows','System32','taskkill.exe'),['/PID',String(pid),'/T','/F'],{windowsHide:true,timeout:3000},()=>resolve());
     });

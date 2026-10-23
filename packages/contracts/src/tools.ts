@@ -7,7 +7,7 @@ export interface ManagedTool {
 export interface McpServerDefinition {
   id: string; transport: 'stdio' | 'http'; command?: string; args?: string[]; url?: string;
   enabled: boolean; trusted: boolean; idleMs?: number;
-  /** Entered privately; never returned to the settings UI. */
+
   credential?: string;
 }
 export interface ToolPermission {

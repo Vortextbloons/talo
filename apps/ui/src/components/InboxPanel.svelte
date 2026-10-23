@@ -10,7 +10,7 @@
 
   const open = $derived(agent.assignments.filter(item => item.status === 'open'));
   const settled = $derived(agent.assignments.filter(item => item.status !== 'open').slice(0, 8));
-  /** Unsaved edits per proposal, keyed by skill proposal id. */
+
   type SkillDraft = { title: string; description: string; instructions: string; workspaceId: string };
   let edits = $state<Record<string, SkillDraft>>({});
 

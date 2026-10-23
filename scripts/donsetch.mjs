@@ -32,7 +32,7 @@ async function verified(url, file, expected) {
   await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, bytes);
   return bytes;
 }
-/** GNU tar reads `C:\...` as a remote host and eats backslashes, so `-C` gets a portable path. */
+
 const tarDir = target => path.relative(process.cwd(), target).split(path.sep).join('/');
 export async function bundleDonsetch(destination) {
   const archive = `vendor/downloads/${release.asset}`;
@@ -41,8 +41,8 @@ export async function bundleDonsetch(destination) {
   await mkdir(binaryDir, { recursive: true });
   const entries = execFileSync('tar.exe', ['tzf', archive], { encoding: 'utf8', windowsHide: true }).trim().split(/\r?\n/u);
   if (entries.some(name => !/^(\.\/)?(donsetch\.exe|onnxruntime\.dll|pdfium\.dll)$/u.test(name))) throw new Error('Unexpected path in DonSeTch archive');
-  // `-C` takes a portable relative path: GNU tar reads `C:\...` as a remote host and eats
-  // backslashes as escapes.
+
+
   execFileSync('tar.exe', ['xzf', archive, '-C', tarDir(binaryDir)], { windowsHide: true });
   const files = {};
   for (const name of ['donsetch.exe', 'onnxruntime.dll', 'pdfium.dll']) {
@@ -51,7 +51,7 @@ export async function bundleDonsetch(destination) {
   }
   const modelDir = path.join(destination, 'research-models/rerank');
   for (const model of release.models) await verified(`https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/${model.file}`, path.join(modelDir, model.name), model.sha256);
-  // Include corresponding source at the exact release commit, with Cargo.lock and build scripts.
+
   const source = await verified(`https://codeload.github.com/dondai44423/donsetch/tar.gz/${release.commit}`, 'vendor/downloads/donsetch-source.tar.gz', release.sourceSha256);
   await writeFile(path.join(destination, `donsetch-v${release.version}-source.tar.gz`), source);
   await cp('node_modules/donsetch/LICENSE', path.join(destination, 'DONSETCH-LICENSE.txt'));

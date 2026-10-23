@@ -4,7 +4,7 @@ import net from 'node:net';
 import { lookup } from 'node:dns/promises';
 import { publicAddress } from '../../../workers/pi/src/web.js';
 
-/** Resolve once, validate every answer, then connect to the validated IP. */
+
 export async function publicTarget(host: string, port: number) {
   if (![80, 443].includes(port) || /(^|\.)(localhost|local|internal|home|lan)$/iu.test(host)) throw new Error('Private destination blocked');
   const rows = await lookup(host, { all: true });

@@ -17,6 +17,7 @@
     "build:workers": "bun scripts/build-workers.mjs && bun node_modules/@typescript/native/bin/tsc -p tsconfig.workers.json",
     "check": "bun --bun --filter @talo/ui check && bun node_modules/@typescript/native/bin/tsc -p tsconfig.workers.json --noEmit",
     "test": "bun test --timeout 180000 tests",
+    "strip:comments": "bun scripts/strip-comments.mjs",
     "vendor": "bun scripts/vendor.mjs",
     "prepare:bundle": "bun run build:workers && bun scripts/bundle.mjs && bun run verify:bundle",
     "verify:bundle": "bun scripts/verify-pi-bundle.mjs",

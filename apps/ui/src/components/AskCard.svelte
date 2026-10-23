@@ -4,7 +4,7 @@
 
   let { ask, onOpenChat }: { ask: PendingAsk; onOpenChat?: () => void } = $props();
 
-  /** Selected option per question; `decided` means "use Talo's recommendation". */
+
   let chosen = $state<Record<string, string>>({});
   let other = $state<Record<string, string>>({});
   let custom = $state<Record<string, boolean>>({});
@@ -36,7 +36,7 @@
     if (!ok) error = 'That question could not be answered. It may have expired.';
   }
 
-  /** The summary line the user sees after choosing "You decide". */
+
   function defaultSummary(): string {
     return ask.questions.map(question => label(question.id, question.recommended)).join(' · ');
   }

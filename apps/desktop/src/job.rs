@@ -1,4 +1,4 @@
-//! Kill the full managed process tree when the native host exits or crashes.
+
 use std::{io, os::windows::io::AsRawHandle};
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE},

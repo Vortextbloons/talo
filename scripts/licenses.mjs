@@ -2,8 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 const metadata=JSON.parse(execFileSync('cargo',['metadata','--locked','--format-version','1','--manifest-path','apps/desktop/Cargo.toml'],{encoding:'utf8',maxBuffer:32*1024*1024,windowsHide:true}));
-// License texts repeat across hundreds of crates. Store each unique text once and reference it,
-// so the inventory stays readable while shrinking from 3.9 MB to a fraction of that.
+
+
 const texts=[];const ids=new Map();
 const intern=text=>{let id=ids.get(text);if(id===undefined){id=texts.length;texts.push(text);ids.set(text,id);}return id;};
 const notices=[];

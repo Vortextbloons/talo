@@ -2,7 +2,7 @@ import { Type } from 'typebox';
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { WebTransport } from './web.js';
 
-/** The single tool exported by the `talo-agent` server. Operations are host-validated. */
+
 export const AGENT_TOOL = 'agent';
 
 const optionalId = (maxLength: number) => Type.Optional(Type.String({ maxLength }));
@@ -81,7 +81,7 @@ export function createAgentTools(transport: WebTransport, conversationId: string
     description,
     parameters,
     async execute(_id, input: any, signal) {
-      // A question card can block for up to five minutes; the transport budget covers it.
+
       const result = await transport.request(
         'agent.call',
         { ...input, conversationId },

@@ -1,15 +1,15 @@
-//! Windows credential protection.
-//!
-//! Provider API keys are sealed with DPAPI under the current Windows user before they touch
-//! SQLite. `provider_connections.secret` therefore contains a decryptable-only-here blob,
-//! never plaintext. `Secret` wipes its buffer when dropped; it is never serializable.
+
+
+
+
+
 use std::ops::Deref;
 
-/// Additional entropy binds the blob to Talo's credential purpose.
+
 const ENTROPY: &[u8] = b"Talo/provider-credential/v1";
 
-/// A short-lived plaintext secret. Debug and Display are intentionally not implemented so a
-/// key cannot be accidentally formatted into an error, log line or event.
+
+
 pub struct Secret(Vec<u8>);
 
 impl Secret {
@@ -28,8 +28,8 @@ impl Secret {
 
 impl Drop for Secret {
     fn drop(&mut self) {
-        // Best-effort wipe. The allocation itself may have been copied by an API call, but
-        // Talo's own retained buffer no longer contains the key.
+
+
         for byte in &mut self.0 {
             unsafe { std::ptr::write_volatile(byte, 0) };
         }

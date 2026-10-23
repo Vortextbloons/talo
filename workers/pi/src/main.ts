@@ -98,10 +98,10 @@ const agentDir = path.join(data, 'pi');
 const sessionDir = path.join(data, 'sessions');
 await Promise.all([cwd, agentDir, sessionDir, skillsRoot].map(directory => mkdir(directory, { recursive: true })));
 
-/**
- * The host advertises only approved skills that apply to the conversation's workspace, and
- * refuses to store one outside the skill directory. Nothing else is ever discovered or loaded.
- */
+
+
+
+
 function approvedSkills(value: unknown): Skill[] {
   if (!Array.isArray(value)) return [];
   const skills: Skill[] = [];
@@ -171,8 +171,8 @@ const WORKER_METHODS = new Set<WorkerMethod>([
   'tools.configure', 'tools.status', 'tools.test', 'tools.cancel',
 ]);
 
-// Pi's session thinking levels. 'off' appears in model registries whose thinking can be
-// disabled; Pi clamps whatever it cannot honor.
+
+
 const THINKING_LEVELS = new Set<string>(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 
 let stopping = false;
@@ -208,7 +208,7 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-/** One image attached to a prompt. `path` is the on-disk copy inside Pi's workspace. */
+
 interface PromptImage {
   name: string;
   mimeType: string;
@@ -220,7 +220,7 @@ const IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'imag
 const MAX_PROMPT_IMAGES = 4;
 const MAX_PROMPT_IMAGE_BYTES = 12 * 1024 * 1024;
 
-/** Accepts the host's image list, refusing anything that is not a bounded raster image. */
+
 function promptImages(value: unknown): PromptImage[] {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) throw new Error('Image attachments must be a list');
@@ -249,7 +249,7 @@ interface Generation {
   id: string;
   conversationId: string;
   userText: string;
-  /** Images sent with this prompt; empty for text-only turns. */
+
   images: PromptImage[];
   baseLeafId: string | null;
   started: Deferred<void>;
@@ -258,6 +258,10 @@ interface Generation {
   finalizing?: Promise<void>;
   text: string;
   reasoning: string;
+
+  pendingText: string;
+  pendingReasoning: string;
+  deltaTimer?: ReturnType<typeof setTimeout>;
   error?: string;
 }
 
@@ -287,7 +291,7 @@ interface SessionRecord {
 
 const sessions = new Map<string, SessionRecord>();
 const sessionLocks = new Map<string, Promise<unknown>>();
-/** Runtimes are isolated per credential so concurrent connections cannot share a key. */
+
 const sessionRuntimes = new Map<string, ModelRuntime>();
 
 let runtimePromise: Promise<ModelRuntime> | undefined;
@@ -302,7 +306,7 @@ async function getRuntime(): Promise<ModelRuntime> {
   if (!runtimePromise) {
     runtimePromise = (async () => {
       const preference = await readPreference(data);
-      // Pi composes models.json while creating the runtime, so write it first.
+
       await syncModelsJson(agentDir, preference);
       return createModelRuntime(agentDir);
     })().catch(runtimeError);
@@ -335,11 +339,11 @@ interface SessionRuntimeRequest {
   name?: string;
 }
 
-/**
- * A session gets a runtime that owns only its credential. Two connections to the same
- * provider with different keys must never race through one shared runtime credential.
- * Sessions without an explicit key (ambient environment auth) use the discovery runtime.
- */
+
+
+
+
+
 async function getSessionRuntime(request: SessionRuntimeRequest): Promise<ModelRuntime> {
   if (request.provider === CHATGPT_PROVIDER && !request.apiKey) throw new Error('Connect your ChatGPT account before choosing a model.');
   if (!request.apiKey) {
@@ -347,7 +351,7 @@ async function getSessionRuntime(request: SessionRuntimeRequest): Promise<ModelR
     registerProviderEndpoint(runtime, request);
     return runtime;
   }
-  // Hash the key so the cache map itself contains no credential text.
+
   const digest = createHash('sha256').update(request.apiKey).digest('hex');
   const cacheKey = [
     canonicalProviderId(request.provider),
@@ -409,8 +413,8 @@ function cloneMessages(messages: ChatMessage[]): ChatMessage[] {
   return messages.map(cloneMessage);
 }
 
-/// Opening a session returns metadata only. A long transcript must never ride on one
-/// protocol frame: the host asks for it in bounded pages through `session.history`.
+
+
 function sessionMetadata(record: SessionRecord): Record<string, unknown> {
   return {
     sessionId: record.sessionId,
@@ -474,12 +478,15 @@ function activeGenerationCount(): number {
   return count;
 }
 
-function emitGeneration(
-  record: SessionRecord,
-  generation: Generation,
-  state: GenerationState,
-  detail: { text?: string; reasoning?: string; delta?: StreamDelta; message?: ChatMessage; error?: string } = {},
-): void {
+type GenerationDetail = {
+  text?: string;
+  reasoning?: string;
+  delta?: StreamDelta;
+  message?: ChatMessage;
+  error?: string;
+};
+
+function sendGeneration(record: SessionRecord, generation: Generation, state: GenerationState, detail: GenerationDetail): void {
   if (record.closing) return;
   record.sequence += 1;
   sendChat({
@@ -494,6 +501,51 @@ function emitGeneration(
     ...(detail.message ? { message: cloneMessage(detail.message) } : {}),
     ...(detail.error ? { error: detail.error } : {}),
   });
+}
+
+
+
+
+
+
+const DELTA_FLUSH_MS = 50;
+const DELTA_FLUSH_CHARS = 4096;
+
+function flushDeltas(record: SessionRecord, generation: Generation): void {
+  if (generation.deltaTimer) {
+    clearTimeout(generation.deltaTimer);
+    generation.deltaTimer = undefined;
+  }
+  if (!generation.pendingText && !generation.pendingReasoning) return;
+  const delta: StreamDelta = {};
+  if (generation.pendingText) delta.text = generation.pendingText;
+  if (generation.pendingReasoning) delta.reasoning = generation.pendingReasoning;
+  generation.pendingText = '';
+  generation.pendingReasoning = '';
+  sendGeneration(record, generation, 'generating', { delta });
+}
+
+function emitGeneration(
+  record: SessionRecord,
+  generation: Generation,
+  state: GenerationState,
+  detail: GenerationDetail = {},
+): void {
+  const delta = detail.delta;
+  if (delta && !delta.reset) {
+    generation.pendingText += delta.text ?? '';
+    generation.pendingReasoning += delta.reasoning ?? '';
+    generation.deltaTimer ??= setTimeout(() => {
+      generation.deltaTimer = undefined;
+      flushDeltas(record, generation);
+    }, DELTA_FLUSH_MS);
+    if (generation.pendingText.length + generation.pendingReasoning.length >= DELTA_FLUSH_CHARS) {
+      flushDeltas(record, generation);
+    }
+    return;
+  }
+  flushDeltas(record, generation);
+  sendGeneration(record, generation, state, detail);
 }
 
 function liveAssistant(record: SessionRecord, generation: Generation): ChatMessage {
@@ -641,7 +693,7 @@ function beginGeneration(record: SessionRecord, generationId: string, text: stri
         // A vanished entry means the branch already moved; the new prompt is still valid.
       }
     }
-    // The failed/cancelled assistant belongs to the abandoned branch.
+
     while (record.messages.length > 0) {
       const last = record.messages[record.messages.length - 1];
       if (last.role === 'assistant' && (last.status === 'failed' || last.status === 'cancelled')) {
@@ -680,6 +732,8 @@ function beginGeneration(record: SessionRecord, generationId: string, text: stri
     finalized: false,
     text: '',
     reasoning: '',
+    pendingText: '',
+    pendingReasoning: '',
   };
   record.generation = generation;
   record.state = 'generating';
@@ -688,13 +742,13 @@ function beginGeneration(record: SessionRecord, generationId: string, text: stri
   return generation;
 }
 
-/** True when the open model's registry entry accepts image input. */
+
 function acceptsImages(record: SessionRecord): boolean {
   const input = record.session.model?.input;
   return Array.isArray(input) && input.map(value => String(value)).includes('image');
 }
 
-/** Images as Pi content parts, but only for models that can actually see them. */
+
 function nativeImages(record: SessionRecord, generation: Generation): { images?: { type: 'image'; data: string; mimeType: string }[] } {
   if (!generation.images.length || !acceptsImages(record)) return {};
   return {
@@ -702,10 +756,10 @@ function nativeImages(record: SessionRecord, generation: Generation): { images?:
   };
 }
 
-/**
- * A model without image input still gets the files, because the host writes them inside Pi's
- * working directory: the prompt names the paths and Pi's own tools can open them.
- */
+
+
+
+
 function imageNote(record: SessionRecord, generation: Generation): string {
   if (!generation.images.length || acceptsImages(record)) return '';
   const paths = generation.images.map(image => image.path).filter(Boolean);
@@ -804,7 +858,7 @@ function finalizeGeneration(record: SessionRecord, generation: Generation): Prom
     try {
       messages = persistedNew ? readSessionMessages(record.session) : cloneMessages(record.messages);
     } catch {
-      // A damaged projection must still produce a terminal event instead of crashing the worker.
+
       messages = cloneMessages(record.messages);
     }
 
@@ -919,6 +973,7 @@ function finalizeGeneration(record: SessionRecord, generation: Generation): Prom
 
 async function closeSession(record: SessionRecord): Promise<void> {
   if (record.closing) return;
+  if (record.generation) flushDeltas(record, record.generation);
   record.closing = true;
   sessions.delete(record.conversationId);
   if (record.generation) {
@@ -1002,8 +1057,8 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
         const selectionChanged = explicitProvider !== undefined || explicitModel !== undefined ||
           apiKey !== undefined || explicitBaseUrl !== undefined;
         if (!selectionChanged) return sessionMetadata(existing);
-        // A different credential needs a different runtime. Reopen the same durable file
-        // instead of mutating a session that is bound to the old runtime.
+
+
         if ((existing.state === 'generating' || existing.state === 'cancelling') && existing.generation) {
           await abortGeneration(existing.generation.id);
         }
@@ -1025,8 +1080,8 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
 
     let manager: PiSessionManager;
     if (requestedPath) {
-      // Pi intentionally permits opening a nonexistent path as a new session. Talo's
-      // explicit mapping means this is a restore, so never silently replace lost history.
+
+
       let info;
       try { info = await stat(requestedPath); }
       catch { throw new Error('The saved session is missing or unavailable. Your conversation metadata has been preserved.'); }
@@ -1066,12 +1121,12 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
       try {
         selectedModel = resolveModel(runtime, provider, desiredModelId);
       } catch (error) {
-        // A stale preference must not prevent an empty conversation from opening.
+
         if (explicitModel !== undefined) throw error;
       }
     }
 
-    // A workspace bundle may narrow capabilities; an empty list means everything is enabled.
+
     const capabilities = { web: true, browser: true, files: true, google: true };
     let sessionRecord: SessionRecord | undefined;
     const sessionAuthorize: Authorize = (action, scope, summary, signal) =>
@@ -1131,7 +1186,7 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
       tools: [...ACTIVE_TOOLS],
       customTools: registry.wrap(fileTools(cwd,sessionAuthorize,{
         readRoots:[skillsRoot],
-        // Approved skills are read on demand; surface which one the turn actually used.
+
         onSkillRead: file => {
           const record = sessions.get(conversationId);
           const skill = record?.skills.find(item => item.filePath === file);
@@ -1181,7 +1236,7 @@ async function openSession(params: Record<string, unknown>): Promise<Record<stri
         if (sameSkills(next, record.skills)) return;
         record.skills = next;
         advertisedSkills = next;
-        // Rebuild the prompt so newly approved or disabled skills change the next turn.
+
         session.setActiveToolsByName(activeTools());
       },
     };
@@ -1236,8 +1291,8 @@ async function startSessionPrompt(params: Record<string, unknown>): Promise<{ re
   const text = requirePromptText(params.text, images.length > 0);
   const record = sessions.get(conversationId);
   if (!record) throw new Error('Conversation is not open');
-  // A host that lost the terminal event may send a new prompt while Pi is still generating.
-  // Abort the stale run first so the new prompt is accepted instead of failing the generation.
+
+
   if ((record.state === 'generating' || record.state === 'cancelling') && record.generation) {
     await abortGeneration(record.generation.id);
   }
@@ -1369,8 +1424,8 @@ async function handle(request: WorkerRequest): Promise<void> {
         const generationId = requireId(params.generationId, 'generationId');
         const record = sessions.get(conversationId);
         if (!record) throw new Error('Conversation is not open');
-        // A stop that the host finalized locally may still be settling here. Let the abort
-        // finish and expose its retryable turn instead of rejecting a valid retry.
+
+
         if ((record.state === 'generating' || record.state === 'cancelling') && record.generation) {
           await abortGeneration(record.generation.id);
         }
@@ -1433,8 +1488,8 @@ async function handle(request: WorkerRequest): Promise<void> {
         if (typeof level !== 'string' || !THINKING_LEVELS.has(level)) {
           throw new Error('Invalid thinking level');
         }
-        // Pi clamps the level to the model's registry-supported levels and records it in
-        // the session transcript, so retries and resumed sessions keep the choice.
+
+
         record.session.setThinkingLevel(level as never);
         send({ type: 'response', id: request.id, result: { level: record.session.thinkingLevel } });
         return;
@@ -1484,7 +1539,7 @@ const idleInterval = Math.max(25, Math.min(1000, Math.floor(idleMs / 4)));
 const idleTimer = setInterval(() => {
   if (stopping) return;
   if (activeOperations > 0 || activeGenerationCount() > 0) {
-    // Do not sleep mid-generation; start the idle window after work settles.
+
     lastActivity = Date.now();
     return;
   }
@@ -1524,8 +1579,8 @@ function acceptLine(line: string): void {
   void handle(request);
 }
 
-// Strict LF framing: JSON strings may legitimately contain U+2028/U+2029, which Node's
-// readline treats as record separators. The host writes one JSON object per LF.
+
+
 let inputBuffer = '';
 let discardingOversized = false;
 process.stdin.setEncoding('utf8');

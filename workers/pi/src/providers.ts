@@ -9,9 +9,9 @@ import type {
   Model,
 } from '@earendil-works/pi-ai';
 
-/** Talo-owned, non-secret provider projection written by the host after onboarding. */
+
 const PREFERENCE_FILE = 'provider.json';
-/** Pi's compatible-endpoint file inside Talo's agent directory. */
+
 const MODELS_FILE = 'models.json';
 
 const CUSTOM_PROVIDER = 'custom';
@@ -23,12 +23,12 @@ const CUSTOM_MAX_TOKENS = 16_384;
 const PI_MODELS_SCHEMA = 'https://pi.dev/schemas/models.schema.json';
 const PROVIDER_PROBE_TIMEOUT_MS = 25_000;
 const PROVIDER_PROBE_MAX_TOKENS = 16;
-/** Bound remembered secrets used only to keep provider errors free of credential text. */
+
 const MAX_REMEMBERED_SECRETS = 32;
 
 const rememberedSecrets = new Set<string>();
 
-/** Store a credential only long enough to redact it from any error we emit. */
+
 export function rememberSecret(secret: string | undefined): void {
   if (!secret || secret.length < 3) return;
   if (rememberedSecrets.size >= MAX_REMEMBERED_SECRETS) {
@@ -38,7 +38,7 @@ export function rememberSecret(secret: string | undefined): void {
   rememberedSecrets.add(secret);
 }
 
-/** Errors cross the IPC boundary; secrets and provider payloads never do. */
+
 export function sanitizeError(error: unknown): string {
   let text = error instanceof Error
     ? error.message
@@ -57,7 +57,7 @@ export function sanitizeError(error: unknown): string {
   return (text || 'Unexpected worker error').slice(0, 2000);
 }
 
-/** Talo preference shape. Unknown-but-valid provider IDs are preserved. */
+
 export interface ProviderPreference {
   provider: string;
   model: string;
@@ -74,7 +74,7 @@ const DEFAULT_PREFERENCE: ProviderPreference = {
 
 const PROVIDER_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 const SESSION_PATH_MAX = 4096;
-/** Friendly aliases accepted without rewriting Pi's bundled catalog. */
+
 const PROVIDER_ALIASES: Record<string, string> = { gemini: 'google', chatgpt: 'openai' };
 
 export function canonicalProviderId(provider: string): string {
@@ -186,13 +186,13 @@ interface ModelsJsonDocument {
   }>;
 }
 
-/**
- * Build the models.json document Talo owns.
- *
- * Native Pi providers are never redeclared: their models list would replace Pi's bundled catalog.
- * Only the custom OpenAI-compatible placeholder is written, and its key is either an env
- * indirection or a non-secret local placeholder.
- */
+
+
+
+
+
+
+
 function modelsJson(preference: ProviderPreference): ModelsJsonDocument {
   const empty: ModelsJsonDocument = { $schema: PI_MODELS_SCHEMA, providers: {} };
   if (preference.provider !== CUSTOM_PROVIDER) return empty;
@@ -220,7 +220,7 @@ function modelsJson(preference: ProviderPreference): ModelsJsonDocument {
   };
 }
 
-/** Write models.json before ModelRuntime composes its registry. Never contains a real key. */
+
 export async function syncModelsJson(agentDir: string, preference: ProviderPreference): Promise<boolean> {
   const target = path.join(agentDir, MODELS_FILE);
   const text = `${JSON.stringify(modelsJson(preference), null, 2)}\n`;
@@ -236,7 +236,7 @@ export async function syncModelsJson(agentDir: string, preference: ProviderPrefe
   return true;
 }
 
-/** Ephemeral credential store: nothing is ever written to auth.json or any other file. */
+
 class MemoryCredentialStore implements CredentialStore {
   private readonly values = new Map<string, Credential>();
 
@@ -267,7 +267,7 @@ class MemoryCredentialStore implements CredentialStore {
   }
 }
 
-/** Load the SDK lazily so an idle worker never pays for provider clients. */
+
 export async function createModelRuntime(agentDir: string): Promise<ModelRuntime> {
   const { ModelRuntime } = await import('@earendil-works/pi-coding-agent');
   return ModelRuntime.create({
@@ -300,11 +300,11 @@ function customModel(modelId: string, reasoning: boolean): ProviderModelConfig {
   };
 }
 
-/**
- * Register the custom endpoint (or an endpoint override for a native provider) from the
- * connection parameters, models.json preference, or both. Native catalogs are preserved by
- * never supplying a models list for them.
- */
+
+
+
+
+
 export function registerProviderEndpoint(runtime: ModelRuntime, registration: ProviderRegistration): void {
   if (registration.provider === 'chatgpt') return;
   const provider = canonicalProviderId(registration.provider);
@@ -313,7 +313,7 @@ export function registerProviderEndpoint(runtime: ModelRuntime, registration: Pr
   const customLike = provider === CUSTOM_PROVIDER || !existing;
   if (!baseUrl) return;
   if (!customLike) {
-    // Endpoint redirect only: the bundled catalog and reasoning metadata stay authoritative.
+
     runtime.registerProvider(provider, { ...(registration.name ? { name: registration.name } : {}), baseUrl });
     return;
   }
@@ -326,14 +326,14 @@ export function registerProviderEndpoint(runtime: ModelRuntime, registration: Pr
   });
 }
 
-/** Resolve the effective ephemeral key for a connection. Local custom endpoints accept a placeholder. */
+
 export function effectiveApiKey(apiKey: string | undefined, provider: string, baseUrl: string | undefined): string | undefined {
   if (apiKey) return apiKey;
   if (canonicalProviderId(provider) === CUSTOM_PROVIDER && baseUrl && isLocalEndpoint(baseUrl)) return CUSTOM_LOCAL_KEY;
   return undefined;
 }
 
-/** Set an ephemeral runtime credential only; it is never serialized. */
+
 export async function setProviderKey(runtime: ModelRuntime, provider: string, apiKey: string | undefined): Promise<void> {
   if (!apiKey) return;
   rememberSecret(apiKey);
@@ -370,7 +370,7 @@ interface ProviderModelList {
   models: ProviderModelDescription[];
 }
 
-/** Registry metadata exactly as Pi resolves it. Loaded lazily with the SDK. */
+
 async function describeModels(runtime: ModelRuntime, provider: string): Promise<ProviderModelDescription[]> {
   const { getSupportedThinkingLevels } = await import('@earendil-works/pi-ai');
   return runtime.getModels(canonicalProviderId(provider)).map(model => ({
@@ -400,8 +400,8 @@ export function resolveModel(runtime: ModelRuntime, provider: string, modelId: s
     model = runtime.getModel(runtimeProvider, modelId);
   } else {
     const models = runtime.getModels(runtimeProvider);
-    // A connection can be validated before the user picks a model. Prefer an inexpensive
-    // ordinary chat model and skip catalog entries that are research, image, or audio endpoints.
+
+
     const skip = /deep-research|computer-use|(?:^|[-/])(?:image|embedding|tts|whisper|audio|video|realtime|classifier)(?:$|[-/])/i;
     const affordable = /(?:^|[-/])(?:mini|flash|haiku|auto)(?:$|[-/])/i;
     model = models.find(candidate => affordable.test(candidate.id) && !skip.test(candidate.id)) ??
@@ -425,11 +425,11 @@ interface ProviderValidation {
   latencyMs: number;
 }
 
-/**
- * Perform a real, authenticated model round-trip. This is deliberately not a catalog-only
- * check: a wrong endpoint or rejected key must fail. The caller's key is passed as a request
- * override and is never stored on the runtime or written anywhere.
- */
+
+
+
+
+
 export async function validateProvider(
   runtime: ModelRuntime,
   provider: string,
@@ -495,7 +495,7 @@ export function resolveSessionPath(value: unknown, sessionDir: string): string |
   return resolved;
 }
 
-/** Compact session path summary used only for the private worker result. */
+
 export function sessionFilePath(session: AgentSession): string | null {
   return session.sessionFile ?? session.sessionManager.getSessionFile() ?? null;
 }

@@ -1,4 +1,4 @@
-//! Durable scheduler; UTC storage, IANA wall-clock recurrence. Independent of Pi sessions.
+
 use chrono::{DateTime, Days, LocalResult, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use rusqlite::{params, Connection};
@@ -33,7 +33,19 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
       CREATE TABLE IF NOT EXISTS automation_events(id INTEGER PRIMARY KEY, at INTEGER NOT NULL DEFAULT(unixepoch()),
       run_id TEXT, event TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS automation_actions(run_id TEXT NOT NULL REFERENCES automation_runs(id),
-      fingerprint TEXT NOT NULL, dispatched_at INTEGER NOT NULL DEFAULT(unixepoch()),PRIMARY KEY(run_id,fingerprint));")
+      fingerprint TEXT NOT NULL, dispatched_at INTEGER NOT NULL DEFAULT(unixepoch()),PRIMARY KEY(run_id,fingerprint));")?;
+    let has_definition: i64 = db.query_row(
+        "SELECT count(*) FROM pragma_table_info('automation_runs') WHERE name='definition'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_definition == 0 {
+        db.execute_batch(
+            "ALTER TABLE automation_runs ADD COLUMN definition TEXT NOT NULL DEFAULT '{}';
+             UPDATE automation_runs SET definition=COALESCE((SELECT definition FROM automation_tasks WHERE id=automation_runs.task_id),'{}');",
+        )?;
+    }
+    Ok(())
 }
 pub fn reserve_action(
     db: &Connection,
@@ -42,7 +54,7 @@ pub fn reserve_action(
     scope: &str,
 ) -> rusqlite::Result<bool> {
     use sha2::{Digest, Sha256};
-    // Canonicalize structured scopes so reordered arguments cannot evade duplicate suppression.
+
     fn canonical(v: &serde_json::Value) -> String {
         match v {
             serde_json::Value::Object(map) => {
@@ -109,7 +121,7 @@ pub fn next(task: &Task, after: Option<i64>) -> Result<Option<i64>, String> {
             .checked_add_days(Days::new((elapsed / days) * days))
             .ok_or("Date out of range")?;
     }
-    // Skip nonexistent spring-forward times; run ambiguous fall-back times only once (earlier instant).
+
     for _ in 0..370 {
         if let Some(at) = instant(wall, tz) {
             if after.is_none_or(|after| at > after) {
@@ -239,6 +251,36 @@ mod tests {
             )
             .unwrap();
         assert_eq!(state, "uncertain");
+    }
+    #[test]
+    fn runs_created_before_definitions_gain_the_column() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE automation_runs(id TEXT PRIMARY KEY,task_id TEXT NOT NULL,scheduled_at INTEGER NOT NULL,
+             status TEXT NOT NULL,started_at INTEGER,finished_at INTEGER,conversation_id TEXT,generation_id TEXT,
+             error TEXT,usage TEXT,UNIQUE(task_id,scheduled_at));",
+        )
+        .unwrap();
+        let definition = serde_json::to_string(&task("2026-01-01T09:00", "once")).unwrap();
+        db.execute(
+            "INSERT INTO automation_tasks(id,definition,next_at,paused) VALUES('t',?1,NULL,0)",
+            [&definition],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO automation_runs(id,task_id,scheduled_at,status) VALUES('r','t',1,'uncertain')",
+            [],
+        )
+        .unwrap();
+        init(&db).unwrap();
+        let stored: String = db
+            .query_row(
+                "SELECT definition FROM automation_runs WHERE id='r'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, definition);
     }
     #[test]
     fn schedules_survive_reopen_and_pause_delete_are_respected() {

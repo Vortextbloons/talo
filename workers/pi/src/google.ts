@@ -2,11 +2,11 @@ import { Type } from 'typebox';
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { WebTransport } from './web.js';
 
-/**
- * Google Workspace tools. The host owns OAuth, tokens and HTTP; these definitions only
- * describe bounded operations and forward one exact request per call. Writes wait for the
- * host's exact-operation approval, so a call may take longer than a read.
- */
+
+
+
+
+
 export const GOOGLE_TOOLS = [
   'google_gmail_list', 'google_gmail_read', 'google_gmail_draft', 'google_gmail_send',
   'google_calendar_list', 'google_calendar_read', 'google_calendar_create',

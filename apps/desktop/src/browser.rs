@@ -1,4 +1,4 @@
-//! Browser service has its own process containment and outlives Pi and the WebView.
+
 use serde_json::{json, Value};
 use std::{collections::HashMap, io::{BufRead, BufReader, Write}, path::Path, process::{Child, ChildStdin, Stdio}, sync::{Arc, Mutex, mpsc::{self, Receiver, SyncSender}}, time::{Duration, Instant}};
 
@@ -51,7 +51,7 @@ impl Browser {
                     if let Ok(mut states) = session_states.lock() { states[id] = value["state"].clone(); }
                     continue;
                 }
-                // Keep only the newest frame. Never log frames or forward them to Pi.
+
                 if value["type"] == "browser_frame" {
                     if let Ok(mut frame) = latest_frame.lock() {
                         *frame = Some(Value::Object(serde_json::Map::from_iter([

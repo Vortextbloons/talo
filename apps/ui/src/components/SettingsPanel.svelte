@@ -67,7 +67,7 @@
     { value: 'Brief and practical', label: 'Brief' },
   ];
 
-  /* Tier names follow the first connected curated provider: free providers read Fast/Smart, paid ones Economy/Recommended. */
+
   const tierLabels = $derived.by(() => {
     for (const connection of chat.connections) {
       if (!connection.connected) continue;
@@ -149,7 +149,7 @@
   onMount(() => {
     void refreshTools();
     if (isTauri()) void import('@tauri-apps/api/app').then(({ getVersion }) => getVersion()).then(version => { appVersion = version; }).catch(() => {});
-    // Opening the desktop app's settings is a good moment to ask the release feed.
+
     void checkForUpdates({ quiet: true });
   });
 

@@ -1,9 +1,9 @@
-//! Saved ways of working.
-//!
-//! The host owns the review lifecycle: the agent may only propose a skill or a revision of
-//! one, and the approved `SKILL.md` on disk changes when the user approves it. Talo's own
-//! bookkeeping (scope, status, revision, origin) stays in SQLite; the file holds only the
-//! portable procedure so it can be read and shared without Talo.
+
+
+
+
+
+
 use crate::storage;
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
@@ -55,7 +55,7 @@ fn text(p: &Value, key: &str, max: usize, multiline: bool) -> Result<String, Str
         .ok_or_else(|| format!("{key} must be 1–{max} characters without control characters"))
 }
 
-/// The portable name: lowercase letters, numbers and single hyphens (Agent Skills spec).
+
 fn slug(title: &str) -> String {
     let mut name = String::new();
     for c in title.trim().to_lowercase().chars() {
@@ -162,7 +162,7 @@ fn load(db: &Connection, id: &str) -> Option<Value> {
         .ok()
 }
 
-/// Approved skills one workspace may use: its own skills plus the ones saved for every workspace.
+
 fn for_workspace(db: &Connection, workspace: &str) -> Vec<Value> {
     let Ok(mut statement) = db.prepare(&format!(
         "SELECT {COLUMNS} FROM agent_skills WHERE status='approved' AND (workspace_id IS NULL OR workspace_id=?1) ORDER BY name"
@@ -175,7 +175,7 @@ fn for_workspace(db: &Connection, workspace: &str) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// What the Pi worker may advertise for one conversation. Full instructions stay on disk.
+
 pub fn for_conversation(db: &Connection, data: &Path, conversation: &crate::storage::ConversationInfo) -> Value {
     json!(for_workspace(db, &conversation.workspace_id)
         .iter()
@@ -221,7 +221,7 @@ fn budget(db: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-/// A proposal: either a new skill, or a revision of one that stays inactive until approval.
+
 pub fn propose(db: &Connection, p: &Value, conversation: &str) -> Result<Value, String> {
     budget(db)?;
     let target = p
@@ -277,8 +277,8 @@ pub fn propose(db: &Connection, p: &Value, conversation: &str) -> Result<Value, 
     Ok(json!({"id":id,"title":title,"status":"proposed","replaces":target}))
 }
 
-/// Save the user's version of a skill. A proposal is published here; an approved or disabled
-/// skill is revised in place, because the user is the reviewer.
+
+
 pub fn save(db: &Connection, data: &Path, p: &Value) -> Result<Value, String> {
     let id = text(p, "id", 100, false)?;
     let stored = load(db, &id).ok_or("That skill no longer exists")?;
@@ -339,7 +339,7 @@ pub fn save(db: &Connection, data: &Path, p: &Value) -> Result<Value, String> {
     }
 }
 
-/// Enable or disable an approved skill. Disabling keeps the revision and its file for later.
+
 pub fn set_enabled(db: &Connection, id: &str, enabled: bool) -> Result<Value, String> {
     let skill = load(db, id).ok_or("That skill no longer exists")?;
     if skill["status"] == json!("proposed") {
@@ -353,7 +353,7 @@ pub fn set_enabled(db: &Connection, id: &str, enabled: bool) -> Result<Value, St
     Ok(json!({"id":id,"status":if enabled { "approved" } else { "disabled" }}))
 }
 
-/// Remove a skill (or a proposal) and its file. Approved instructions only disappear on request.
+
 pub fn delete(db: &Connection, data: &Path, id: &str) -> Result<Value, String> {
     let changed = db
         .execute("DELETE FROM agent_skills WHERE id=?1", [id])
@@ -365,7 +365,7 @@ pub fn delete(db: &Connection, data: &Path, id: &str) -> Result<Value, String> {
     Ok(json!(true))
 }
 
-/// Regenerate a published skill so Pi keeps advertising only current, approved instructions.
+
 pub fn sync(db: &Connection, data: &Path) {
     let Ok(mut statement) = db.prepare(
         "SELECT id,name,description,instructions FROM agent_skills WHERE status IN ('approved','disabled')",
@@ -390,7 +390,7 @@ pub fn sync(db: &Connection, data: &Path) {
     }
 }
 
-/// The `skill_list` agent read: this workspace's skills, without their full instructions.
+
 pub fn agent_view(db: &Connection, data: &Path, workspace: &str) -> Value {
     let mut skills: Vec<Value> = for_workspace(db, workspace);
     for skill in &mut skills {

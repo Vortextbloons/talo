@@ -49,13 +49,13 @@ struct Host {
     chat: chat::ChatState,
     last_maintenance: Instant,
     browser_approvals: std::collections::HashMap<String, (Value, Instant, u64)>,
-    /// Blocking question cards owned by live Pi tool calls. Never persisted.
+
     agent_asks: std::collections::HashMap<String, agent::PendingAsk>,
 }
 type Shared = Arc<Mutex<Host>>;
 
-/// Runtime status is published outside the host mutex so polling can never wait behind a
-/// provider probe or another blocking command.
+
+
 #[derive(Clone)]
 pub(crate) struct RuntimeStatusCache(Arc<Mutex<Value>>);
 
@@ -78,8 +78,8 @@ impl RuntimeStatusCache {
     }
 }
 
-/// Run a command body off the Tauri event loop. Commands that lock `Host` must use this:
-/// worker probes can take tens of seconds, and a synchronous command would freeze WebView2.
+
+
 pub(crate) async fn run_blocking<T, F>(app: tauri::AppHandle, task: F) -> Result<T, String>
 where
     T: Send + 'static,
@@ -91,9 +91,9 @@ where
 }
 
 impl Host {
-    /// Drain worker protocol messages, persist/emit chat transitions and enforce idle sleep.
-    /// Running this under the same mutex as commands is what makes snapshots and events
-    /// race-safe: a generation cannot advance while a command is mutating it.
+
+
+
     fn browser_message(&mut self, app: &tauri::AppHandle, mut message: Value) {
         if message["method"] == "notifications/cancelled" {
             let request = message["params"]["requestId"].clone();
@@ -106,8 +106,8 @@ impl Host {
         if !["browser_open","browser_tabs","browser_snapshot","browser_interact","browser_ai","browser_screenshot","browser_download","browser_handoff"].contains(&name.as_str()) {
             self.supervisor.relay_browser(json!({"id":message["id"],"error":{"message":"Unknown browser tool"}})); return;
         }
-        // Browser automation is enabled by the user for every chat. Bind routing to
-        // the worker's conversation; tool arguments never choose another session.
+
+
         let session = message["params"]["sessionId"].as_str().unwrap_or("");
         let exists = self.db.query_row("SELECT COUNT(*) FROM chat_conversations WHERE id=?1", [session], |row| row.get::<_, i64>(0)).unwrap_or(0) > 0;
         if !exists {
@@ -206,8 +206,8 @@ fn warm_worker(app: &tauri::AppHandle) {
     });
 }
 
-/// Show the main window, rebuilding it when the user closed it to the tray.
-/// Building a WebView2 window on the event-loop thread deadlocks on Windows, so it runs elsewhere.
+
+
 fn open_main(app: &tauri::AppHandle) {
     warm_worker(app);
     if let Some(window) = app.get_webview_window("main") {
@@ -232,7 +232,7 @@ fn open_main(app: &tauri::AppHandle) {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
-            // A concurrent request may have won the label; show whatever exists.
+
             Err(error) => match handle.get_webview_window("main") {
                 Some(window) => {
                     let _ = window.show();
@@ -248,20 +248,20 @@ async fn runtime_status(
     shared: tauri::State<'_, Shared>,
     cache: tauri::State<'_, RuntimeStatusCache>,
 ) -> Result<Value, String> {
-    // Clone the Arc-backed state before awaiting: no Tauri State guard crosses the await,
-    // and the blocked-mutex fallback below never parks the IPC dispatch thread.
+
+
     let shared = Arc::clone(shared.inner());
     let cache = cache.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let status = match shared.try_lock() {
             Ok(mut host) => {
-                // Refresh can reap a worker, but never waits on the network.
+
                 let status = host.supervisor.status();
                 cache.set(&status);
                 status
             }
-            // A slow provider probe owns the host mutex. Return the last published status
-            // immediately instead of parking the IPC dispatch thread behind it.
+
+
             Err(TryLockError::WouldBlock) => cache.get(),
             Err(TryLockError::Poisoned(_)) => return Err("Talo state is unavailable".into()),
         };
@@ -293,7 +293,7 @@ async fn load_settings(app: tauri::AppHandle) -> Result<Value, String> {
 #[tauri::command]
 async fn save_settings(app: tauri::AppHandle, settings: Value) -> Result<(), String> {
     run_blocking(app, move |app| {
-        // No credentials are accepted or persisted in settings.
+
         let allowed = [
             "name",
             "agentName",
@@ -323,7 +323,7 @@ async fn save_settings(app: tauri::AppHandle, settings: Value) -> Result<(), Str
             Some(_) => return Err("Invalid provider".into()),
             None => "opencode",
         };
-        // Mirrors the provider IDs in packages/contracts/src/providers.ts.
+
         if !["opencode", "opencode-go", "openrouter", "nvidia", "custom"].contains(&provider) {
             return Err("Unknown provider".into());
         }
@@ -353,7 +353,7 @@ async fn save_settings(app: tauri::AppHandle, settings: Value) -> Result<(), Str
             }
         }
         h.db.execute("INSERT INTO settings(key,value) VALUES('onboarding',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[settings.to_string()]).map_err(|e|e.to_string())?;
-        // Non-secret provider preferences are projected for the Pi worker, which owns models.json.
+
         let projection =
             json!({"provider":provider,"model":model,"baseUrl":base_url,"reasoning":reasoning});
         std::fs::write(
@@ -458,16 +458,16 @@ async fn service_control(
         if let Some(cache) = app.try_state::<RuntimeStatusCache>() {
             cache.set(&status);
         }
-        // The window reflects this immediately instead of waiting for a poll.
+
         let _ = app.emit("runtime-status", &status);
         Ok(status)
     })
     .await
 }
 
-/// Stops every bundled runtime before an update replaces the files on disk. The Windows
-/// updater quits the app itself, but the worker, browser and research processes hold the
-/// packaged executables open, and the installer cannot replace a locked file.
+
+
+
 #[tauri::command]
 async fn prepare_update(app: tauri::AppHandle) -> Result<(), String> {
     run_blocking(app, move |app| {
@@ -525,7 +525,7 @@ fn main() {
                 .build(),
         )
         .plugin(tauri_plugin_notification::init())
-        // The updater installs a signed NSIS package; process::relaunch restarts after it.
+
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .register_asynchronous_uri_scheme_protocol("attachment", |context, request, responder| {
@@ -591,12 +591,12 @@ fn main() {
             std::fs::create_dir_all(&data)?;
             let mut db = Connection::open(data.join("talo.db"))?;
             db.busy_timeout(Duration::from_secs(5))?;
-            // WAL keeps the pump's per-event writes from stalling the UI thread; NORMAL sync is
-            // the documented safe pairing for WAL in a single-process desktop app.
+
+
             db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
             db.execute_batch(include_str!("../../../services/memory/schema.sql"))?;
-            // Chat/provider metadata is added alongside the memory schema. The DDL is
-            // idempotent so existing v1 databases upgrade in place.
+
+
             storage::init(&db)?;
             primary::ensure(&db)?;
             telegram::recover(&db)?;
@@ -608,12 +608,12 @@ fn main() {
             delegation::init(&db)?;
             scheduler::recover(&db)?;
             delegation::recover(&db)?;
-            // Interrupted executions require approval again after restart.
+
             db.execute(
                 "UPDATE tasks SET state='awaiting_permission' WHERE state='running'",
                 [],
             )?;
-            // A generation that was streaming when the host stopped is terminal now.
+
             storage::recover_interrupted(&mut db)?;
             let root = if cfg!(debug_assertions) {
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vendor")
@@ -643,9 +643,9 @@ fn main() {
             telegram::start(app.handle().clone());
             #[cfg(windows)]
             app.manage(power::Registration::new()?);
-            // Boot takes a few hundred milliseconds. Warm the worker the first time the window
-            // takes focus so the first message never waits, while a tray-only launch stays
-            // dormant and never pays for a worker it does not use.
+
+
+
             if let Some(window) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
                 let warmed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -714,14 +714,14 @@ fn main() {
                 })
                 .build(app)?;
             let handle = app.handle().clone();
-            // The pump is event-driven: worker and browser reader threads wake it as output
-            // arrives, and a one-second fallback tick covers housekeeping that has no external
-            // event (suspend interrupts, approval expiry, idle sleep, process reaping). The
-            // host lock is only held while pumping, never while waiting.
+
+
+
+
             std::thread::spawn(move || loop {
                 {
-                    // Clone the Arc out of the State guard: the lock guard must not borrow a
-                    // temporary that dies before the guard does.
+
+
                     let shared = Arc::clone(handle.state::<Shared>().inner());
                     if let Ok(mut h) = shared.lock() {
                         h.pump(&handle);
@@ -751,7 +751,7 @@ fn main() {
                     }
                 }
             });
-            // A quiet launch-into-tray start should not keep a WebView2 tree alive.
+
             let headless = std::env::args().any(|a| a == "--tray" || a == "--smoke-test");
             if headless {
                 if let Some(window) = app.get_webview_window("main") {
@@ -790,7 +790,7 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("Unable to launch Talo")
         .run(|_, event| {
-            // Closing the window destroys its WebView2 tree; only the tray keeps Talo alive.
+
             if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
                 if code.is_none() {
                     api.prevent_exit();
@@ -933,8 +933,8 @@ mod dispatch_regression {
         .is_err());
     }
 
-    /// The native event loop must keep dispatching while a command holds the host mutex.
-    /// This reproduces the NVIDIA NIM freeze without a key or a real network request.
+
+
     #[test]
     fn runtime_status_dispatch_is_not_stalled_by_a_held_host_mutex() {
         let cache = RuntimeStatusCache::new(json!({
@@ -995,8 +995,8 @@ mod dispatch_regression {
         "pong"
     }
 
-    /// An async command that enters a long blocking operation must leave the IPC dispatcher
-    /// free for a heartbeat. This is the provider_connect shape without a network or key.
+
+
     #[test]
     fn slow_command_keeps_ipc_dispatch_responsive() {
         let started = Arc::new(std::sync::atomic::AtomicBool::new(false));

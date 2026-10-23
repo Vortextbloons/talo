@@ -18,7 +18,7 @@ if(!await exists(path.join(runtime,'bun/bun.exe'))){
   execFileSync('powershell.exe',['-NoProfile','-Command',`Expand-Archive -LiteralPath 'vendor/downloads/${name}' -DestinationPath 'vendor/downloads/bun' -Force`],{stdio:'inherit',windowsHide:true});
   await cp('vendor/downloads/bun/bun-windows-x64',path.join(runtime,'bun'),{recursive:true});
 }
-// Redistributing bun.exe requires shipping its license text; the release archive has none.
+
 const bunLicense=path.join(runtime,'bun/LICENSE.md');
 if(!await exists(bunLicense)){
   const bytes=await download(`https://raw.githubusercontent.com/oven-sh/bun/bun-v${bunVersion}/LICENSE.md`);
@@ -27,15 +27,15 @@ if(!await exists(bunLicense)){
 }
 const browserInfo=JSON.parse(await readFile('node_modules/playwright-core/browsers.json','utf8')).browsers.find(b=>b.name==='chromium');
 if(!await exists(path.join(runtime,'chromium/chrome-win64/chrome.exe'))){
-  // Playwright owns the revision and download URLs; bun.lock pins the installer.
+
   execFileSync(process.execPath,['node_modules/playwright/cli.js','install','chromium','--no-shell'],{stdio:'inherit',windowsHide:true,env:{...process.env,PLAYWRIGHT_BROWSERS_PATH:path.join(runtime,'playwright')}});
   await cp(path.join(runtime,'playwright',`chromium-${browserInfo.revision}`),path.join(runtime,'chromium'),{recursive:true});
 }
 await mkdir('vendor',{recursive:true});
-// Playwright's download cache is only a staging copy; the shipped tree is runtime/chromium.
+
 await rm(path.join(runtime,'playwright'),{recursive:true,force:true});
-// Prune what a sandboxed headless session never loads: 219 unused locale packs and the
-// Chrome installer/updater helpers. chrome.exe is launched directly and never updates itself.
+
+
 const chrome=path.join(runtime,'chromium/chrome-win64');
 if(await exists(chrome)){
   for(const entry of await readdir(path.join(chrome,'locales')))if(entry!=='en-US.pak')await rm(path.join(chrome,'locales',entry),{force:true});
@@ -43,7 +43,7 @@ if(await exists(chrome)){
 }
 if(await exists(path.join(runtime,'node/node.exe')))console.log('Note: vendor/runtime/node is unused now; the app prefers Bun and the installer ships only runtime/bun.');
 await writeFile('vendor/runtime-manifest.json',JSON.stringify({platform:'win32-x64',bun:bunVersion,playwright:'1.64.1',chromium:browserInfo.browserVersion,chromiumRevision:browserInfo.revision,donsetch:'4.10.1'},null,2)+'\n');
-// Staged installers are redundant once the runtime tree is assembled; the next vendor run
-// re-downloads only what is missing.
+
+
 await rm('vendor/downloads',{recursive:true,force:true});
 console.log('Bundled Bun and Chromium are ready.');

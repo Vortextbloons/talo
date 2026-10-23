@@ -1,8 +1,8 @@
-//! SQLite metadata owned by the native host.
-//!
-//! Chat conversations, their durable Pi session paths, generation rows and provider
-//! connection metadata live here. API keys are never stored in this module directly:
-//! callers pass an already DPAPI-protected blob (`provider_connections.secret`).
+
+
+
+
+
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 
@@ -14,9 +14,9 @@ const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 #[derive(Debug)]
 pub enum Error {
     Sqlite(rusqlite::Error),
-    /// A generation is already mutating this conversation.
+
     Busy,
-    /// The requested generation/conversation already exists or does not exist.
+
     Duplicate,
     Missing,
 }
@@ -46,7 +46,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub fn init(db: &Connection) -> Result<()> {
     db.execute_batch(SCHEMA)?;
-    // Databases created before reasoning display lack the column; add it in place.
+
     let has_reasoning: i64 = db.query_row(
         "SELECT count(*) FROM pragma_table_info('chat_messages') WHERE name='reasoning'",
         [],
@@ -87,7 +87,7 @@ pub fn init(db: &Connection) -> Result<()> {
             let _ = db.execute_batch("ROLLBACK");
             return Err(error.into());
         }
-        // Preserve the existing user's opt-out when upgrading from Slice 2.
+
         let preference: Option<String> = db
             .query_row(
                 "SELECT value FROM settings WHERE key='onboarding'",
@@ -152,12 +152,12 @@ pub struct ChatMessage {
     pub generation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Images the user attached to this message; filled in by the host from chat_attachments.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<AttachmentInfo>>,
 }
 
-/// One display-ready attachment. `url` loads a preview from native storage on demand.
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentInfo {
@@ -169,7 +169,7 @@ pub struct AttachmentInfo {
     pub url: Option<String>,
 }
 
-/// A stored attachment row: the metadata plus where the bytes live on disk.
+
 #[derive(Clone, Debug)]
 pub struct StoredAttachment {
     pub generation_id: Option<String>,
@@ -246,7 +246,7 @@ pub struct ConnectionRow {
     pub name: String,
     pub model_id: Option<String>,
     pub base_url: Option<String>,
-    /// DPAPI-protected bytes. Never exposed in `ConnectionInfo` or events.
+
     pub secret: Option<Vec<u8>>,
     pub connected: bool,
 }
@@ -274,8 +274,8 @@ pub struct GenerationRow {
     pub error: Option<String>,
 }
 
-/// The assistant row a retry will rewrite, plus the user text needed when Pi has no
-/// durable turn yet (for example, a first send that failed before `session.open`).
+
+
 #[derive(Clone, Debug)]
 pub struct RetryPlan {
     pub generation: GenerationRow,
@@ -482,7 +482,7 @@ pub fn append_progress(db: &mut Connection, generation_id: &str, sequence: i64, 
     Ok(true)
 }
 
-/// Attachments for one conversation, oldest first. The caller decides what to render.
+
 pub fn list_attachments(db: &Connection, conversation_id: &str, generations: &[&str]) -> Result<Vec<StoredAttachment>> {
     if generations.is_empty() { return Ok(Vec::new()); }
     let generations = serde_json::to_string(generations).unwrap();
@@ -578,8 +578,8 @@ pub fn active_generation(db: &Connection, conversation_id: &str) -> Result<Optio
         .optional()?)
 }
 
-/// Fingerprint of the JSONL file the projection was last built from. A conversation whose
-/// transcript has not changed skips the rebuild entirely.
+
+
 pub fn transcript_stamp(db: &Connection, conversation_id: &str) -> Result<Option<String>> {
     Ok(db
         .query_row(
@@ -649,7 +649,7 @@ fn ensure_no_active(
     }
 }
 
-/// Atomically reserve a generation and append the user turn plus the assistant placeholder.
+
 pub fn start_generation(db: &mut Connection, new: NewGeneration<'_>) -> Result<()> {
     let tx = db.transaction()?;
     let exists: Option<i64> = tx
@@ -714,8 +714,8 @@ pub fn start_generation(db: &mut Connection, new: NewGeneration<'_>) -> Result<(
     Ok(())
 }
 
-/// Reserve a generation that begins from an internal custom message (a child result delivery).
-/// No user row is created, so the parent transcript never shows a fabricated turn.
+
+
 pub fn start_delivery_generation(
     db: &mut Connection,
     new: NewGeneration<'_>,
@@ -753,7 +753,7 @@ pub struct QueuedTurnRow {
     pub created_at: String,
 }
 
-/// Accept a turn while its conversation is generating. Insertion order is delivery order.
+
 pub fn enqueue_turn(
     db: &Connection,
     generation_id: &str,
@@ -788,7 +788,7 @@ pub fn list_queue(db: &Connection, conversation_id: &str) -> Result<Vec<QueuedTu
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// The oldest queued turn for a conversation that has no active generation.
+
 pub fn next_queued_turn(db: &Connection) -> Result<Option<QueuedTurnRow>> {
     let row = db
         .query_row(
@@ -818,7 +818,7 @@ pub fn take_queued_turn(db: &Connection, generation_id: &str) -> Result<bool> {
     )? > 0)
 }
 
-/// Mark a conversation as a hidden child of a delegation task.
+
 pub fn mark_delegated_conversation(
     db: &Connection,
     conversation_id: &str,
@@ -928,7 +928,7 @@ pub fn begin_retry(
     })
 }
 
-/// Persist streamed assistant text, the event sequence and the current state.
+
 pub fn update_progress(
     db: &mut Connection,
     generation_id: &str,
@@ -972,8 +972,8 @@ pub fn update_progress(
     Ok(())
 }
 
-/// Persist a terminal state and its final assistant text. Returns the durable message when
-/// the generation is still active; already-terminal generations are left untouched.
+
+
 pub fn finalize_generation(
     db: &mut Connection,
     generation_id: &str,
@@ -1035,7 +1035,7 @@ pub fn finalize_generation(
     Ok(Some(message))
 }
 
-/// Fail an in-flight generation after a worker/session error. Returns the conversation id.
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn fail_generation(
     db: &mut Connection,
@@ -1077,7 +1077,7 @@ pub fn fail_generation(
     Ok(Some(conversation_id))
 }
 
-/// Move every generation left mutating by a crash/restart to `failed`.
+
 pub fn recover_interrupted(db: &mut Connection) -> Result<usize> {
     let tx = db.transaction()?;
     let ids: Vec<(String, String)> = {
@@ -1189,7 +1189,7 @@ pub fn get_connection(db: &Connection, id: &str) -> Result<ConnectionRow> {
         .ok_or(Error::Missing)
 }
 
-/// Insert or refresh the single connection for a provider/name pair. Returns its stable id.
+
 pub fn upsert_connection(
     db: &mut Connection,
     provider_id: &str,
@@ -1243,7 +1243,7 @@ mod tests {
 
     fn database() -> Connection {
         let db = Connection::open_in_memory().unwrap();
-        // Production databases also carry the memory schema, which init migrates.
+
         db.execute_batch(include_str!("../memory/schema.sql"))
             .unwrap();
         init(&db).unwrap();
@@ -1261,7 +1261,7 @@ mod tests {
         )
         .unwrap();
         init(&db).unwrap();
-        // Running the host DDL twice is also safe on every launch.
+
         init(&db).unwrap();
         let kept: String = db
             .query_row(
@@ -1323,7 +1323,7 @@ mod tests {
             ),
             Err(Error::Busy)
         ));
-        // A different conversation is independent.
+
         create_conversation(&db, "c2", "Other", None).unwrap();
         start_generation(
             &mut db,
@@ -1353,7 +1353,7 @@ mod tests {
         .unwrap();
         assert_eq!(message.status, "completed");
         assert_eq!(message.text, "Hello there");
-        // Terminal generations cannot be finalized twice.
+
         assert!(finalize_generation(
             &mut db,
             "g1",
@@ -1514,8 +1514,8 @@ mod tests {
             delegation_activity: Vec::new(),
         };
         let value = serde_json::to_value(&snapshot).unwrap();
-        // The UI Stop control reads snapshot.generationId; serializing generation_id would
-        // make a reopened in-flight conversation impossible to cancel.
+
+
         assert_eq!(value["generationId"], "g1");
         assert!(value.get("generation_id").is_none());
         assert_eq!(value["conversation"]["sessionPath"], "session.jsonl");

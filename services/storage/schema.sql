@@ -1,8 +1,8 @@
--- Talo chat and provider metadata.
---
--- These tables are deliberately separate from services/memory's workspace-oriented
--- `sessions`/`messages` tables: chat conversations are app-level, one persistent Pi
--- JSONL session per conversation, and credentials are stored as DPAPI-protected blobs.
+
+
+
+
+
 PRAGMA foreign_keys=ON;
 
 CREATE TABLE IF NOT EXISTS chat_conversations (
@@ -39,8 +39,8 @@ CREATE INDEX IF NOT EXISTS chat_messages_conversation
 CREATE INDEX IF NOT EXISTS chat_messages_generation
   ON chat_messages(generation_id);
 
--- Images the user attached to a turn. The bytes live inside Pi's agent workspace so the
--- model's own file tools can open them; this table only carries the metadata for display.
+
+
 CREATE TABLE IF NOT EXISTS chat_attachments (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS chat_generations (
 CREATE INDEX IF NOT EXISTS chat_generations_conversation
   ON chat_generations(conversation_id);
 
--- User turns accepted while their conversation is generating. Drained in insertion order.
+
 CREATE TABLE IF NOT EXISTS chat_turn_queue (
   generation_id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
@@ -80,8 +80,8 @@ CREATE TABLE IF NOT EXISTS chat_turn_queue (
 );
 CREATE INDEX IF NOT EXISTS chat_turn_queue_conversation
   ON chat_turn_queue(conversation_id);
--- One mutating generation per conversation. This is the durable half of the
--- generation lock; in-memory state is only a projection of it.
+
+
 CREATE UNIQUE INDEX IF NOT EXISTS chat_generations_one_active
   ON chat_generations(conversation_id)
   WHERE state IN ('generating','cancelling');

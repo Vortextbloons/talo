@@ -1,7 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 
-/** The signed manifest endpoint lives in tauri.conf.json; this store only drives the UI. */
+
 type Phase = 'idle' | 'checking' | 'current' | 'available' | 'preparing' | 'downloading' | 'installing' | 'error';
 
 export const updates = $state({
@@ -12,7 +12,7 @@ export const updates = $state({
   error: '',
 });
 
-/** The plugin object is deliberately kept out of reactive state. */
+
 let pending: Update | null = null;
 
 const busy = (): boolean =>
@@ -57,11 +57,11 @@ export async function checkForUpdates(options: { quiet?: boolean } = {}): Promis
   }
 }
 
-/**
- * Downloads the signed installer, stops the bundled runtimes and hands it to Windows.
- * On Windows the plugin then exits into the NSIS installer, which relaunches Talo; the
- * code after the install call only runs on platforms that need an explicit relaunch.
- */
+
+
+
+
+
 export async function installUpdate(): Promise<void> {
   if (!pending || busy()) return;
   updates.phase = 'downloading';

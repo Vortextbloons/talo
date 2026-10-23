@@ -1,5 +1,5 @@
-/** Session identifiers are independent of Pi sessions, transcripts and memory scopes.
- * Each chat owns its tabs and control state. Logins are shared through one persistent profile. */
+
+
 export type BrowserSessionId = string;
 export type BrowserOwner = 'agent' | 'human' | 'paused';
 export type BrowserControlAction = 'open' | 'watch' | 'take_over' | 'return' | 'pause' | 'stop';
@@ -12,7 +12,7 @@ export interface BrowserStatus {
   busy: boolean;
   error?: string;
 }
-/** Private UI stream. Never persisted, attached to chat, or supplied to a model. */
+
 export interface BrowserFrame { tabId: string; data: string; width: number; height: number }
 export interface BrowserInput {
   leaseId: string; tabId: string;

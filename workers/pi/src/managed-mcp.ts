@@ -13,9 +13,9 @@ export interface ManagedMcpGroup {
   resources: string[];
 }
 
-/** A host-owned MCP endpoint over an in-process channel. It forwards to the
- * existing service boundary; it never launches a second browser/research server.
- * Each instance belongs to one Pi session, including that session's model. */
+
+
+
 export class ManagedMcpTransport implements Transport {
   onmessage?: Transport['onmessage'];
   onclose?: Transport['onclose'];
@@ -54,8 +54,8 @@ export class ManagedMcpTransport implements Transport {
     const tool = this.group.tools.find(tool => tool.name === params?.name);
     if (!tool) { this.onmessage?.({ jsonrpc: '2.0', id, error: { code: -32602, message: 'Unknown managed tool.' } }); return; }
     const controller = new AbortController(); this.pending.set(id, controller);
-    // Do not await the operation in send(): cancellation notifications must keep
-    // flowing on the same channel while an approval or browser action is pending.
+
+
     void tool.execute(String(id), params.arguments ?? {}, controller.signal, undefined, undefined as any).then(
       result => reply({ content: result.content }),
       error => reply({ isError: true, content: [{ type: 'text', text: controller.signal.aborted ? 'Tool operation cancelled.' : sanitizeError(error).slice(0,500) }] }),

@@ -12,11 +12,11 @@ function bundledRuntime() {
   }
 }
 
-/**
- * Integration tests launch the Bun bundle, which is what the installer runs. A previous
- * copy under `vendor/bundle` is ignored so an old package cannot hide a current failure.
- * `bun run verify:bundle` is what boots that packaged copy.
- */
+
+
+
+
+
 export function workerLocation() {
   const bundled = path.resolve('dist/entries/workers/pi/src/main.js');
   if (!fs.existsSync(bundled)) {
@@ -25,10 +25,10 @@ export function workerLocation() {
   return { script: bundled, cwd: path.resolve('.'), runtime: bundledRuntime() };
 }
 
-/**
- * Minimal protocol harness for the shipped JSONL worker.
- * It intentionally never logs prompts, assistant text, or credentials.
- */
+
+
+
+
 export function startWorker(data, options = {}) {
   const location = workerLocation();
   const child = spawn(location.runtime, runtimeArgs(location.runtime, location.script), {

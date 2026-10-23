@@ -1,5 +1,5 @@
-// First-party worker code is one file per process. Packages stay external so Pi's dynamic
-// imports, jiti extensions, Playwright, and native addons keep resolving from node_modules.
+
+
 const result = await Bun.build({
   entrypoints: [
     'workers/pi/src/main.ts',

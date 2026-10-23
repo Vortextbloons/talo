@@ -2,8 +2,8 @@ import type { ExtensionFactory, ToolDefinition } from '@earendil-works/pi-coding
 import { McpManager, type Authorize } from './mcp.js';
 import type { ManagedMcpGroup } from './managed-mcp.js';
 
-/** The only explicitly installed tool extension. It gets registered definitions,
- * not filesystem/process APIs or permission-grant capabilities. */
+
+
 export class ManagedToolsExtension {
   private managed: McpManager;
   readonly tool: ToolDefinition;

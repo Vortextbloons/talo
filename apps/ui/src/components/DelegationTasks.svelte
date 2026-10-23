@@ -10,7 +10,7 @@
   } = $props();
 
   const active = $derived(tasks.filter(task => task.state === 'queued' || task.state === 'running' || task.state === 'waiting'));
-  /* Finished work leaves the panel; the chat keeps the record of the call. */
+
   const shown = $derived(tasks.filter(task => task.state !== 'completed' && task.state !== 'cancelled'));
 
   function label(state: DelegationTask['state']): string {

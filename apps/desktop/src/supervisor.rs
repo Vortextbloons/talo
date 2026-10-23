@@ -1,9 +1,9 @@
-//! Lifecycle and protocol bridge for the bundled Pi worker.
-//!
-//! The worker is started lazily, speaks newline-delimited JSON on stdin/stdout, and is
-//! contained by a Windows Job Object. Requests are correlated by id on a reader thread, so a
-//! command can wait for a response without also having to run the event pump. Chat events are
-//! queued for the host pump, which persists them and emits Tauri events under one lock.
+
+
+
+
+
+
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, VecDeque},
@@ -19,11 +19,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Idle sleep is disabled while a generation is running. Otherwise the worker is stopped
-/// after roughly two minutes without app activity.
+
+
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 const READY_TIMEOUT: Duration = Duration::from_secs(25);
-/// Matches the worker's own write budget. A frame over this is rejected, not silently dropped.
+
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -53,10 +53,10 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Event-driven pump wake. Reader threads notify after enqueueing output the pump consumes,
-/// and the pump waits with a fallback tick instead of spinning on a fixed timer. A queued
-/// flag makes the wake edge-triggered: a notify that lands while the pump is already
-/// draining is consumed on the next wait, so nothing can be lost.
+
+
+
+
 struct Wake {
     flag: Mutex<bool>,
     cond: Condvar,
@@ -87,17 +87,17 @@ impl Wake {
     }
 }
 
-/// Exactly one pump exists per process, so a process-wide wake is its honest shape.
+
 static PUMP_WAKE: OnceLock<Wake> = OnceLock::new();
 
-/// Reader threads call this after enqueueing anything the pump consumes.
+
 pub(crate) fn wake_pump() {
     if let Some(wake) = PUMP_WAKE.get() {
         wake.notify();
     }
 }
 
-/// Block the pump until output arrives or the fallback tick expires, whichever is first.
+
 pub(crate) fn pump_wait(fallback: Duration) {
     PUMP_WAKE.get_or_init(Wake::new).wait(fallback);
 }
@@ -113,7 +113,7 @@ pub enum WorkerSignal {
     Sleeping,
     Error(String),
     Chat(Value),
-    /// The worker's stdout closed. The pump calls `refresh` to reap the process.
+
     Eof,
 }
 
@@ -151,12 +151,12 @@ pub struct Supervisor {
     pub data: PathBuf,
     pi: Option<Worker>,
     failures: HashMap<String, String>,
-    /// Runtime files cannot appear while the host runs, so probe them once.
+
     dependencies: Option<Value>,
-    /// Signals preserved when a worker exits before the pump drains its queue.
+
     deferred: VecDeque<WorkerSignal>,
     lifecycle: VecDeque<Lifecycle>,
-    /// Incremented for every spawned worker so chat session bindings cannot outlive it.
+
     worker_epoch: u64,
     #[cfg(windows)]
     job: Option<crate::job::Job>,
@@ -181,8 +181,8 @@ impl Supervisor {
         }
     }
 
-    /// Reap exited services. A Pi exit is reported through `drain_lifecycle`; the pump uses
-    /// that to fail any in-flight generation and clear stale session bindings.
+
+
     pub fn refresh(&mut self) {
         let epoch = self.worker_epoch;
         if let Some(worker) = self.pi.as_mut() {
@@ -212,8 +212,8 @@ impl Supervisor {
                     });
                 }
                 Ok(None) => {
-                    // A closed stdout pipe without a timely process exit means the worker is
-                    // wedged. Terminate it so crash recovery can restart from SQLite.
+
+
                     if worker
                         .eof_at
                         .is_some_and(|at| at.elapsed() > Duration::from_secs(3))
@@ -274,8 +274,8 @@ impl Supervisor {
         }
     }
 
-    /// Start the Pi worker if needed and wait until it announces readiness. This is the lazy
-    /// entry point used by chat and provider commands; startup never happens at app launch.
+
+
     pub fn ensure_worker(&mut self) -> Result<(), String> {
         self.refresh();
         if self.pi.is_none() {
@@ -442,12 +442,12 @@ impl Supervisor {
         Err("Unknown managed service".into())
     }
 
-    /// Intentional Pi shutdown. It does not create a failure lifecycle event.
+
     pub fn stop_pi(&mut self) -> Result<(), String> {
         let Some(mut worker) = self.pi.take() else {
             return Ok(());
         };
-        // Revoke outstanding browser requests and approvals owned by the stopped worker.
+
         self.worker_epoch += 1;
         worker.ready.store(false, Ordering::SeqCst);
         fail_pending(&worker.pending, "Pi worker was stopped before replying");
@@ -479,8 +479,8 @@ impl Supervisor {
         let _ = self.stop_pi();
     }
 
-    /// Stop an idle worker. The caller passes `busy = true` while any generation is live;
-    /// idle sleep must never interrupt an in-flight response.
+
+
     pub fn idle_stop(&mut self, busy: bool) -> bool {
         if busy {
             return false;
@@ -563,8 +563,8 @@ impl Supervisor {
         self.lifecycle.drain(..).collect()
     }
 
-    /// Send a correlated request to the worker. Params are wiped after serialization because
-    /// `apiKey` is allowed in the private worker contract and must be ephemeral.
+
+
     pub fn request(
         &mut self,
         method: &str,
@@ -574,9 +574,9 @@ impl Supervisor {
         self.dispatch(method, params)?.wait(timeout)
     }
 
-    /// Send a request without waiting for its reply. The caller can drop the host mutex, wait
-    /// on the returned handle, and reacquire it to apply the result, so one chat's session
-    /// startup never stalls the event pump or another chat's cancellation.
+
+
+
     pub fn dispatch(&mut self, method: &str, mut params: Value) -> Result<PendingReply, Error> {
         let worker = self.pi.as_mut().ok_or(Error::NotRunning)?;
         let id = uuid::Uuid::new_v4().to_string();
@@ -611,8 +611,8 @@ impl Supervisor {
     }
 }
 
-/// A dispatched request whose reply has not arrived yet. It borrows nothing from the
-/// supervisor, so waiting for it can happen outside the host mutex.
+
+
 pub struct PendingReply {
     id: String,
     receiver: mpsc::Receiver<Reply>,
@@ -667,7 +667,7 @@ fn read_worker(
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
         if line.len() > MAX_FRAME_BYTES {
-            // Rejecting the frame fails the waiting request instead of letting it time out.
+
             let _ = writeln!(log, "{}", json!({"type":"oversized_frame","bytes":line.len()}));
             let _ = log.flush();
             fail_pending(
@@ -742,7 +742,7 @@ fn read_worker(
     push(WorkerSignal::Eof);
 }
 
-/// Log only protocol shape/state, never assistant text, prompts or credentials.
+
 fn describe(value: &Value) -> Value {
     match value.get("type").and_then(Value::as_str) {
         Some("response") => json!({

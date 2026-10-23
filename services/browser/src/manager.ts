@@ -13,7 +13,7 @@ export type BrowserState = BrowserStatus;
 export interface BrowserCommand { name: string; arguments?: Record<string, any>; model?: BrowserModel; approved?: boolean; target?: { tabId: string; revision: string } }
 class SafeBrowserError extends Error {}
 
-/** Per-thread tabs and ownership; one runtime owns the shared persistent login profile. */
+
 export class BrowserManager {
   private readonly sessions = new Set<BrowserManager>();
   private context?: BrowserContext;
@@ -52,7 +52,7 @@ export class BrowserManager {
   private get lock() { return path.join(this.data, 'browser', 'manager.lock'); }
   async acquire() {
     await mkdir(path.dirname(this.profile), { recursive: true, mode: 0o700 });
-    // Atomic process lock; stale owners are checked before recovery. Never steal a live lock.
+
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const file = await open(this.lock, 'wx', 0o600); await file.writeFile(String(process.pid)); await file.close(); this.lockOwned = true;
@@ -88,7 +88,7 @@ export class BrowserManager {
     page.on('crash', () => { this.error = 'A tab crashed. Close it or reopen the browser.'; void this.cancel(); void this.emit(); });
     page.on('dialog', dialog => void dialog.dismiss());
     page.on('filechooser', () => { this.error = 'File uploads require manual takeover.'; void this.cancel(); void this.emit(); });
-    // Browser downloads are always denied. Approved downloads use the bounded host path.
+
     page.on('download', item => { this.download = { id: randomUUID(), url: item.url(), filename: item.suggestedFilename() }; void item.cancel(); void this.emit(); });
     void this.emit();
   }
@@ -112,8 +112,8 @@ export class BrowserManager {
         executablePath: path.join(this.root, 'runtime/chromium/chrome-win64/chrome.exe'), headless: true, viewport: { width: 1280, height: 800 },
         chromiumSandbox: true, acceptDownloads: false, serviceWorkers: 'block',
         ignoreDefaultArgs: ['--disable-extensions'],
-        // The Stagehand extension needs loopback CDP. Page requests to loopback remain
-        // blocked by the context route, and page WebSockets are denied entirely.
+
+
         proxy: { server: this.proxy.url, bypass: '127.0.0.1;localhost' },
         args: ['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', '--enable-unsafe-extension-debugging',
           `--remote-allow-origins=chrome-extension://${stagehandExtensionId()}`,
@@ -133,7 +133,7 @@ export class BrowserManager {
       await this.context.routeWebSocket('**/*', socket => {
         if (socket.url() === this.cdpUrl) socket.connectToServer(); else socket.close();
       });
-      // Explicit tabs are registered by newPage(). Popups inherit their opener's thread.
+
       this.context.on('page', page => { void page.opener().then(opener => {
         if (!opener) return;
         const owner = [...this.sessions].find(session => [...session.pages.values()].includes(opener));
@@ -169,8 +169,8 @@ export class BrowserManager {
     const operation = this.operation;
     if (!operation) return;
     operation.controller.abort();
-    // Closing a running tab terminates queued Playwright and Stagehand commands, including
-    // requests whose client-side promises have already timed out. Never merely race them.
+
+
     await this.ai?.close().catch(() => {}); this.ai = undefined;
     const page = this.active ? this.pages.get(this.active) : undefined;
     await page?.close({ runBeforeUnload: false }).catch(() => {});
@@ -194,7 +194,7 @@ export class BrowserManager {
   }
   async dispose() { clearInterval(this.leaseTimer); await this.stop(); (this.runtime ?? this).sessions.delete(this); if (this.lockOwned) { await unlink(this.lock).catch(() => {}); this.lockOwned = false; } }
 
-  /** Viewer leases expire when the WebView closes. Chromium itself keeps running. */
+
   async viewing(enabled: boolean, leaseId: string) {
     if (!/^[a-zA-Z0-9-]{16,80}$/u.test(leaseId)) throw new Error('Invalid browser view.');
     if (!enabled) {
@@ -203,8 +203,8 @@ export class BrowserManager {
       if (this.owner === 'human') { this.owner = 'paused'; await this.inputQueue.catch(() => {}); await this.emit(); }
       await this.viewQueue.catch(() => {}); await this.endView(); return;
     }
-    // Talo has one main WebView. A rebuilt WebView replaces the old viewer's lease;
-    // queued events from the destroyed view must not retain manual control.
+
+
     if (this.viewLease && this.viewLease !== leaseId && this.owner === 'human') {
       this.owner = 'paused'; await this.inputQueue.catch(() => {}); await this.emit();
     }
@@ -248,7 +248,7 @@ export class BrowserManager {
     const view = this.view; this.view = undefined; this.viewTab = undefined; this.publishFrame(null);
     if (view) { await view.send('Page.stopScreencast').catch(() => {}); await view.detach().catch(() => {}); }
   }
-  /** Only the authenticated host UI reaches this method. Pi has no input-forwarding tool. */
+
   input(value: BrowserInput) {
     const task = this.inputQueue.catch(() => {}).then(async () => {
       if (this.owner !== 'human' || value.leaseId !== this.viewLease || Date.now() > this.viewDeadline || value.tabId !== this.active) throw new Error('Take Over before interacting with this page.');
@@ -288,7 +288,7 @@ export class BrowserManager {
     if (command.name === 'browser_handoff') {
       if (input.action === 'watch') { await this.start(); return this.state(); }
       if (input.action === 'stop') { await this.stop(); return this.state(); }
-      // An agent cannot seize a human-owned browser. Only the host UI invokes handoff().
+
       if (input.action === 'return') throw new Error('Use Return Control in Talo to resume automation.');
       return this.handoff(input.action === 'take_over' ? 'human' : 'paused');
     }
@@ -312,7 +312,7 @@ export class BrowserManager {
     } catch (error) {
       if (controller.signal.aborted) throw new Error('Browser activity cancelled or timed out. The active tab was closed to stop pending actions.');
       if (error instanceof SafeBrowserError) throw error;
-      // Never propagate provider or CDP exception bodies (may contain secrets/page data).
+
       if (command.name === 'browser_ai') throw new Error('Browser AI failed. Check provider compatibility and retry a narrower instruction.', { cause: error });
       if (command.name === 'browser_interact') throw new Error('Browser interaction failed. The element may have changed or require manual takeover. Inspect the page and retry.');
       throw error;
@@ -387,8 +387,8 @@ export class BrowserManager {
 function safeUrl(value: string) { try { const url = new URL(value); url.username = ''; url.password = ''; url.search = ''; url.hash = ''; return url.href; } catch { return ''; } }
 function stagehandExtensionId() {
   const directory = path.join(path.dirname(fileURLToPath(import.meta.resolve('@browserbasehq/stagehand'))), 'extension');
-  // Chromium hashes the native FilePath bytes. Stagehand passes a directory URL,
-  // which retains its trailing separator; Windows FilePath uses UTF-16LE.
+
+
   const normalized = process.platform === 'win32' ? directory[0].toUpperCase() + directory.slice(1) + path.sep : directory + path.sep;
   return createHash('sha256').update(Buffer.from(normalized, process.platform === 'win32' ? 'utf16le' : 'utf8')).digest('hex').slice(0,32).replace(/[0-9a-f]/gu, digit => String.fromCharCode(97 + parseInt(digit,16)));
 }

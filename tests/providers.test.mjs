@@ -105,7 +105,7 @@ test('provider preference projects custom models without persisting secrets', { 
     }));
     await worker.waitReady();
 
-    // Discovery is registry-only: no session is opened before this call.
+
     const models = await worker.request('custom', 'models.list', { provider: 'custom' });
     assert.equal(models.native, false);
     assert.equal(models.models.length, 1);

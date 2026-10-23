@@ -1,4 +1,4 @@
-//! Native background executor. The chat pipeline owns sessions, progress, permissions and credentials.
+
 use crate::{chat, library, run_blocking, scheduler, storage, Host, Shared};
 use rusqlite::params;
 use serde_json::{json, Value};
@@ -29,7 +29,7 @@ pub fn run_for(h: &Host, conversation: &str, generation: &str) -> Option<String>
     .ok()
 }
 pub fn notify(app: &tauri::AppHandle, run: &str, title: &str) {
-    // Only IDs and fixed event text go to diagnostics/toasts; prompts and credentials stay local.
+
     let _ = app
         .notification()
         .builder()
@@ -115,7 +115,7 @@ pub fn tick(h: &mut Host, app: &tauri::AppHandle) -> Result<(), String> {
     let run = claimed.run_id;
     let conversation = uuid::Uuid::new_v4().to_string();
     let generation = uuid::Uuid::new_v4().to_string();
-    // Persist association BEFORE contacting Pi. A crash at any later point is uncertain, never replayed.
+
     h.db.execute(
         "UPDATE automation_runs SET conversation_id=?2,generation_id=?3 WHERE id=?1",
         params![run, conversation, generation],
@@ -134,13 +134,13 @@ pub fn tick(h: &mut Host, app: &tauri::AppHandle) -> Result<(), String> {
             params![conversation, task.workspace_id],
         )
         .map_err(|e| e.to_string())?;
-        // Retry startup once, before a prompt or external tool can have been dispatched.
+
         if h.supervisor.ensure_worker().is_err() {
             event(h, Some(&run), "worker_start_retry");
             h.supervisor.ensure_worker()?;
         }
-        // A failed startup attempt may have queued an exit for the previous epoch.
-        // Reconcile it before creating this run's live generation.
+
+
         for lifecycle in h.supervisor.drain_lifecycle() {
             h.chat.on_lifecycle(&mut h.db, app, lifecycle);
         }
@@ -159,8 +159,8 @@ pub fn tick(h: &mut Host, app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 pub fn stop_run(h: &mut Host, app: &tauri::AppHandle, generation: String) -> Result<(), String> {
-    // Cancellation is session-scoped. The worker may also own foreground chats and delegated
-    // children, so a scheduled stop must never terminate the whole Pi process.
+
+
     chat::chat_stop_inner(app, h, generation)?;
     h.integrations.pending.clear();
     h.browser_approvals.clear();

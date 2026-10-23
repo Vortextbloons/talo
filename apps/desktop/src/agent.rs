@@ -1,25 +1,25 @@
-//! Slice 9: the agent can shape the app around the user, within a bounded blast radius.
-//!
-//! Everything here is reactive (the agent acts inside a conversation, never on a timer):
-//! it may draft a workspace bundle, hand the user a task, and ask a blocking question.
-//! The host owns validation, daily caps, the pending-question table and the durable rows.
+
+
+
+
+
 use crate::{library, run_blocking, Host, Shared};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 
-/// Agent-authored objects per local day. The agent sees the remaining budget in `state`.
+
 pub const DAILY_OBJECT_LIMIT: i64 = 5;
-/// A question card can never block a turn forever; it resolves to the recommendation.
+
 pub const ASK_TIMEOUT: Duration = Duration::from_secs(300);
 pub const MAX_PENDING_ASKS: usize = 4;
 pub const MAX_ASK_QUESTIONS: usize = 3;
 pub const CAPABILITIES: [&str; 4] = ["web", "browser", "files", "google"];
 pub const MEMORY_SCOPES: [&str; 3] = ["inherit", "workspace", "off"];
 
-/// A blocking `ask` call waiting for the renderer. It is memory-only because the Pi tool
-/// call that owns it cannot survive a worker restart.
+
+
 pub struct PendingAsk {
     pub call: Value,
     pub ask: Value,
@@ -27,7 +27,7 @@ pub struct PendingAsk {
     pub epoch: u64,
 }
 
-/// Additive, idempotent migration. Existing workspaces keep a user-owned, non-draft bundle.
+
 pub fn init(db: &Connection) -> rusqlite::Result<()> {
     for statement in [
         "ALTER TABLE library_workspaces ADD COLUMN instructions TEXT NOT NULL DEFAULT ''",
@@ -37,7 +37,7 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE library_workspaces ADD COLUMN agent_owned INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE library_workspaces ADD COLUMN draft INTEGER NOT NULL DEFAULT 0",
     ] {
-        // SQLite has no ADD COLUMN IF NOT EXISTS; a duplicate-column error is the upgrade path.
+
         let _ = db.execute(statement, []);
     }
     db.execute_batch(
@@ -90,7 +90,7 @@ fn optional_text(p: &Value, key: &str, max: usize, multiline: bool) -> Result<Op
     }
 }
 
-/// A validated bundle patch. `None` means "leave the stored value alone".
+
 #[derive(Default)]
 pub struct BundlePatch {
     pub instructions: Option<String>,
@@ -150,7 +150,7 @@ pub fn bundle_patch(p: &Value) -> Result<BundlePatch, String> {
     Ok(patch)
 }
 
-/// Apply a patch to an existing row. An empty capability list means "everything enabled".
+
 pub fn apply_bundle(db: &Connection, id: &str, patch: &BundlePatch) -> Result<(), String> {
     if let Some(instructions) = &patch.instructions {
         db.execute(
@@ -252,7 +252,7 @@ fn active_workspace(db: &Connection) -> String {
     library::setting(db, "active_workspace", "general")
 }
 
-/// Agent-authored objects created since local midnight, shared across every kind.
+
 pub fn used_today(db: &Connection) -> i64 {
     db.query_row(
         "SELECT (SELECT count(*) FROM library_workspaces WHERE agent_owned=1 AND created_at>=date('now')) \
@@ -426,7 +426,7 @@ fn reply(h: &mut Host, id: Value, result: Result<Value, String>) {
     h.supervisor.relay_agent(message);
 }
 
-/// The worker's `agent.call` channel. Reads are cheap; writes are capped and validated.
+
 pub fn message(h: &mut Host, app: &tauri::AppHandle, message: Value) {
     let method = message["method"].as_str().unwrap_or("");
     if method == "notifications/cancelled" {
@@ -574,7 +574,7 @@ fn assignments(db: &Connection, status: Option<&str>) -> Result<Vec<Value>, Stri
         .map_err(|_| "Tasks are unavailable".into())
 }
 
-/// Everything the Inbox and the chat question card need in one read.
+
 pub fn state(db: &Connection, h: &Host) -> Value {
     let asks: Vec<Value> = h.agent_asks.values().map(|ask| ask.ask.clone()).collect();
     let skills = crate::skills::state(db);
@@ -588,7 +588,7 @@ pub fn state(db: &Connection, h: &Host) -> Value {
     })
 }
 
-/// Resolve raw renderer answers against the stored questions. Pure so it is testable.
+
 pub fn resolve_answers(
     questions: &[Value],
     provided: &serde_json::Map<String, Value>,
@@ -643,7 +643,7 @@ pub fn resolve_answers(
     Ok(answers)
 }
 
-/// Answer a pending question and let the blocked tool call continue.
+
 pub fn answer(h: &mut Host, app: &tauri::AppHandle, p: &Value) -> Result<(), String> {
     let id = p["id"].as_str().ok_or("Ask ID required")?.to_string();
     let provided = p["answers"]
@@ -676,7 +676,7 @@ pub fn answer(h: &mut Host, app: &tauri::AppHandle, p: &Value) -> Result<(), Str
     Ok(())
 }
 
-/// Unanswered cards resolve to the agent's recommendation so a turn never deadlocks.
+
 pub fn expire(h: &mut Host, app: &tauri::AppHandle) -> bool {
     let epoch = h.supervisor.worker_epoch();
     let ids: Vec<String> = h
@@ -765,7 +765,7 @@ fn dismiss_space(db: &Connection, p: &Value) -> Result<Value, String> {
     Ok(json!(true))
 }
 
-/// The sandbox tag: the user decides which workspaces the agent may keep editing.
+
 fn set_permission(db: &Connection, p: &Value) -> Result<Value, String> {
     let id = label(p, "id", 100)?;
     if id == "general" {
@@ -833,8 +833,8 @@ pub async fn agent_action(
     .await
 }
 
-/// Context lines a workspace bundle contributes to every turn. Bounded so a long bundle
-/// cannot crowd out the user's actual request.
+
+
 pub fn workspace_context(db: &Connection, workspace: &str) -> String {
     let Some(space) = space(db, workspace) else {
         return String::new();
@@ -864,7 +864,7 @@ pub fn workspace_context(db: &Connection, workspace: &str) -> String {
     text
 }
 
-/// Capability checks for one workspace; an empty stored list means all capabilities.
+
 #[cfg(test)]
 pub fn allows(db: &Connection, workspace: &str, capability: &str) -> bool {
     capabilities_for(db, workspace).iter().any(|value| value == capability)

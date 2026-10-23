@@ -63,10 +63,10 @@ function toChatMessage(message: AnyMessage, id: string): ChatMessage | undefined
   return undefined;
 }
 
-/**
- * Read the active branch after Pi applies compaction and retry context edits.
- * Omitting context-edited failed attempts matches what the model will actually see next.
- */
+
+
+
+
 export function readSessionMessages(session: AgentSession): ChatMessage[] {
   const projection = session.sessionManager.buildSessionProjection();
   const messages: ChatMessage[] = [];
@@ -98,7 +98,7 @@ export interface ProjectedTurn {
   lastAssistant?: ChatMessage;
 }
 
-/** Locate the latest user turn in the active projection, including its tree position. */
+
 export function inspectLastTurn(session: AgentSession): ProjectedTurn | undefined {
   const projection = session.sessionManager.buildSessionProjection();
   let user: ProjectedTurn | undefined;
@@ -123,7 +123,7 @@ export function inspectLastTurn(session: AgentSession): ProjectedTurn | undefine
   return user;
 }
 
-/** Rebuild retry eligibility after a worker restart or an interrupted session. */
+
 export function lastRetryableTurn(session: AgentSession): LastTurn | undefined {
   const turn = inspectLastTurn(session);
   if (!turn) return undefined;

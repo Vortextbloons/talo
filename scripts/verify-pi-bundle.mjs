@@ -14,7 +14,7 @@ for (const model of release.models) {
 }
 if (sha256(await readFile(`vendor/bundle/donsetch-v${release.version}-source.tar.gz`)) !== release.sourceSha256) throw new Error('Bundled DonSeTch source checksum mismatch');
 
-// Exercise the shipped executable and dependency graph, rather than the developer's Node.
+
 const data = await mkdtemp(path.join(os.tmpdir(), 'talo-bundle-check-'));
 let child;
 try {
@@ -31,7 +31,7 @@ try {
     let verified = false;
     const timeout = setTimeout(() => reject(new Error('Bundled Pi health check timed out')), 30000);
     const finish = (error) => { clearTimeout(timeout); error ? reject(error) : resolve(); };
-    // Diagnostics may contain provider information; do not echo subprocess output.
+
     child.stderr.resume();
     child.once('error', () => finish(new Error('Unable to launch bundled runtime')));
     child.stdin.on('error', () => finish(new Error('Bundled Pi protocol pipe closed')));

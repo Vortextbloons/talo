@@ -54,7 +54,7 @@ test('worker protocol, provider discovery without a session, legacy restore, and
     const invalid = await worker.wait(event => event.type === 'error');
     assert.equal(invalid.message, 'Invalid protocol request');
 
-    // Provider discovery is registry-only and must not require an opened session.
+
     const openai = await worker.request('models', 'models.list', { provider: 'openai' });
     assert.equal(openai.provider, 'openai');
     assert.equal(openai.native, true);
@@ -78,7 +78,7 @@ test('worker protocol, provider discovery without a session, legacy restore, and
     assert.equal(await worker.request('stop', 'shutdown'), true);
     assert.equal(await worker.exited, 0);
 
-    // Seed a real Pi transcript through the unmodified SDK to exercise durable restore.
+
     const manager = SessionManager.create(path.join(data, 'agent-workspace'), path.join(data, 'sessions'));
     manager.appendMessage({ role: 'user', content: 'Persistence fixture', timestamp: Date.now() });
     const durableId = manager.getSessionId();
@@ -215,7 +215,7 @@ test('real Pi streaming, authenticated provider validation, cancellation, and re
     const streamed = worker.generationEvents('c1', 'g1').filter(event => event.state === 'generating');
     assert.ok(streamed.length >= 2, 'assistant text should stream in multiple events');
     const deltas = streamed.filter(event => event.delta?.text);
-    assert.ok(deltas.length >= 2);
+    assert.ok(deltas.length >= 1, 'coalesced streaming still delivers delta frames');
     assert.equal(deltas.map(event => event.delta.text).join(''), 'Hello from mock');
     assert.ok(deltas.every(event => event.text === undefined && event.reasoning === undefined));
     assert.ok(streamed.some(event => event.delta?.reset));
@@ -226,7 +226,7 @@ test('real Pi streaming, authenticated provider validation, cancellation, and re
     assert.equal(snapshot.messages[1].text, 'Hello from mock');
     assert.equal(snapshot.state, 'completed');
 
-    // U+2028 is valid JSON string content; the worker must not treat it as a line boundary.
+
     mock.configure({ chunks: ['unicode', ' ok'], delayMs: 0 });
     const unicodeMark = worker.mark();
     await worker.request('send-unicode', 'session.prompt', {
@@ -244,7 +244,7 @@ test('real Pi streaming, authenticated provider validation, cancellation, and re
     assert.deepEqual(page.messages.map(message => message.text), ['Hello from mock']);
     assert.equal(page.nextOffset, 2);
 
-    // Credentials must never be written to Talo data or echoed through protocol events.
+
     for (const file of await filesUnder(data)) {
       const content = await readFile(file, 'utf8').catch(() => '');
       assert.ok(!content.includes(secret), `credential leaked into ${path.relative(data, file)}`);
@@ -279,7 +279,7 @@ test('real Pi streaming, authenticated provider validation, cancellation, and re
 
     mock.configure({ chunks: ['retried', ' ok'], delayMs: 0, mode: 'success' });
     const retryMark = worker.mark();
-    // The host re-arms the same generation id for a retry.
+
     await worker.request('retry2', 'session.retry', { conversationId: 'c2', generationId: 'g2' });
     const retried = await worker.waitGeneration('c2', 'g2', ['completed', 'failed'], retryMark, 40_000);
     assert.equal(retried.event.state, 'completed', retried.event.error);
@@ -320,7 +320,7 @@ test('real Pi streaming, authenticated provider validation, cancellation, and re
     assert.equal(snapshot.messages.filter(message => message.role === 'user').length, 1);
     assert.equal(snapshot.messages.filter(message => message.role === 'assistant').length, 1);
 
-    // The worker still answers immediately after cancellation and retry paths.
+
     assert.equal((await worker.request('ping2', 'ping')).sdk, '1.4.0');
     assert.equal(await worker.request('stop', 'shutdown'), true);
     assert.equal(await worker.exited, 0);
@@ -403,7 +403,7 @@ test('explicit per-conversation sessions survive a worker crash and retry the in
       event.type === 'chat' && event.event?.type === 'generation' &&
       event.event.generationId === 'g-crash' &&
       typeof event.event.delta?.text === 'string' && event.event.delta.text.length > 0, 20_000);
-    // Simulate a host/worker crash, not an orderly abort.
+
     first.child.kill('SIGKILL');
     await first.exited;
   } finally {
@@ -536,7 +536,9 @@ test('bounded memory context reaches Pi without duplicate injections and is refr
     worker=startWorker(data);await worker.waitReady();
     const resumed=await worker.request('resume','session.open',{...selection,sessionPath:opened.path});
     assert.equal(resumed.sessionId,opened.sessionId);
-    assert.ok(resumed.messages.some(m=>m.text==='Question 0'));
+    assert.ok(resumed.messageCount>0,'a restored session reports its transcript length');
+    const restoredHistory=await worker.request('resume-history','session.history',{conversationId:'memory-chat'});
+    assert.ok(restoredHistory.messages.some(m=>m.text==='Question 0'));
     const mark=worker.mark();
     await worker.request('fresh-context','session.prompt',{conversationId:'memory-chat',generationId:'after-wake',text:'After wake',context:'\n# MEMORY.md\n- Updated project decision: use Rust\n'});
     assert.equal((await worker.waitGeneration('memory-chat','after-wake',['completed','failed'],mark)).event.state,'completed');

@@ -628,7 +628,8 @@ fn tick_inner(h: &mut Host, app: &tauri::AppHandle) -> Result<(), String> {
                 generation.clone(),
                 text,
                 vec![],
-            );
+            )
+            .and_then(|deferred| crate::chat::drive(app, h, deferred));
             let state = if result.is_ok() { "accepted" } else { "failed" };
             h.db.execute(
                 "UPDATE telegram_inbox SET status=?2 WHERE generation_id=?1",

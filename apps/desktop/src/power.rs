@@ -1,4 +1,4 @@
-//! Power callbacks work without a window. Never block the Windows power notification thread.
+
 use std::sync::atomic::{AtomicBool, Ordering};
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 static SUSPENDED: AtomicBool = AtomicBool::new(false);

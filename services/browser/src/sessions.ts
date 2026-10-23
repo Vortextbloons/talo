@@ -1,7 +1,7 @@
 import { BrowserManager } from './manager.js';
 import type { BrowserStatus, BrowserFrame } from '../../../packages/contracts/src/browser.js';
 
-/** Tabs and control belong to a chat; the persistent profile and Chromium belong to this service. */
+
 export class BrowserSessions {
   private readonly managers = new Map<string, BrowserManager>();
   private readonly runtime: BrowserManager;

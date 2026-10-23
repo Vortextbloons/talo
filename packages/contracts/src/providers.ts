@@ -1,35 +1,35 @@
-/**
- * Model providers Talo exposes.
- *
- * Hosted providers use the provider IDs Pi already ships (`opencode` = OpenCode Zen,
- * `opencode-go` = OpenCode Go, `openrouter`, `nvidia`). Keeping the native IDs means Pi's
- * bundled catalog keeps supplying each model's endpoint, limits, compatibility flags and
- * reasoning/thinking metadata. Talo must not redeclare those providers in models.json,
- * because a `models` list there replaces the built-in list.
- *
- * `custom` is the only provider Talo writes to Pi's models.json. Its model is declared with
- * `reasoning` so Pi's registry exposes thinking levels for OpenAI-compatible endpoints.
- */
+
+
+
+
+
+
+
+
+
+
+
+
 export type ProviderId = 'opencode' | 'opencode-go' | 'openrouter' | 'nvidia' | 'custom';
 export type ProviderApi = 'openai-completions' | 'anthropic-messages' | 'openai-responses' | 'google-generative-ai' | 'mixed';
 
-/** Suggested model IDs. Pi's registry stays authoritative for the live list and capabilities. */
+
 export interface ProviderModelPreset { id: string; name: string; reasoning: boolean }
 export interface ProviderDescriptor {
   id: ProviderId;
   name: string;
   tagline: string;
-  /** Endpoint Pi calls. Native providers take each model's endpoint from the bundled catalog. */
+
   apiBaseUrl: string;
   api: ProviderApi;
-  /** Environment variable Pi reads when no credential is stored. */
+
   envVar: string;
-  /** Where to create an API key. Empty when the endpoint is user supplied. */
+
   keysUrl: string;
   docsUrl: string;
-  /** True when Pi ships this provider, endpoint and reasoning metadata. */
+
   native: boolean;
-  /** True when the provider's catalog models can reason. */
+
   reasoning: boolean;
   models: readonly ProviderModelPreset[];
 }
@@ -138,12 +138,12 @@ export function isProviderId(value: string): value is ProviderId {
   return PROVIDERS.some(provider => provider.id === value);
 }
 
-/** Resolve a persisted provider name, falling back to the default for older settings. */
+
 export function providerDescriptor(value: string): ProviderDescriptor {
   return PROVIDERS.find(provider => provider.id === value) ?? PROVIDERS.find(provider => provider.id === DEFAULT_PROVIDER)!;
 }
 
-/** The provider fields persisted with onboarding and projected to the Pi worker. */
+
 export interface ProviderPreference { provider: ProviderId; model: string; baseUrl: string; reasoning: boolean }
 export const DEFAULT_PREFERENCE: ProviderPreference = { provider: DEFAULT_PROVIDER, model: '', baseUrl: '', reasoning: false };
 
@@ -160,7 +160,7 @@ export function parseProviderPreference(value: unknown): ProviderPreference {
 
 export type ThinkingLevelName = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
-/** Models with reasoning that Talo's bundled Pi registry reports for a provider. */
+
 export interface ProviderModelInfo {
   id: string;
   name: string;
@@ -168,19 +168,19 @@ export interface ProviderModelInfo {
   thinkingLevels: ThinkingLevelName[];
   contextWindow: number;
   maxTokens: number;
-  /** Input modalities from Pi's registry, e.g. ['text'] or ['text','image']. */
+
   input: string[];
 }
 
-/** One routed pick: a provider model id and the thinking level its role runs at. */
+
 export interface ProviderRoleModel { model: string; effort: ThinkingLevelName }
 
-/**
- * Curated pilot and worker picks for a provider, researched against Pi's bundled catalog.
- * The economy pilot runs on the Economy tier, the smart pilot on Recommended; workers are
- * what delegation routes to. tierLabels name the two tiers the way the provider's pricing
- * makes them meaningful (free providers say Fast/Smart, paid ones Economy/Recommended).
- */
+
+
+
+
+
+
 export interface ProviderRoles {
   economyPilot: ProviderRoleModel;
   smartPilot: ProviderRoleModel;

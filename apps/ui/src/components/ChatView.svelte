@@ -46,7 +46,7 @@
   let showArchived = $state(false);
   let confirmingDelete = $state<string | null>(null);
   let text = $state('');
-  /* Images waiting in the composer. `data` is base64 for the host, `url` is the preview. */
+
   interface DraftImage { id: string; name: string; mimeType: string; bytes: number; data: string; url: string }
   const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
   const MAX_IMAGES = 4;
@@ -91,7 +91,7 @@
     if (!ids?.length) return [];
     return ids.flatMap(id => { const task = delegations.find(item => item.id === id); return task ? [task] : []; });
   }
-  /* Calls made before this session restored the chat have no generation to sit under. */
+
   const unattachedTasks = $derived.by(() => {
     const attached = new Set(Object.values(chat.delegated).flat());
     return delegations.filter(task => !attached.has(task.id));
@@ -120,7 +120,7 @@
   const pickerGroups = $derived.by(() => {
     const groups: PickerGroup[] = [];
     for (const group of modelGroups) {
-      /* Auto replaces each curated provider's catalog with its tier pilot: pick the provider, Talo picks the model. */
+
       const roles = routing.mode === 'auto' ? rolesFor(group.connection.providerId) : undefined;
       const pick = roles ? (routing.tier === 'economy' ? roles.economyPilot : roles.smartPilot) : undefined;
       if (pick) {
@@ -165,7 +165,7 @@
       .filter(group => group.options.length);
   });
   const pickerFilteredOptions = $derived(pickerFilteredGroups.flatMap(group => group.options));
-  /* Pi reports image input per model; without it the worker hands over the file path. */
+
   const imagesSupported = $derived.by(() => {
     if (!selection) return false;
     const connection = connected.find(item => item.id === selection.connectionId);
@@ -187,7 +187,7 @@
     const group = modelGroups.find(item => item.connection.id === selection!.connectionId);
     return group?.models.find(model => model.id === selection!.modelId) ?? null;
   });
-  // Thinking levels come from Pi's model registry; only reasoning-capable models list them.
+
   const thinkingOptions = $derived(selectedModel?.thinkingLevels ?? []);
   const thinkingValue = $derived.by(() => {
     if (chat.thinkingLevel && thinkingOptions.includes(chat.thinkingLevel)) return chat.thinkingLevel;
@@ -216,7 +216,7 @@
   $effect(() => {
     const conversationId = chat.active?.conversation.id ?? null;
     const last = messages[messages.length - 1];
-    // Track the pieces that should bring a reader back to the newest text.
+
     const revision = chat.historyRevision;
     const signal = `${revision}:${conversationId ?? ''}:${messages.length}:${last?.text.length ?? 0}:${last?.reasoning?.length ?? 0}:${last?.status ?? ''}:${chat.active?.state ?? ''}`;
     if (revision !== lastHistoryRevision) {
@@ -249,12 +249,12 @@
     });
   }
 
-  /* A visible action, so remembering a workflow never requires knowing a command. */
+
   const SKILL_REQUEST = 'Save how we just did this as a skill I can reuse. Use the talo-agent tool with operation skill_create. Write the instructions from what actually worked: when to use it, required tools and prerequisites, the steps and any naming conventions, the decisions that need my input, mistakes to avoid, and how to verify the outcome. Leave out passwords, account numbers, document contents and login cookies.';
   function skillRequest(detail: string): string {
     return detail ? SKILL_REQUEST + '\n\nThe workflow: ' + detail : SKILL_REQUEST;
   }
-  /** `/learn` is only a shortcut for the Save as skill action; both send the same request. */
+
   function expandShortcut(value: string): string {
     const match = /^\/learn\b\s*([\s\S]*)$/i.exec(value.trim());
     return match ? skillRequest(match[1].trim()) : value;
@@ -280,10 +280,10 @@
     attachError = '';
   }
 
-  /**
-   * Turns clipboard or dropped files into composer thumbnails. The bytes stay in memory until
-   * send; the host writes them into Pi's workspace so the model can also open the file.
-   */
+
+
+
+
   async function addImages(files: File[] | FileList | null): Promise<void> {
     if (!files) return;
     attachError = '';
@@ -323,7 +323,7 @@
     }
   }
 
-  /* A page that copies its own rendering pastes HTML with a data: image instead of a file. */
+
   function onComposerPaste(event: ClipboardEvent): void {
     const clipboard = event.clipboardData;
     if (!clipboard) return;
@@ -377,14 +377,14 @@
     }
   }
 
-  /* Custom model dropdown: the native select popup is drawn by the OS and stays light. */
+
   function openPicker(): void {
     pickerQuery = '';
     const enabled = pickerFilteredOptions.filter(option => !option.disabled);
     const selectedUsable = pickerSelected && !pickerSelected.disabled && pickerFilteredOptions.some(option => option.key === pickerSelected.key);
     pickerActive = selectedUsable ? pickerSelected!.key : enabled[0]?.key ?? '';
     pickerOpen = true;
-    // The search field takes the keyboard first; arrows move through the options.
+
     tick().then(() => {
       pickerSearchEl?.focus();
     });
@@ -457,7 +457,7 @@
     if (confirmingDelete && !(event.target instanceof Node && (event.target as Element).closest?.('.thread-confirm, .thread-delete'))) confirmingDelete = null;
   }
 
-  /* Deleting is confirmed inline in the rail; the original history file stays on disk. */
+
   async function deleteThread(id: string): Promise<void> {
     const wasActive = chat.active?.conversation.id === id;
     const next = chat.conversations.find(conversation => conversation.id !== id
@@ -472,7 +472,7 @@
     return level === 'xhigh' ? 'X-High' : level.charAt(0).toUpperCase() + level.slice(1);
   }
 
-  /* Custom thinking dropdown: the native select popup is OS-drawn and stays light. */
+
   function openThinking(): void {
     thinkingActive = thinkingValue;
     thinkingOpen = true;
@@ -582,8 +582,8 @@
       && !working;
   }
 
-  /** Finished assistant turns that carry no reply (the tool-call steps of a generation)
-    * collapse into one "worked through it" row; expanding it reveals each turn's reasoning. */
+
+
   type RenderedTurn =
     | { kind: 'message'; message: ChatMessage; index: number; firstOfGeneration: boolean }
     | { kind: 'turns'; id: string; turns: ChatMessage[]; firstOfGeneration: boolean };
@@ -614,8 +614,8 @@
     };
     for (let index = 0; index < messages.length; index++) {
       const message = messages[index];
-      // Only quiet, settled steps group. The live turn, anything with a reply, an error
-      // or attachments stays a full row so streaming and status tags are never hidden.
+
+
       const quiet = message.role === 'assistant' && message.status === 'completed'
         && !message.text && !message.error && !message.attachments?.length;
       if (quiet) {
@@ -1111,7 +1111,7 @@
   .primary-chat{display:flex;align-items:center;gap:12px;text-align:left;width:100%;padding:14px 12px;margin:2px 0 18px;border:1px solid var(--line-strong);border-radius:12px;background:var(--soft);color:var(--text);cursor:pointer}
   .primary-chat.selected{background:#302d20;border-color:#655a32}.primary-chat:hover:not(:disabled){border-color:var(--yellow-deep)}.primary-chat:disabled{opacity:.5;cursor:not-allowed}.primary-avatar{position:relative;flex-shrink:0}.primary-avatar img{display:block;width:34px;height:34px}.primary-avatar>span{position:absolute;right:-2px;bottom:0;width:8px;height:8px;background:#9fb398;border:2px solid var(--panel);border-radius:50%}.primary-avatar>span.busy{background:var(--yellow)}.primary-copy{display:grid;gap:5px;min-width:0}.primary-copy strong{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.primary-copy small{font-size:10.5px;color:var(--muted);line-height:1.4}
 
-  /* One full-height surface: the rail holds threads, the column holds the conversation. */
+
   .chat-workspace{flex:1;min-height:0;min-width:0;display:flex;position:relative}
   .browser-chip,.skill-chip{display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 9px;color:var(--muted);font-size:10px;white-space:nowrap}.browser-chip svg,.skill-chip svg{width:14px;height:14px}.browser-chip:hover:not(:disabled),.browser-chip.browser-active,.skill-chip:hover:not(:disabled){color:var(--yellow);border-color:var(--line-strong)}.skill-chip:disabled{opacity:.45;cursor:not-allowed}.browser-dot{width:4px;height:4px;background:var(--yellow);border-radius:50%;animation:pulse 1.5s ease-in-out infinite}
   .chat-layout{--rail-w:240px;flex:1;min-width:0;min-height:0;display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr)}
@@ -1132,7 +1132,7 @@
   .thread-open:hover:not(:disabled){background:#1d1d19;color:var(--text)}
   .thread-list li.active .thread-open{background:#26261f;color:var(--text);border-color:#34342c}
   .thread-list li.active .thread-open::before{content:'';position:absolute;left:-1px;top:12px;bottom:12px;width:2px;border-radius:2px;background:var(--yellow)}
-  /* Delete stays out of the way until a thread is hovered, focused, or current. */
+
   .thread-delete{position:absolute;top:7px;right:6px;z-index:2;display:grid;place-items:center;width:22px;height:22px;padding:0;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--faint);opacity:0;transition:opacity .13s ease,color .15s ease,border-color .15s ease,background .15s ease}
   .thread-delete svg{width:13px;height:13px;display:block}
   .thread-list li:hover .thread-delete,.thread-list li:focus-within .thread-delete,.thread-list li.active .thread-delete{opacity:1}
@@ -1162,7 +1162,7 @@
   .chat-message.error{background:var(--error-bg);border:1px solid var(--error-line);color:var(--error-text)}
   .chat-message.notice{background:#211f16;border:1px solid #4e4324;color:#e8d59e}
   .chat-message button{background:transparent;border:0;color:inherit;padding:0 4px;font-size:16px;line-height:1}
-  /* Empty moments center in whatever height is left, with the mascot lit from within. */
+
   .welcome{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px 12px;width:100%;max-width:640px;align-self:center}
   .welcome img{width:84px;margin-bottom:22px;filter:drop-shadow(0 0 36px rgba(255,212,92,.22)) drop-shadow(0 0 90px rgba(255,212,92,.1));animation:mascot-bob 5.5s ease-in-out infinite}
   .welcome h2{font-size:23px;letter-spacing:-.6px;font-weight:550;margin:0 0 12px}
@@ -1197,7 +1197,7 @@
   .message-error{margin-top:9px;font-size:11.5px;color:var(--error-text);line-height:1.6}
   .retry{background:transparent;border:1px solid var(--line-strong);color:var(--text);font-size:11px;padding:6px 11px;border-radius:7px;margin-top:11px}
   .retry:hover:not(:disabled){border-color:var(--yellow-deep);color:var(--yellow)}
-  /* Collapsed tool-call turns: one quiet row, expanding to the individual turns' reasoning. */
+
   .turns-group .message-role{margin-bottom:4px}
   .turns-toggle{display:inline-flex;align-items:center;gap:6px;background:transparent;border:0;padding:2px 0;color:var(--faint);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
   .turns-toggle:hover{color:var(--yellow-deep)}
@@ -1210,7 +1210,7 @@
   .queued>span{display:block;font-size:10px;color:var(--faint);margin-bottom:4px}
   .queued p{margin:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .composer{flex-shrink:0;border:1px solid var(--line-strong);border-radius:15px;padding:15px 16px 13px;background:var(--paper);box-shadow:0 12px 32px var(--shadow);margin-top:10px;transition:border-color .15s ease,background .15s ease}
-  /* A drop anywhere on the composer takes the file instead of the browser opening it. */
+
   .composer.dragging{border-color:var(--yellow-deep);background:#1d1c16}
   .drafts{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 11px}
   .draft{position:relative;width:62px;height:62px;border:1px solid var(--line-strong);border-radius:10px;overflow:hidden;background:var(--soft)}
@@ -1245,7 +1245,7 @@
   .picker-value.unset{color:var(--faint)}
   .picker-chevron{width:11px;height:11px;flex-shrink:0;transition:transform .15s ease}
   .picker-trigger[aria-expanded="true"] .picker-chevron{transform:rotate(180deg)}
-  /* Opens upward from the composer; the search stays pinned while the options scroll. */
+
   .picker-menu{position:absolute;left:0;bottom:calc(100% + 8px);z-index:40;min-width:290px;max-width:min(430px,90vw);display:flex;flex-direction:column;background:var(--paper);border:1px solid var(--line-strong);border-radius:12px;padding:6px;box-shadow:0 18px 48px rgba(0,0,0,.55)}
   .picker-search{display:block;width:100%;background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--text);font:inherit;font-size:12px;margin-bottom:4px}
   .picker-list{max-height:min(330px,48vh);overflow-y:auto;scrollbar-gutter:stable}
@@ -1260,7 +1260,7 @@
   .picker-option.selected .picker-name{font-weight:600}
   .picker-tag{font-size:9px;color:var(--yellow-deep);border:1px solid #4e4324;border-radius:20px;padding:2px 7px;white-space:nowrap;flex-shrink:0}
   .picker-status{font-size:10px;color:var(--faint)}
-  /* Thinking level pill + custom menu: the native select popup is OS-drawn and stays light. */
+
   .thinking-wrap{position:relative;min-width:0}
   .thinking-pill{display:flex;align-items:center;gap:6px;border:1px solid var(--line-strong);background:var(--soft);color:var(--muted);border-radius:9px;padding:0 8px;height:32px;cursor:pointer;transition:border-color .15s ease}
   .thinking-pill:hover:not(:disabled){border-color:#4a4a41;color:var(--text)}

@@ -1,9 +1,9 @@
 import { Marked } from 'marked';
 
-// Model output is untrusted text. Marked only tokenizes here; MessageBody renders the tokens as
-// Svelte elements, so no raw HTML ever reaches the webview. Raw HTML tokens therefore become
-// literal text instead of markup. Math tokens keep their TeX source; MessageBody renders them
-// through KaTeX, whose output is the only generated markup anywhere in the pipeline.
+
+
+
+
 
 export type Align = 'left' | 'center' | 'right' | null;
 
@@ -35,7 +35,7 @@ export type Block =
   | { kind: 'rule' }
   | { kind: 'raw'; text: string };
 
-/* The lexer's token union mixes specific shapes with a generic fallback, so read it loosely. */
+
 interface RawToken {
   type: string;
   text?: string;
@@ -59,7 +59,7 @@ interface RawToken {
 const SAFE_SCHEME = /^(https?|mailto)$/i;
 const HAS_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
 
-/** Only http(s), mailto and in-page anchors are linkable; everything else stays plain text. */
+
 export function safeHref(href: string | null | undefined): string {
   const value = (href ?? '').trim();
   if (!value) return '';
@@ -116,13 +116,13 @@ function inlineNodes(tokens: RawToken[] | undefined, nodes: Inline[] = []): Inli
       case 'image': {
         const alt = token.text ?? '';
         const href = safeHref(token.href);
-        // The webview CSP blocks remote images, so an image is offered as a link to itself.
+
         if (href) nodes.push({ kind: 'image', href, alt: alt || href, title: token.title ?? '' });
         else if (alt) pushText(nodes, alt);
         break;
       }
       case 'html':
-        // Shown as text; never parsed as markup.
+
         pushText(nodes, token.text ?? '');
         break;
       case 'checkbox':
@@ -145,7 +145,7 @@ function blockList(tokens: RawToken[] | undefined): Block[] {
         blocks.push({ kind: 'paragraph', children: inlineNodes(token.tokens) });
         break;
       case 'text':
-        // Tight list items and table-ish text arrive as block-level text tokens.
+
         blocks.push({ kind: 'paragraph', children: inlineNodes(token.tokens) });
         break;
       case 'heading':
@@ -202,7 +202,7 @@ function blockList(tokens: RawToken[] | undefined): Block[] {
   return blocks;
 }
 
-/** Tokenizes markdown (GFM: tables, task lists, strikethrough, autolinks) into a small safe tree. */
+
 const mathInline = {
   name: 'math_inline',
   level: 'inline' as const,
@@ -211,13 +211,13 @@ const mathInline = {
     return match?.index;
   },
   tokenizer(src: string) {
-    // \( ... \) inline, and $$ ... $$ used inline within a paragraph.
+
     const paren = /^\\\(([\s\S]+?)\\\)/.exec(src);
     if (paren) return { type: 'math_inline', raw: paren[0], text: paren[1].trim(), display: false };
     const double = /^\$\$([\s\S]+?)\$\$/.exec(src);
     if (double) return { type: 'math_inline', raw: double[0], text: double[1].trim(), display: true };
-    // $ ... $ with the usual currency guards: no space after the opener, no space before the
-    // closer, and no digit right after it ("$5 and $10" stays text).
+
+
     const dollar = /^\$(?!\s)((?:\\.|[^$])+?)(?<!\s)\$(?!\d)/.exec(src);
     if (dollar) return { type: 'math_inline', raw: dollar[0], text: dollar[1].trim(), display: false };
     return undefined;
@@ -232,7 +232,7 @@ const mathDisplay = {
     return match?.index;
   },
   tokenizer(src: string) {
-    // $$ ... $$ and \[ ... \] standing on their own.
+
     const double = /^\$\$([\s\S]+?)\$\$(?:\n+|$)/.exec(src);
     if (double) return { type: 'math_display', raw: double[0], text: double[1].trim() };
     const bracket = /^\\\[([\s\S]+?)\\\](?:\n+|$)/.exec(src);

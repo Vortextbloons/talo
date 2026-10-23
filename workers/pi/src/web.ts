@@ -10,7 +10,7 @@ import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 export const WEB_TOOLS = ['web_search', 'web_fetch', 'web_crawl', 'web_screenshot'] as const;
 export interface WebActivity { id: string; tool: string; input: string; state: 'running' | 'completed' | 'failed' | 'cancelled'; preview?: string; sources?: string[]; results?: { title: string; url: string; snippet: string }[]; artifact?: string; error?: string }
 type Reply = { id?: string; result?: any; error?: { message?: string } };
-/** The host owns the process. This transport never spawns programs or loads user MCP config. */
+
 export class WebTransport {
   private pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   constructor(private send: (value: unknown) => void, private label = 'Research') {}
@@ -48,7 +48,7 @@ export function publicAddress(ip: string): boolean {
     const [a,b] = ip.split('.').map(Number);
     return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 168 || b === 0)) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19)));
   }
-  // Only global unicast IPv6; mapped IPv4, ULA, link-local, multicast and transition ranges are refused.
+
   return isIP(ip) === 6 && /^[23]/u.test(ip) && !/^200[12]:/iu.test(ip);
 }
 export async function validateWebUrl(input: string, signal?: AbortSignal): Promise<string> {
@@ -71,7 +71,7 @@ export async function boundWebResult(result: any, directory: string, seed?: stri
   const raw = JSON.stringify(result);
   if (Buffer.byteLength(raw) > 16 * 1024 * 1024) throw new Error('The website response exceeds the 16 MiB limit. Narrow the request.');
   const sources = new Set<string>(seed ? [seed] : []);
-  // Retain literal citation URLs, never the worker's process-local S/L handles.
+
   for (const match of raw.matchAll(/https?:\/\/[^\s"<>\\)\]}]+/gu)) {
     try { const u = new URL(match[0]); if (!u.username && !u.password) sources.add(u.href); } catch { /* malformed page link */ }
     if (sources.size >= 12) break;

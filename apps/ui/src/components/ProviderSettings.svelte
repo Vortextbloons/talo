@@ -37,7 +37,7 @@
   const pending = $derived(busy || chat.connecting);
   const connected = $derived(chat.connections.filter(connection => connection.connected));
 
-  // The timer lives with the pending state so a remount keeps showing progress.
+
   $effect(() => {
     if (pending) {
       if (!timer) {
@@ -56,7 +56,7 @@
     const choice = providerChoice(next);
     displayName = choice.name;
     modelId = '';
-    // A key must never carry over when the provider changes.
+
     apiKey = '';
     localError = '';
     savedAccount = '';
@@ -70,7 +70,7 @@
       return;
     }
 
-    // Clear the field and the local variable as soon as the key is handed to the host.
+
     let key = apiKey;
     apiKey = '';
     localError = '';
@@ -87,7 +87,7 @@
         displayName = info.name;
         modelId = '';
       } else {
-        // The global banner keeps the host's sanitized reason even if this form is remounted.
+
         localError = chatgpt ? 'ChatGPT sign-in did not finish. Try again.' : 'Connection failed. Check the key and try again.';
       }
     } catch (value) {
@@ -172,7 +172,7 @@
     <p class="empty-line">No providers connected.</p>
   {/if}
 
-  <!-- The form stays out of the way once a provider works; the empty state opens it. -->
+
   <details class="connect-details" open={connected.length === 0}>
     <summary>{connected.length ? 'Add another provider' : 'Add a provider'}</summary>
   <form class="connect-form" onsubmit={connect} aria-busy={pending}>

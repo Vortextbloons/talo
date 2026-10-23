@@ -27,7 +27,7 @@
   });
   const runtime = $derived(chat.preview ? 'Interface preview' : chat.worker.state === 'starting' ? 'Starting the local agent' : working ? 'Working on your request' : chat.worker.state === 'failed' ? 'Check your connection in Settings' : 'Ready for your next message');
 
-  /* --- Life-like touches: blinking, gaze, celebrations --- */
+
   let stageEl = $state<HTMLDivElement>();
   let blinking = $state(false);
   let gazeX = $state(0);
@@ -51,7 +51,7 @@
     pokeTimer = window.setTimeout(() => { poking = false; }, 850);
   }
 
-  // A finished reply deserves a little smile before the next one starts.
+
   let prevStatus: string | null = null;
   $effect(() => {
     const status = (chat.active?.messages ?? []).filter(message => message.role === 'assistant').at(-1)?.status ?? null;
@@ -68,7 +68,7 @@
       blinking = true;
       window.setTimeout(() => {
         blinking = false;
-        // Every so often a second blink sneaks in, the way eyes do.
+
         if (Math.random() < 0.24) doubleTimer = window.setTimeout(() => { blinking = true; window.setTimeout(() => { blinking = false; }, 150); }, 230);
       }, 170);
     };

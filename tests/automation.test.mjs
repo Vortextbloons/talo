@@ -33,7 +33,9 @@ test('headless background work waits for exact approval, reports usage, hibernat
     await worker.waitReady();
     const restored=await worker.request('restore','session.open',{...selection,sessionPath:opened.path});
     assert.equal(restored.sessionId,opened.sessionId);
-    assert.ok(restored.messages.some(m=>m.role==='assistant'));
+    assert.ok(restored.messageCount>0);
+    const restoredHistory=await worker.request('restore-history','session.history',{conversationId:'scheduled'});
+    assert.ok(restoredHistory.messages.some(m=>m.role==='assistant'));
     await worker.request('next','session.prompt',{conversationId:'scheduled',generationId:'run-2',text:'Continue from the saved result',background:true});
     assert.equal((await worker.waitGeneration('scheduled','run-2')).event.state,'completed');
     assert.ok(provider.state.requests.at(-1).body.messages.some(m=>m.role==='tool'&&m.content.includes('Pi executed real MCP')));

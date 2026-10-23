@@ -17,12 +17,12 @@
   const pages = ['Chat', 'Inbox', 'Workspaces', 'Skills', 'Tasks', 'Settings'] as const;
   type Page = typeof pages[number];
   let page = $state<Page>('Chat');
-  /** The rail shows a count only when something genuinely waits on a person. */
+
   const inboxCount = $derived(agent.asks.length + agent.assignments.filter(item=>item.status==='open').length + agent.drafts.length + agent.skillProposals.length);
   let taskFocus = $state('');
   function openPrimary(): void { navigatePage('Chat'); void openConversation(PRIMARY_CONVERSATION_ID); }
   function navigatePage(next: Page) { if (page !== next) closeBrowser(); page = next; }
-  /* The rail keeps its icons on screen and opens over the page on hover, so the layout never jumps. */
+
   const PIN_KEY = 'talo.nav.pinned';
   function initialPinned(): boolean {
     try { return localStorage.getItem(PIN_KEY) === '1'; } catch { return false; }
@@ -58,10 +58,10 @@
     const stopAgent = initAgent();
     const stopBrowser = initBrowser();
     (async()=>{try { if(isTauri()){const saved=await invoke<Onboarding|null>('load_settings');if(saved && active){settings={...settings,...saved,...parseProviderPreference(saved)};routing.mode=saved.routing??'auto';routing.tier=saved.performance??'recommended';}await refresh();} }catch(e){error=String(e);}finally{if(active)loaded=true;}})();
-    // The host pushes service transitions; polling would keep the hidden webview awake.
+
     if(isTauri())listen<RuntimeStatus>('runtime-status',event=>{if(active)status=event.payload;}).then(stop=>{if(active)unlisten=stop;else stop();});
-    // Ask the release feed once the window has settled. A failed check stays silent; the
-    // Settings row shows the detail when someone looks.
+
+
     const updateCheck = setTimeout(() => { if (active) void checkForUpdates({ quiet: true }); }, 4000);
     const wake=()=>{if(active)refresh().catch(()=>{});};
     window.addEventListener('focus',wake);
@@ -74,7 +74,7 @@
     routing.tier = next.performance ?? 'recommended';
   }
   async function save() { try {busy=true;await saveSettings(settings);editing=false;void refreshLibrary();}catch(e){error=String(e);}finally{busy=false;} }
-  /** One setting changes at a time; the row that changed reports its own failure. */
+
   async function persist(patch: Partial<Onboarding>): Promise<void> {
     const next = { ...settings, ...patch };
     try { await saveSettings(next); }
@@ -101,14 +101,14 @@
     if (!isTauri()) throw new Error('Open the desktop app to save your agent name.');
     await persist({ agentName: name } as Partial<Onboarding>);
   }
-  /* Setup may be skipped entirely; saved preferences stay untouched and onboarding never blocks first use. */
+
   async function skipSetup(){
     if(busy)return;
     try{await saveSettings(settings);}catch(e){error=String(e);return;}
     editing=false;void refreshLibrary();
   }
-  /* Keyboard map: Ctrl+1..5 switch pages, Ctrl+N starts a conversation, Ctrl+B keeps the rail open,
-     Ctrl+, opens Settings. */
+
+
   function onKeydown(event:KeyboardEvent):void{
     if(!loaded||!settings.complete||editing)return;
     if(!event.ctrlKey||event.altKey||event.shiftKey||event.metaKey)return;
@@ -232,8 +232,8 @@
 
 <ToolApprovals />
 <style>
-  /* The window is the page: a fixed app frame, each region scrolls itself. The rail floats
-     above it, so opening it never reflows the conversation underneath. */
+
+
   .shell{position:relative;display:flex;height:100vh;height:100dvh;overflow:hidden;background:var(--bg);--rail:64px;--rail-open:232px}
   .shell.rail-pinned{--rail:var(--rail-open)}
   .rail{position:absolute;inset:0 auto 0 0;z-index:4;width:var(--rail);background:var(--sidebar);border-right:1px solid var(--line);overflow:hidden;
@@ -258,7 +258,7 @@
     color:var(--muted);font-size:13.5px;text-align:left;white-space:nowrap;transition:color .13s ease,background .13s ease}
   nav button:hover{background:#151513;color:var(--text)}
   nav button.selected{background:#191916;color:var(--text)}
-  /* The active page is a lit edge, not a heavy pill. */
+
   nav button.selected::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:0 2px 2px 0;background:var(--yellow)}
   nav button.thinking{color:var(--yellow)}
   .nav-icon{--icon-opacity:.7;width:20px;height:20px;display:grid;place-items:center;flex-shrink:0}

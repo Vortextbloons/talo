@@ -1,9 +1,9 @@
-//! AI delegation: bounded child work owned by one main conversation.
-//!
-//! A task row is the durable authority. The child conversation reuses the existing chat
-//! transcript and generation machinery; it is hidden from the main conversation list.
-//! Completion is persisted first, then delivered once to the parent as a hidden custom
-//! message that starts or queues a normal parent generation.
+
+
+
+
+
+
 use crate::{chat, run_blocking, storage, Host, Shared};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -79,7 +79,7 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
          CREATE INDEX IF NOT EXISTS agent_delegation_activity_task
            ON agent_delegation_activity(task_id,sequence);",
     )?;
-    // Databases created before worker routing lack the column; add it in place.
+
     let has_level: i64 = db
         .query_row(
             "SELECT count(*) FROM pragma_table_info('agent_delegations') WHERE name='thinking_level'",
@@ -202,8 +202,8 @@ pub fn set_generation(db: &Connection, id: &str, generation_id: &str, state: &st
     Ok(())
 }
 
-/// Persist one user-readable child step. Only the plain label and a bounded detail are
-/// stored; raw tool arguments and results never leave the worker.
+
+
 pub fn record_activity(
     db: &Connection,
     conversation_id: &str,
@@ -371,10 +371,10 @@ struct RolePick {
     effort: &'static str,
 }
 
-/// Mirrors the worker half of `PROVIDER_ROLES` in packages/contracts/src/providers.ts
-/// (pilot picks live only in the TypeScript registry, which owns conversation creation).
-/// The host cannot read TypeScript, so the two tables must be updated together; Pi clamps
-/// the levels to what each model actually supports when the child session applies them.
+
+
+
+
 fn worker_routing(provider_id: &str) -> Option<(RolePick, RolePick)> {
     let (flash, smart) = match provider_id {
         "chatgpt" => (
@@ -402,7 +402,7 @@ fn worker_routing(provider_id: &str) -> Option<(RolePick, RolePick)> {
     Some((flash, smart))
 }
 
-/// (routing enabled, economy tier) from the saved settings; defaults are auto + recommended.
+
 fn routing_settings(db: &Connection) -> (bool, bool) {
     let value: Option<String> = db
         .query_row(
@@ -700,7 +700,7 @@ fn launch_queued(host: &mut Host, app: &tauri::AppHandle) {
     }
 }
 
-/// Advance ownership: launch queued children, then queue one combined parent delivery.
+
 pub fn tick(host: &mut Host, app: &tauri::AppHandle) {
     launch_queued(host, app);
     match enqueue_deliveries(&mut host.db) {
@@ -723,7 +723,7 @@ pub fn has_pending(db: &Connection) -> bool {
     .unwrap_or(false)
 }
 
-/// Reconcile anything left mutating by a crash. Transcripts stay; nothing is replayed.
+
 pub fn recover(db: &Connection) -> Result<usize, String> {
     let stamp = now();
     let _ = db.execute(

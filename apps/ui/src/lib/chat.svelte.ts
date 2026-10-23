@@ -36,7 +36,7 @@ export interface DiscoveryState {
 
 export interface ChatStore {
   research: Record<string, ResearchActivity[]>;
-  /** Delegated child tasks created during a generation, so the chat can show the call inline. */
+
   delegated: Record<string, string[]>;
   initialized: boolean;
   preview: boolean;
@@ -188,7 +188,7 @@ function applySnapshot(snapshot: ConversationSnapshot): void {
     messages: snapshot.messages.map(message => ({ ...message })),
   };
 
-  // Keep the message a person just sent visible until the host includes it in a snapshot.
+
   for (const message of localPending) {
     if (chat.active.messages.some(existing => existing.id === message.id)) continue;
     if (message.role === 'user' && !chat.active.messages.some(existing => existing.role === 'user' && existing.text === message.text)) {
@@ -390,11 +390,11 @@ function handleGenerationEvent(event: Extract<ChatEvent, { type: 'generation' }>
     return;
   }
   if (conversation.generationId && conversation.generationId !== event.generationId && isWorking()) {
-    // A late event from an older turn must not overwrite the reply in progress.
+
     return;
   }
 
-  // The host numbers events per generation, so ordering and gap detection stay in that scope.
+
   const lastGenerationSequence = sequenceByGeneration.get(event.generationId) ?? -1;
   if (event.sequence <= lastGenerationSequence) return;
   const gap = event.sequence > lastGenerationSequence + 1;
@@ -485,7 +485,7 @@ function handleEvent(event: ChatEvent): void {
   handleGenerationEvent(event);
 }
 
-/** Refresh the model catalog once, keeping per-connection errors local. */
+
 export async function discoverModels(connectionId: string): Promise<void> {
   if (!isTauri()) return;
   const current = chat.discovery[connectionId];
@@ -590,7 +590,7 @@ export async function retryChat(): Promise<void> {
   await initChat();
 }
 
-/** Reconnect snapshot. Sequence ordering makes the result safe to apply after stream events. */
+
 async function refreshSnapshot(conversationId: string | undefined, quiet: boolean, initialEvent?: ChatEvent, preserveHistory = true): Promise<void> {
   if (!conversationId || !isTauri()) return;
   if (pendingSnapshot?.conversationId === conversationId) {
@@ -678,7 +678,7 @@ export function isSelectionAvailable(selection: ModelSelection | null): boolean 
   return models.some(model => model.id === selection.modelId);
 }
 
-/** Routing preferences mirrored from settings; App.svelte hydrates and updates them. */
+
 export const routing = $state({ mode: 'auto' as 'auto' | 'manual', tier: 'recommended' as 'economy' | 'recommended' });
 
 export function pickDefaultSelection(): ModelSelection | null {
@@ -794,7 +794,7 @@ export async function openConversation(conversationId: string): Promise<boolean>
   }
 }
 
-/** In Auto, pinning a pilot also pins the tier's thinking level for that conversation. */
+
 function applyRoutingEffort(connectionId: string): void {
   if (routing.mode !== 'auto') return;
   const roles = rolesFor(chat.connections.find(item => item.id === connectionId)?.providerId ?? '');
@@ -828,7 +828,7 @@ export async function chooseModel(selection: ModelSelection | null): Promise<voi
   }
 }
 
-/** Apply a thinking level to the conversation's Pi session ('minimal'..'max'). */
+
 export async function setThinkingLevel(level: ThinkingLevelName): Promise<void> {
   const conversation = chat.active;
   if (!conversation) return;
@@ -861,7 +861,7 @@ function noteFirstMessage(conversationId: string, text: string, hasImages = fals
   if (current && current !== 'New conversation') return;
   const compact = text.split(/\s+/).filter(Boolean).join(' ');
   if (!compact) {
-    // An image-only first turn still deserves a title the thread list can read.
+
     if (!hasImages) return;
     conversation.conversation.title = 'Photo';
     const info = chat.conversations.find(item => item.id === conversationId);
@@ -958,7 +958,7 @@ export async function sendMessage(rawText: string, attachments: ChatAttachmentIn
     }
 
     generationId = newId();
-    // Follow-ups accepted while this chat is generating wait in the host queue, in order.
+
     if (conversation.conversation.id === chat.active?.conversation.id && isWorking()) {
       if (attachments.length) {
         chat.error = 'Wait for the current reply before attaching an image.';
@@ -973,7 +973,7 @@ export async function sendMessage(rawText: string, attachments: ChatAttachmentIn
       });
       return true;
     }
-    // Previews come straight from the composer so the picture appears with the bubble.
+
     const previews: ChatAttachment[] = attachments.map((attachment, index) => ({
       id: `local-image-${generationId}-${index}`,
       name: attachment.name || 'image',
@@ -1083,7 +1083,7 @@ export async function retryGeneration(): Promise<void> {
     return;
   }
 
-  // The host re-arms the generation that failed, so its id and assistant row are reused.
+
   const failedReply = [...conversation.messages].reverse().find(message =>
     message.role === 'assistant'
       && (message.status === 'failed' || message.status === 'cancelled')
@@ -1153,7 +1153,7 @@ async function signInChatGPT(connectionId?: string): Promise<ConnectionInfo> {
   }
 }
 
-/** The caller must clear its password field before awaiting this call. */
+
 export async function connectProvider(input: ConnectInput): Promise<ConnectionInfo | null> {
   if (!isTauri()) {
     chat.error = PREVIEW_MESSAGE;

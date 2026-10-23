@@ -33,7 +33,7 @@
     let active=true;const stops:(()=>void)[]=[];
     void refresh();
     if(isTauri())for(const event of ['automation-changed','runtime-status'])void listen(event,()=>void refresh()).then(stop=>active?stops.push(stop):stop());
-    // Only this visible panel polls for progress; the native scheduler owns execution.
+
     const timer=setInterval(()=>void refresh(),5000);
     return()=>{active=false;stops.forEach(stop=>stop());clearInterval(timer);};
   });

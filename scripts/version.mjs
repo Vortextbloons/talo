@@ -1,5 +1,5 @@
-// Sets the version everywhere it is written down, so a tag, the installer and the update
-// manifest agree. Usage: node scripts/version.mjs 0.1.1
+
+
 import { readFile, writeFile } from 'node:fs/promises';
 
 const version = process.argv[2];
@@ -18,7 +18,7 @@ await json('package.json', value => { value.version = version; });
 await json('apps/ui/package.json', value => { value.version = version; });
 await json('apps/desktop/tauri.conf.json', value => { value.version = version; });
 
-// Cargo's version is a plain `version = "x.y.z"` line inside [package].
+
 const manifest = 'apps/desktop/Cargo.toml';
 const text = await readFile(manifest, 'utf8');
 const next = text.replace(/^version = "[^"]*"$/mu, `version = "${version}"`);

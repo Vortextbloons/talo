@@ -1,4 +1,4 @@
-//! Local, bounded diagnostics contain numeric counters and fixed event names, never credentials.
+
 use crate::{automation, Shared};
 use serde_json::json;
 use std::{

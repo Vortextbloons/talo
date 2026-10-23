@@ -28,7 +28,7 @@ function updateStatus(status: BrowserStatus) {
   }
   if (workspaceVisible && !document.hidden && !hiddenPreview && status.state === 'connected' && browser.view === 'closed') void openBrowser('side');
 }
-/** Selection changes detach the old view; its tabs keep running with their own owner. */
+
 export function selectBrowserSession(sessionId: string) {
   if (browser.sessionId === sessionId) return;
   closeBrowser(false);
@@ -114,7 +114,7 @@ export async function sendBrowserInput(input: Omit<BrowserInput, 'leaseId' | 'ta
   try { await invoke('browser_input', {input: {...input, sessionId, leaseId, tabId: browser.frame.tabId}}); }
   catch { if (browser.sessionId === sessionId) browser.error = 'The page changed or control was returned. Take over again to interact.'; }
 }
-/** Clicking a chat source explicitly hands navigation to the user, inside Talo. */
+
 export async function openBrowserSource(url: string) {
   const parsed = new URL(url);
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('Only public HTTP(S) sources can be opened.');
@@ -124,10 +124,10 @@ export async function openBrowserSource(url: string) {
   if (browser.sessionId !== sessionId || !viewIsOpen() || browser.error) throw new Error('The browser could not open. Try again.');
   await controlBrowser('take_over');
   if (browser.sessionId !== sessionId || browser.status.owner !== 'human' || browser.error) throw new Error('The browser could not take control. Try again.');
-  // Cancelling an in-flight agent action may close its tab; attach to a fresh page.
+
   await openBrowser('large');
   if (browser.sessionId !== sessionId || !browser.status.activeTab || browser.error) throw new Error('The browser page could not open. Try again.');
-  // Navigation uses the private input queue, so it cannot race with agent actions.
+
   await invoke('browser_input', {input: {type: 'navigate', url: parsed.href, sessionId, leaseId, tabId: browser.status.activeTab}});
 }
 export async function resolveBrowserApproval(id: string, allowed: boolean) {

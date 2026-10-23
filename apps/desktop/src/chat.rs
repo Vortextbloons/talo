@@ -1,9 +1,9 @@
-//! Chat commands and the host side of the Pi streaming contract.
-//!
-//! Every mutation of a generation happens under the host mutex. SQLite carries a partial
-//! unique index as the durable generation lock, so a restart or a retry cannot create two
-//! mutating generations for one conversation. Worker deltas are journaled durably;
-//! the host persists and re-emits them with its own monotonic sequence.
+
+
+
+
+
+
 use crate::{
     attachments,
     credentials::{self, Secret},
@@ -26,7 +26,7 @@ const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 const MAX_ERROR_CHARS: usize = 500;
 const SESSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Identity is refreshed for each turn, independently of memory or saved Pi sessions.
+
 fn agent_context(db: &rusqlite::Connection, conversation: &ConversationInfo, query: &str) -> String {
     let settings = crate::library::setting(db, "onboarding", "{}");
     let settings: Value = serde_json::from_str(&settings).unwrap_or(Value::Null);
@@ -199,8 +199,8 @@ struct SessionBinding {
     credential_hash: Option<String>,
 }
 
-/// A finished reply whose terminal row could not be written yet. The text stays in memory and
-/// is retried, so a database fault cannot announce a completion that never became durable.
+
+
 struct PendingFinalize {
     conversation_id: String,
     state: GenerationState,
@@ -210,7 +210,7 @@ struct PendingFinalize {
     sequence: i64,
 }
 
-/// In-memory projection of durable chat state. It is rebuilt from SQLite after a restart.
+
 #[derive(Default)]
 pub struct ChatState {
     active: HashMap<String, ActiveGeneration>,
@@ -238,8 +238,8 @@ impl ChatState {
         !self.active.is_empty()
     }
 
-    /// Retry terminal writes that failed. Until one succeeds the generation stays live, so a
-    /// new turn for that conversation keeps failing instead of silently losing this reply.
+
+
     pub fn retry_pending(&mut self, db: &mut rusqlite::Connection, app: &AppHandle) {
         if self.pending.is_empty() {
             return;
@@ -269,7 +269,7 @@ impl ChatState {
             };
             self.active.remove(&id);
             let Some(message) = message else {
-                // Another terminal write already closed this generation.
+
                 continue;
             };
             emit_generation(
@@ -294,8 +294,8 @@ impl ChatState {
         }
     }
 
-    /// Persist a failed terminal state for every live generation without emitting events.
-    /// Used when the user quits while a response is streaming; bootstrap will show the failure.
+
+
     pub fn fail_active_on_shutdown(&mut self, db: &mut rusqlite::Connection) {
         let ids = self.active.keys().cloned().collect::<Vec<_>>();
         for id in ids {
@@ -323,15 +323,15 @@ impl ChatState {
         signal: WorkerSignal,
     ) {
         match signal {
-            WorkerSignal::Web(_) | WorkerSignal::Browser(_) | WorkerSignal::Tools(_) | WorkerSignal::Agent(_) | WorkerSignal::Delegation(_) => {}, // handled before chat projection
+            WorkerSignal::Web(_) | WorkerSignal::Browser(_) | WorkerSignal::Tools(_) | WorkerSignal::Agent(_) | WorkerSignal::Delegation(_) => {},
             WorkerSignal::Ready => emit_worker(app, WorkerState::Ready, None),
             WorkerSignal::Sleeping => {
                 self.sessions.clear();
                 emit_worker(app, WorkerState::Stopped, None);
             }
             WorkerSignal::Error(message) => {
-                // Protocol errors are surfaced but do not invent a terminal generation: the
-                // worker still owns the stream unless it exits.
+
+
                 emit_worker(app, WorkerState::Failed, Some(sanitize_error(&message)));
             }
             WorkerSignal::Chat(value) => {
@@ -384,7 +384,7 @@ impl ChatState {
                 }
             }
             WorkerSignal::Eof => {
-                // Reopening the next conversation will re-attach to the durable session.
+
                 self.sessions.clear();
             }
         }
@@ -403,7 +403,7 @@ impl ChatState {
                 success,
                 error,
             } => {
-                // Do not clear a session that a newer worker already opened.
+
                 self.sessions
                     .retain(|_, binding| binding.worker_epoch != epoch);
                 let had_active = !self.active.is_empty();
@@ -459,7 +459,7 @@ impl ChatState {
             return;
         };
         let Some(active) = self.active.get_mut(&generation_id) else {
-            // A terminal or pre-restart generation must not resurrect itself.
+
             return;
         };
         if active.conversation_id != conversation_id {
@@ -500,8 +500,8 @@ impl ChatState {
         let active_text = text
             .or_else(|| message.as_ref().map(|message| message.text.clone()))
             .unwrap_or_else(|| self.active[&generation_id].text.clone());
-        // An empty reasoning string is a deliberate reset (new turn); otherwise the
-        // accumulated thinking text rides along with every progress event.
+
+
         let active_reasoning = reasoning
             .or_else(|| {
                 message
@@ -598,7 +598,7 @@ impl ChatState {
         ) {
             Ok(message) => message,
             Err(failure) => {
-                // Keep the finished reply recoverable instead of announcing it as saved.
+
                 self.pending.insert(
                     generation_id.to_string(),
                     PendingFinalize {
@@ -663,8 +663,8 @@ impl ChatState {
         crate::delegation::on_generation_finished(db, app, generation_id, state, &final_text, final_error.as_deref());
     }
 
-    /// The binding a session would have for these inputs, carrying the thinking level over a
-    /// rebind so a snapshot taken before the next `session.open` never reports a stale level.
+
+
     fn session_binding(
         &self,
         supervisor: &Supervisor,
@@ -692,8 +692,8 @@ impl ChatState {
         }
     }
 
-    /// Dispatch `session.open` when the conversation is not already bound to this worker.
-    /// Returns the round trip so the caller can wait for it without the host mutex held.
+
+
     fn begin_session(
         &mut self,
         db: &rusqlite::Connection,
@@ -707,10 +707,10 @@ impl ChatState {
         supervisor.ensure_worker()?;
         let binding = self.session_binding(supervisor, conversation, connection, model_id, secret);
         if self.sessions.get(&conversation.id) == Some(&binding) {
-            return Ok(None);
+            return Ok(Deferred::ready(supervisor.worker_epoch(), continuation));
         }
-        // `baseUrl` is part of the private worker extension documented alongside the
-        // contract's provider/model/apiKey/sessionPath parameters.
+
+
         let mut params = json!({
             "conversationId": &conversation.id,
             "sessionPath": conversation.session_path.as_deref(),
@@ -735,21 +735,28 @@ impl ChatState {
         let child = storage::conversation_is_delegated(db, &conversation.id).unwrap_or(true);
         params["delegation"] = json!(!scheduled && !child);
         params["skills"] = crate::skills::for_conversation(db, &supervisor.data, conversation);
-        dispatch(supervisor, "session.open", params, continuation)
+        let epoch = supervisor.worker_epoch();
+        let reply = supervisor
+            .dispatch("session.open", params)
+            .map_err(session_error)?;
+        Ok(Some(Deferred {
+            reply: Some(reply),
+            session: Some(binding),
+            continuation,
+            epoch,
+        }))
     }
 
-    /// Record an opened session. The worker answers with bounded metadata only, so a long
-    /// transcript can never arrive as one oversized frame.
+
+
     fn finish_session(
         &mut self,
         db: &mut rusqlite::Connection,
         supervisor: &mut Supervisor,
         conversation: &ConversationInfo,
-        connection: &ConnectionRow,
-        model_id: &str,
+        binding: SessionBinding,
         result: Value,
     ) -> Result<(), String> {
-        let binding = self.session_binding(supervisor, conversation, connection, model_id, None);
         let session_id = result
             .get("sessionId")
             .and_then(Value::as_str)
@@ -931,21 +938,21 @@ fn storage_error(error: storage::Error) -> String {
     error.to_string()
 }
 
-/// Drive a command's worker round trips: wait with no host mutex held, apply with it held.
+
 fn drive_shared(app: &AppHandle, shared: &Shared, deferred: Option<Deferred>) -> Result<(), String> {
     let mut next = deferred;
     while let Some(current) = next {
-        let (continuation, epoch, reply) = current.wait();
+        let waited = current.wait();
         let mut host = shared
             .lock()
             .map_err(|_| "Talo state is unavailable".to_string())?;
-        next = continuation.apply(app, &mut host, epoch, reply)?;
+        next = waited.apply(app, &mut host)?;
     }
     Ok(())
 }
 
-/// Puts each turn's images back on the message that carried them. Rows are keyed by the
-/// generation id, which survives a projection rebuild, so a reopened chat still shows them.
+
+
 fn attach_images(db: &rusqlite::Connection, conversation_id: &str, messages: &mut [ChatMessage]) {
     let generations = messages.iter().filter(|message| message.role == "user").filter_map(|message| message.generation_id.as_deref()).collect::<Vec<_>>();
     let stored = match storage::list_attachments(db, conversation_id, &generations) {
@@ -974,7 +981,7 @@ fn attach_images(db: &rusqlite::Connection, conversation_id: &str, messages: &mu
     }
 }
 
-/// Re-reads a turn's images from disk so a retry reaches the model with the same pictures.
+
 fn images_for_generation(db: &rusqlite::Connection, conversation_id: &str, generation_id: &str) -> Vec<Value> {
     storage::list_attachments(db, conversation_id, &[generation_id])
         .unwrap_or_default()
@@ -1051,8 +1058,8 @@ fn load_connection(
     Ok((connection, selection.model_id.clone()))
 }
 
-/// Read a saved Pi transcript in bounded pages. Opening a session returns metadata only, so
-/// the host never asks the worker for one frame it might refuse.
+
+
 fn session_history(supervisor: &mut Supervisor, conversation_id: &str) -> Result<Vec<ChatMessage>, String> {
     let mut messages = Vec::new();
     let mut offset = 0u64;
@@ -1194,7 +1201,7 @@ fn conversation_open_inner(
     conversation_snapshot_inner(host, conversation)
 }
 
-/// Build a snapshot for any conversation without changing which main chat is selected.
+
 pub(crate) fn conversation_snapshot_inner(
     host: &mut Host,
     conversation: ConversationInfo,
@@ -1229,12 +1236,12 @@ fn conversation_select_model_inner(
     let conversation =
         storage::update_conversation_selection(&host.db, &conversation_id, &selection)
             .map_err(storage_error)?;
-    // The Pi session must be re-opened with the new provider/model on the next prompt.
+
     host.chat.sessions.remove(&conversation_id);
     Ok(conversation)
 }
 
-/// Pi session thinking levels, mirroring the worker's allowlist.
+
 const THINKING_LEVELS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
 
 fn conversation_thinking_inner(
@@ -1268,7 +1275,7 @@ fn conversation_thinking_inner(
     if opened.is_some() {
         return Ok(opened);
     }
-    // The session is already open, so only the level round trip is left.
+
     dispatch(
         &mut host.supervisor,
         "session.thinking",
@@ -1277,7 +1284,7 @@ fn conversation_thinking_inner(
     )
 }
 
-/// An image the composer attached to a message. `data` is base64 without the data: prefix.
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentInput {
@@ -1287,10 +1294,10 @@ pub struct AttachmentInput {
     pub name: Option<String>,
 }
 
-/// The step that applies a deferred worker reply. Every variant either finishes the turn or
-/// hands back the next round trip, so a command can release the host mutex between them.
+
+
 pub(crate) enum Continuation {
-    /// The session opened; send the user's turn.
+
     Send {
         conversation_id: String,
         generation_id: String,
@@ -1298,20 +1305,20 @@ pub(crate) enum Continuation {
         background: bool,
         images: Vec<Value>,
     },
-    /// The session opened; replay the failed turn.
+
     Retry {
         conversation_id: String,
         generation_id: String,
         user_text: String,
         had_session: bool,
     },
-    /// The session opened; deliver persisted child results to the parent.
+
     Deliver {
         conversation_id: String,
         generation_id: String,
         text: String,
     },
-    /// The session opened; apply the routed thinking level, then send the task.
+
     Child {
         conversation_id: String,
         generation_id: String,
@@ -1325,7 +1332,7 @@ pub(crate) enum Continuation {
         task_id: String,
         text: String,
     },
-    /// The session opened; push the requested thinking level.
+
     Thinking {
         conversation_id: String,
         level: String,
@@ -1333,29 +1340,66 @@ pub(crate) enum Continuation {
     ThinkingApplied {
         conversation_id: String,
     },
-    /// The prompt was accepted; only a hard failure changes anything.
+
     Accepted {
         generation_id: String,
     },
 }
 
-/// A dispatched worker request plus the step that applies its reply. The host mutex is not held
-/// while waiting for it, so one chat's session startup cannot stall the pump or another chat.
+
+
 pub(crate) struct Deferred {
-    reply: supervisor::PendingReply,
+    reply: Option<supervisor::PendingReply>,
+    session: Option<SessionBinding>,
     continuation: Continuation,
     epoch: u64,
 }
 
 impl Deferred {
-    /// Wait for the reply. Call this without holding the host mutex.
-    pub(crate) fn wait(self) -> (Continuation, u64, Result<Value, supervisor::Error>) {
+    fn ready(epoch: u64, continuation: Continuation) -> Option<Deferred> {
+        Some(Deferred {
+            reply: None,
+            session: None,
+            continuation,
+            epoch,
+        })
+    }
+
+    pub(crate) fn wait(self) -> Waited {
         let Deferred {
             reply,
+            session,
             continuation,
             epoch,
         } = self;
-        (continuation, epoch, reply.wait(SESSION_TIMEOUT))
+        Waited {
+            continuation,
+            epoch,
+            session,
+            reply: match reply {
+                Some(reply) => Some(reply.wait(SESSION_TIMEOUT)),
+                None => None,
+            },
+        }
+    }
+}
+
+pub(crate) struct Waited {
+    continuation: Continuation,
+    epoch: u64,
+    session: Option<SessionBinding>,
+    reply: Option<std::result::Result<Value, supervisor::Error>>,
+}
+
+impl Waited {
+    pub(crate) fn apply(self, app: &AppHandle, host: &mut Host) -> Result<Option<Deferred>, String> {
+        let Waited {
+            continuation,
+            epoch,
+            session,
+            reply,
+        } = self;
+        continuation.apply(app, host, epoch, session, reply)
     }
 }
 
@@ -1378,24 +1422,24 @@ fn dispatch(
         .dispatch(method, params)
         .map_err(|error| session_error(error))?;
     Ok(Some(Deferred {
-        reply,
+        reply: Some(reply),
+        session: None,
         continuation,
         epoch,
     }))
 }
 
-/// Wait for one deferred reply and apply it. Internal callers settle inline; commands wait on
-/// `Deferred::wait` first so the host mutex stays free.
+
+
 pub(crate) fn drive(app: &AppHandle, host: &mut Host, deferred: Option<Deferred>) -> Result<(), String> {
     let mut next = deferred;
     while let Some(current) = next {
-        let (continuation, epoch, reply) = current.wait();
-        next = continuation.apply(app, host, epoch, reply)?;
+        next = current.wait().apply(app, host)?;
     }
     Ok(())
 }
 
-/// A dispatch that never reached the worker ends the turn instead of unwinding a command.
+
 fn dispatch_for_turn(
     host: &mut Host,
     app: &AppHandle,
@@ -1411,14 +1455,15 @@ fn dispatch_for_turn(
     }
 }
 
-/// Apply a `session.open` reply to a turn that is still live.
+
 fn accept_session(
     app: &AppHandle,
     host: &mut Host,
     epoch: u64,
     conversation_id: &str,
     generation_id: Option<&str>,
-    reply: Result<Value, supervisor::Error>,
+    binding: Option<SessionBinding>,
+    reply: std::result::Result<Value, supervisor::Error>,
 ) -> Result<bool, String> {
     let fail = |host: &mut Host, message: String| match generation_id {
         Some(generation_id) => {
@@ -1428,7 +1473,7 @@ fn accept_session(
         None => Err(message),
     };
     if let Some(generation_id) = generation_id {
-        // A stop or a worker exit may have finalized this turn while the session opened.
+
         if !host.chat.active.contains_key(generation_id) {
             return Ok(false);
         }
@@ -1441,15 +1486,14 @@ fn accept_session(
         Err(error) => return fail(host, session_error(error)),
     };
     let applied = (|| {
+        let binding = binding.ok_or_else(|| "Pi worker reply has no session binding".to_string())?;
         let conversation =
             storage::get_conversation(&host.db, conversation_id).map_err(storage_error)?;
-        let (connection, model_id) = load_connection(&host.db, &conversation)?;
         host.chat.finish_session(
             &mut host.db,
             &mut host.supervisor,
             &conversation,
-            &connection,
-            &model_id,
+            binding,
             result,
         )
     })();
@@ -1496,14 +1540,180 @@ fn child_prompt(
     dispatch_for_turn(host, app, generation_id, dispatched)
 }
 
+
+#[allow(clippy::too_many_arguments)]
+fn send_prompt(
+    app: &AppHandle,
+    host: &mut Host,
+    conversation_id: String,
+    generation_id: String,
+    text: String,
+    background: bool,
+    images: Vec<Value>,
+) -> Result<Option<Deferred>, String> {
+    let conversation =
+        storage::get_conversation(&host.db, &conversation_id).map_err(storage_error)?;
+    let params = json!({
+        "conversationId": conversation_id,
+        "generationId": generation_id,
+        "text": text,
+        "context": agent_context(&host.db, &conversation, &text),
+        "capabilities": crate::agent::capabilities_for(&host.db, &conversation.workspace_id),
+        "skills": crate::skills::for_conversation(&host.db, &host.supervisor.data, &conversation),
+        "images": images,
+        "background": background,
+    });
+    let dispatched = dispatch(
+        &mut host.supervisor,
+        "session.prompt",
+        params,
+        Continuation::Accepted {
+            generation_id: generation_id.clone(),
+        },
+    );
+    dispatch_for_turn(host, app, &generation_id, dispatched)
+}
+
+fn send_retry(
+    app: &AppHandle,
+    host: &mut Host,
+    conversation_id: String,
+    generation_id: String,
+    user_text: String,
+    had_session: bool,
+) -> Result<Option<Deferred>, String> {
+    let conversation =
+        storage::get_conversation(&host.db, &conversation_id).map_err(storage_error)?;
+    let reference_context = agent_context(&host.db, &conversation, &user_text);
+    let capabilities = json!(crate::agent::capabilities_for(&host.db, &conversation.workspace_id));
+    let skills =
+        crate::skills::for_conversation(&host.db, &host.supervisor.data, &conversation);
+    let images = images_for_generation(&host.db, &conversation_id, &generation_id);
+    let params = if had_session {
+        json!({"conversationId":conversation_id,"generationId":generation_id,"context":reference_context,"capabilities":capabilities,"skills":skills,"images":images})
+    } else {
+        json!({"conversationId":conversation_id,"generationId":generation_id,"text":user_text,"context":reference_context,"capabilities":capabilities,"skills":skills,"images":images})
+    };
+    let dispatched = dispatch(
+        &mut host.supervisor,
+        if had_session {
+            "session.retry"
+        } else {
+            "session.prompt"
+        },
+        params,
+        Continuation::Accepted {
+            generation_id: generation_id.clone(),
+        },
+    );
+    dispatch_for_turn(host, app, &generation_id, dispatched)
+}
+
+fn send_delivery(
+    app: &AppHandle,
+    host: &mut Host,
+    conversation_id: String,
+    generation_id: String,
+    text: String,
+) -> Result<Option<Deferred>, String> {
+    let conversation =
+        storage::get_conversation(&host.db, &conversation_id).map_err(storage_error)?;
+    let params = json!({
+        "conversationId": conversation_id,
+        "generationId": generation_id,
+        "text": text,
+        "context": agent_context(&host.db, &conversation, &text),
+        "capabilities": crate::agent::capabilities_for(&host.db, &conversation.workspace_id),
+        "skills": crate::skills::for_conversation(&host.db, &host.supervisor.data, &conversation),
+        "delegation": true,
+    });
+    let dispatched = dispatch(
+        &mut host.supervisor,
+        "session.deliver",
+        params,
+        Continuation::Accepted {
+            generation_id: generation_id.clone(),
+        },
+    );
+    dispatch_for_turn(host, app, &generation_id, dispatched)
+}
+
+fn child_after_session(
+    app: &AppHandle,
+    host: &mut Host,
+    conversation_id: String,
+    generation_id: String,
+    task_id: String,
+    text: String,
+    thinking_level: Option<String>,
+) -> Result<Option<Deferred>, String> {
+    match thinking_level {
+        Some(level) => dispatch(
+            &mut host.supervisor,
+            "session.thinking",
+            json!({"conversationId": conversation_id, "level": level}),
+            Continuation::ChildPrompt {
+                conversation_id,
+                generation_id,
+                task_id,
+                text,
+            },
+        ),
+        None => child_prompt(
+            app,
+            host,
+            &task_id,
+            &conversation_id,
+            &generation_id,
+            &text,
+        ),
+    }
+}
+
 impl Continuation {
-    pub(crate) fn apply(
+    fn target(&self) -> Option<(&str, Option<&str>)> {
+        match self {
+            Continuation::Send { conversation_id, generation_id, .. }
+            | Continuation::Retry { conversation_id, generation_id, .. }
+            | Continuation::Deliver { conversation_id, generation_id, .. }
+            | Continuation::Child { conversation_id, generation_id, .. } => {
+                Some((conversation_id, Some(generation_id)))
+            }
+            Continuation::Thinking { conversation_id, .. } => Some((conversation_id, None)),
+            Continuation::ChildPrompt { .. }
+            | Continuation::ThinkingApplied { .. }
+            | Continuation::Accepted { .. } => None,
+        }
+    }
+
+    fn apply(
         self,
         app: &AppHandle,
         host: &mut Host,
         epoch: u64,
-        reply: Result<Value, supervisor::Error>,
+        session: Option<SessionBinding>,
+        mut reply: Option<std::result::Result<Value, supervisor::Error>>,
     ) -> Result<Option<Deferred>, String> {
+        if let Some(binding) = session {
+            let (conversation_id, generation_id) = self
+                .target()
+                .ok_or_else(|| "Pi worker reply has no target conversation".to_string())?;
+            let conversation_id = conversation_id.to_string();
+            let generation_id = generation_id.map(str::to_string);
+            let opened = reply.take().unwrap_or_else(|| Ok(Value::Null));
+            if !accept_session(
+                app,
+                host,
+                epoch,
+                &conversation_id,
+                generation_id.as_deref(),
+                Some(binding),
+                opened,
+            )? {
+                return Ok(None);
+            }
+        }
+        let reply = reply.unwrap_or_else(|| Ok(Value::Null));
         match self {
             Continuation::Send {
                 conversation_id,
@@ -1512,30 +1722,7 @@ impl Continuation {
                 background,
                 images,
             } => {
-                if !accept_session(app, host, epoch, &conversation_id, Some(&generation_id), reply)? {
-                    return Ok(None);
-                }
-                let conversation = storage::get_conversation(&host.db, &conversation_id)
-                    .map_err(storage_error)?;
-                let params = json!({
-                    "conversationId": conversation_id,
-                    "generationId": generation_id,
-                    "text": text,
-                    "context": agent_context(&host.db, &conversation, &text),
-                    "capabilities": crate::agent::capabilities_for(&host.db, &conversation.workspace_id),
-                    "skills": crate::skills::for_conversation(&host.db, &host.supervisor.data, &conversation),
-                    "images": images,
-                    "background": background,
-                });
-                let dispatched = dispatch(
-                    &mut host.supervisor,
-                    "session.prompt",
-                    params,
-                    Continuation::Accepted {
-                        generation_id: generation_id.clone(),
-                    },
-                );
-                dispatch_for_turn(host, app, &generation_id, dispatched)
+                send_prompt(app, host, conversation_id, generation_id, text, background, images)
             }
             Continuation::Retry {
                 conversation_id,
@@ -1543,67 +1730,14 @@ impl Continuation {
                 user_text,
                 had_session,
             } => {
-                if !accept_session(app, host, epoch, &conversation_id, Some(&generation_id), reply)? {
-                    return Ok(None);
-                }
-                let conversation = storage::get_conversation(&host.db, &conversation_id)
-                    .map_err(storage_error)?;
-                let reference_context = agent_context(&host.db, &conversation, &user_text);
-                let capabilities =
-                    json!(crate::agent::capabilities_for(&host.db, &conversation.workspace_id));
-                let skills = crate::skills::for_conversation(
-                    &host.db,
-                    &host.supervisor.data,
-                    &conversation,
-                );
-                let images = images_for_generation(&host.db, &conversation_id, &generation_id);
-                let params = if had_session {
-                    json!({"conversationId":conversation_id,"generationId":generation_id,"context":reference_context,"capabilities":capabilities,"skills":skills,"images":images})
-                } else {
-                    json!({"conversationId":conversation_id,"generationId":generation_id,"text":user_text,"context":reference_context,"capabilities":capabilities,"skills":skills,"images":images})
-                };
-                let dispatched = dispatch(
-                    &mut host.supervisor,
-                    if had_session {
-                        "session.retry"
-                    } else {
-                        "session.prompt"
-                    },
-                    params,
-                    Continuation::Accepted {
-                        generation_id: generation_id.clone(),
-                    },
-                );
-                dispatch_for_turn(host, app, &generation_id, dispatched)
+                send_retry(app, host, conversation_id, generation_id, user_text, had_session)
             }
             Continuation::Deliver {
                 conversation_id,
                 generation_id,
                 text,
             } => {
-                if !accept_session(app, host, epoch, &conversation_id, Some(&generation_id), reply)? {
-                    return Ok(None);
-                }
-                let conversation = storage::get_conversation(&host.db, &conversation_id)
-                    .map_err(storage_error)?;
-                let params = json!({
-                    "conversationId": conversation_id,
-                    "generationId": generation_id,
-                    "text": text,
-                    "context": agent_context(&host.db, &conversation, &text),
-                    "capabilities": crate::agent::capabilities_for(&host.db, &conversation.workspace_id),
-                    "skills": crate::skills::for_conversation(&host.db, &host.supervisor.data, &conversation),
-                    "delegation": true,
-                });
-                let dispatched = dispatch(
-                    &mut host.supervisor,
-                    "session.deliver",
-                    params,
-                    Continuation::Accepted {
-                        generation_id: generation_id.clone(),
-                    },
-                );
-                dispatch_for_turn(host, app, &generation_id, dispatched)
+                send_delivery(app, host, conversation_id, generation_id, text)
             }
             Continuation::Child {
                 conversation_id,
@@ -1612,30 +1746,7 @@ impl Continuation {
                 text,
                 thinking_level,
             } => {
-                if !accept_session(app, host, epoch, &conversation_id, Some(&generation_id), reply)? {
-                    return Ok(None);
-                }
-                match thinking_level {
-                    Some(level) => dispatch(
-                        &mut host.supervisor,
-                        "session.thinking",
-                        json!({"conversationId": conversation_id, "level": level}),
-                        Continuation::ChildPrompt {
-                            conversation_id,
-                            generation_id,
-                            task_id,
-                            text,
-                        },
-                    ),
-                    None => child_prompt(
-                        app,
-                        host,
-                        &task_id,
-                        &conversation_id,
-                        &generation_id,
-                        &text,
-                    ),
-                }
+                child_after_session(app, host, conversation_id, generation_id, task_id, text, thinking_level)
             }
             Continuation::ChildPrompt {
                 conversation_id,
@@ -1663,29 +1774,17 @@ impl Continuation {
                 if let Some(level) = level {
                     host.chat.set_thinking_level(&conversation_id, level);
                 }
-                child_prompt(
-                    app,
-                    host,
-                    &task_id,
-                    &conversation_id,
-                    &generation_id,
-                    &text,
-                )
+                child_prompt(app, host, &task_id, &conversation_id, &generation_id, &text)
             }
             Continuation::Thinking {
                 conversation_id,
                 level,
-            } => {
-                if !accept_session(app, host, epoch, &conversation_id, None, reply)? {
-                    return Ok(None);
-                }
-                dispatch(
-                    &mut host.supervisor,
-                    "session.thinking",
-                    json!({"conversationId": conversation_id, "level": level}),
-                    Continuation::ThinkingApplied { conversation_id },
-                )
-            }
+            } => dispatch(
+                &mut host.supervisor,
+                "session.thinking",
+                json!({"conversationId": conversation_id, "level": level}),
+                Continuation::ThinkingApplied { conversation_id },
+            ),
             Continuation::ThinkingApplied { conversation_id } => {
                 let result = reply.map_err(|error| {
                     if error.is_timeout() {
@@ -1702,7 +1801,6 @@ impl Continuation {
                 Ok(None)
             }
             Continuation::Accepted { generation_id } => {
-                // A worker that acknowledges prompts only at completion is still streaming.
                 if let Err(error) = reply {
                     if !error.is_timeout() && host.chat.active.contains_key(&generation_id) {
                         host.chat.fail_live(
@@ -1738,9 +1836,9 @@ pub(crate) fn chat_send_inner(
         ..
     } = &mut *host;
 
-    // The bundled Pi ModelRuntime and its ephemeral credentials are shared by all
-    // conversations. Concurrent sessions are supported, so only the same conversation
-    // serializes; other chats and delegated children keep running.
+
+
+
     let active = chat.has_active_for(&conversation_id);
     if active && !attachments.is_empty() {
         return Err("Wait for the current reply before attaching an image.".into());
@@ -1758,7 +1856,7 @@ pub(crate) fn chat_send_inner(
         emit_queue(app, db, &conversation_id);
         return Ok(None);
     }
-    // Validate before the generation row exists so a bad image never leaves a stuck turn.
+
     let validated = attachments::validate(
         attachments
             .iter()
@@ -1906,7 +2004,7 @@ fn child_context(db: &rusqlite::Connection, conversation: &ConversationInfo) -> 
     context
 }
 
-/// Start one bounded child generation using the parent's provider, model and workspace.
+
 pub(crate) fn chat_child_send_inner(
     app: &AppHandle,
     host: &mut Host,
@@ -1994,8 +2092,8 @@ pub(crate) fn chat_child_send_inner(
     }
 }
 
-/// Resume a parent from persisted child outcomes. The text reaches Pi as a hidden custom
-/// message, so no fabricated user turn appears in the transcript.
+
+
 pub(crate) fn chat_delivery_send_inner(
     app: &AppHandle,
     host: &mut Host,
@@ -2080,7 +2178,7 @@ pub(crate) fn chat_delivery_send_inner(
     }
 }
 
-/// Start the oldest queued turn whose conversation is idle.
+
 pub(crate) fn drain_queue_inner(app: &AppHandle, host: &mut Host) {
     for _ in 0..4 {
         let Some(turn) = storage::next_queued_turn(&host.db).ok().flatten() else {
@@ -2191,8 +2289,8 @@ fn chat_retry_inner(
         chat,
         ..
     } = &mut *host;
-    // Apply queued protocol events before re-arming the same generation id, so a late
-    // terminal event from the previous attempt cannot complete the retry.
+
+
     for signal in supervisor.drain_signals() {
         chat.on_worker_signal(db, &app, signal);
     }
@@ -2244,8 +2342,8 @@ fn chat_retry_inner(
         }
     };
     let had_sqlite_session = conversation.session_path.is_some();
-    // A retry after the first prompt never reached Pi must replay the user turn. Once a
-    // durable session exists, Pi's own retry keeps context without duplicating it here.
+
+
     match chat.begin_session(
         db,
         supervisor,
@@ -2276,7 +2374,7 @@ pub(crate) fn chat_stop_inner(app: &AppHandle, host: &mut Host, generation_id: S
         ..
     } = &mut *host;
     let Some(active) = chat.active.get(&generation_id) else {
-        // Idempotent: a finished or already-cancelled generation needs no action.
+
         return Ok(());
     };
     if active.state == GenerationState::Cancelling {
@@ -2311,8 +2409,8 @@ pub(crate) fn chat_stop_inner(app: &AppHandle, host: &mut Host, generation_id: S
         None,
         None,
     );
-    // Cancellation is finalized locally even if the worker cannot acknowledge it. Any late
-    // worker event is ignored because the generation is no longer in `active`.
+
+
     let _ = supervisor.request(
         "session.abort",
         json!({"generationId": generation_id}),
@@ -2334,7 +2432,7 @@ fn provider_list_inner(host: &mut Host) -> Result<Vec<ConnectionInfo>, String> {
     storage::list_connections(&host.db).map_err(storage_error)
 }
 
-/// A validated provider probe that has not returned yet. The key stays in host memory only.
+
 struct ProviderProbe {
     provider_id: String,
     name: String,
@@ -2393,7 +2491,7 @@ fn provider_connect_start(
     if let Some(key) = key.as_ref().and_then(|key| key.as_str().ok()) {
         params["apiKey"] = Value::String(key.to_string());
     }
-    // The supervisor wipes its copy of the params after serializing them.
+
     let reply = host
         .supervisor
         .dispatch("provider.validate", params)
@@ -2416,11 +2514,11 @@ fn provider_connect_start(
     ))
 }
 
-/// Connect a provider after a real authenticated probe, then seal the key with DPAPI.
-///
-/// `baseUrl` is a host-side extension to the public chat contract (which only lists
-/// providerId/name/apiKey/modelId). It is needed for OpenAI-compatible custom endpoints and
-/// endpoint overrides; the UI's custom provider is currently a documented placeholder.
+
+
+
+
+
 fn provider_connect_finish(
     host: &mut Host,
     probe: ProviderProbe,
@@ -2464,8 +2562,8 @@ fn provider_connect_finish(
         sealed.as_deref(),
     )
     .map_err(storage_error)?;
-    // A reconnect may replace the key or endpoint. Existing Pi sessions hold the old
-    // ephemeral credential, so force them to reopen on the next prompt.
+
+
     host.chat.sessions.clear();
     let row = storage::get_connection(&host.db, &id).map_err(storage_error)?;
     Ok(row.info())
@@ -2598,7 +2696,7 @@ pub async fn conversation_select_model(
     .await
 }
 
-/// Apply a Pi session thinking level ('minimal'..'max') to the conversation's open session.
+
 #[tauri::command]
 pub async fn conversation_thinking(
     app: AppHandle,
@@ -2624,9 +2722,9 @@ pub async fn conversation_thinking(
     .await
 }
 
-/// `chat_send` is async so Pi startup, session opening and the prompt acknowledgement never
-/// run on WebView2's dispatch thread. Worker round trips are awaited without the host mutex,
-/// so the event pump and other chats keep running while this chat's session opens.
+
+
+
 #[tauri::command]
 pub async fn chat_send(
     app: AppHandle,
@@ -2722,7 +2820,7 @@ pub async fn provider_connect(
                 base_url,
             )?
         };
-        // The authenticated probe can take tens of seconds; other work keeps the lock.
+
         let reply = reply.wait(SESSION_TIMEOUT);
         let mut host = shared
             .lock()
@@ -2832,7 +2930,7 @@ mod tests {
             .any_thread()
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .unwrap();
-        // A write failure must not announce a completion the database never saw.
+
         db.execute_batch("PRAGMA query_only=1").unwrap();
         chat.finish(&mut db, app.handle(), "g", GenerationState::Completed, None, None, None);
         assert!(chat.has_active_for("c"), "an unsaved reply must stay live");
@@ -2907,7 +3005,7 @@ mod tests {
             checkpoint_bytes: 64 * 1024,
             },
         );
-        let error = provider_connect_inner(
+        let error = provider_connect_start(
             &mut host,
             "openai".into(),
             "Personal".into(),
@@ -2915,6 +3013,7 @@ mod tests {
             None,
             None,
         )
+        .map(|_| ())
         .unwrap_err();
         assert!(error.contains("Stop the current response"), "{error}");
         let error = provider_disconnect_inner(&mut host, "connection".into()).unwrap_err();

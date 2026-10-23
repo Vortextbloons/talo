@@ -1,4 +1,4 @@
-//! Host-owned MCP configuration and exact-operation permission broker.
+
 use crate::{credentials, run_blocking, Shared};
 use serde_json::{json, Value};
 use std::{
@@ -135,7 +135,7 @@ pub fn message(h: &mut crate::Host, app: &tauri::AppHandle, message: Value) {
         reply(h, message["id"].clone(), false);
         return;
     }
-    // Scheduled work waits at the same exact-operation broker; it never acquires grants itself.
+
     let attended = app
         .get_webview_window("main")
         .is_some_and(|w| w.is_visible().unwrap_or(false));
@@ -236,7 +236,7 @@ pub async fn tools_action(
                 let servers=config["servers"].as_array_mut().ok_or("Invalid stored servers")?;
                 if let Some(old)=servers.iter().find(|s|s["id"]==id){if server["credential"].is_null(){server["credential"]=old["credential"].clone();}}
                 servers.retain(|s|s["id"]!=id);servers.push(server);
-                // Definition changes revoke every old approval before the new process starts.
+
                 config["grants"]=json!([]);
             }
             "remove"=>{config["servers"].as_array_mut().ok_or("Invalid stored servers")?.retain(|s|s["id"]!=p["id"]);config["grants"]=json!([]);}
@@ -259,7 +259,7 @@ pub async fn tools_action(
             }
             _=>return Err("Unknown tools operation".into())
         }
-        // Validate through the worker without executing a process. No project files are read.
+
         h.supervisor.ensure_worker()?;
         h.supervisor.request("tools.configure",json!({"servers":config["servers"],"disabled":config["disabled"]}),Duration::from_secs(15)).map_err(|e|e.to_string())?;
         save(&h.supervisor.data,&config)?;

@@ -2,10 +2,10 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { AgentState, Assignment, PendingAsk, Skill, WorkspaceBundle } from '../../../../packages/contracts/src/agent';
 
-/**
- * A single read model for everything the agent authored for the user: question cards,
- * assigned to-dos, proposed workspaces and proposed skills. The host is the only writer.
- */
+
+
+
+
 export const agent = $state({
   assignments: [] as Assignment[],
   asks: [] as PendingAsk[],
@@ -42,7 +42,7 @@ export async function agentAction(operation: string, payload: Record<string, unk
   finally { agent.busy = false; }
 }
 
-/** Subscribe once for the whole window. Returns a disposer for the app shell. */
+
 export function initAgent(): () => void {
   let active = true;
   let stop: (() => void) | undefined;
@@ -51,12 +51,12 @@ export function initAgent(): () => void {
     void listen('agent-changed', () => { if (active) void refreshAgent(); })
       .then(dispose => { if (active) stop = dispose; else dispose(); });
   }
-  // A missed event must not leave a stale card; the host owns the truth.
+
   const timer = setInterval(() => { if (active) void refreshAgent(); }, 20_000);
   return () => { active = false; stop?.(); clearInterval(timer); };
 }
 
-/** Question cards that belong to the visible main conversation, including child asks. */
+
 export function asksFor(conversationId: string | undefined): PendingAsk[] {
   return conversationId
     ? agent.asks.filter(ask => ask.conversationId === conversationId || ask.parentConversationId === conversationId)
