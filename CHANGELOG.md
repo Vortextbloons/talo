@@ -1,7 +1,42 @@
 # Changelog
 
 All notable changes to Talo are recorded here. Versions follow semantic versioning; the
-installer, the update manifest and this file are bumped together by `npm run version:set`.
+installer, the update manifest and this file are bumped together by `bun run version:set`.
+
+## 0.3.0 — 2026-10-23
+
+This release adds Google Workspace integrations and improves startup and long-running chat
+responsiveness.
+
+### Google Workspace
+
+- Connect a Google account from Settings to read Gmail, work with Calendar, and read or create
+  text files in Drive.
+- Sending email, changing calendar events, and writing Drive files require a one-time approval
+  that shows the action details before it runs.
+- Google sign-in and token handling stay in the Windows host, with tokens protected using DPAPI.
+- The Google app is not yet Google-verified; its consent screen may show an unverified-app
+  warning and Google currently limits use to 100 users.
+
+### Chat and scheduled tasks
+
+- Startup now loads a snapshot of the primary conversation, library, and integrations, reducing
+  the round trips needed before the first chat view appears.
+- Chat session operations release the host lock between worker requests, and large transcripts
+  load in pages.
+- The assistant can manage scheduled tasks through its managed task operation.
+
+### Build and privacy
+
+- The build and Windows release workflow now use Bun, with the dependency lockfile updated to
+  `bun.lock`.
+- Added a published privacy policy and included the notices required by the release bundle.
+
+### Upgrading
+
+Install over an existing build. Chats, memory, projects, skills, schedules, and integrations are
+kept; the SQLite schema migrates in place. Installed copies update themselves through
+Settings → Advanced → Updates.
 
 ## 0.2.0 — 2026-10-22
 

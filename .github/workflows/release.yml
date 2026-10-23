@@ -71,6 +71,9 @@ jobs:
           releaseBody: |
             Talo for Windows (64-bit).
 
+            This release adds Google Workspace integration with approval for email, calendar, and Drive changes, and improves startup and chat responsiveness.
+
+            See the [changelog](https://github.com/Vortextbloons/talo/blob/main/CHANGELOG.md) for details.
             Installed copies update themselves: Settings → Advanced → Updates.
           releaseDraft: false
           prerelease: false
