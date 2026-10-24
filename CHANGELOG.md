@@ -3,6 +3,43 @@
 All notable changes to Talo are recorded here. Versions follow semantic versioning; the
 installer, the update manifest and this file are bumped together by `bun run version:set`.
 
+## 0.4.1 — 2026-10-24
+
+Patch release fixing approvals, delegation, scheduler, MCP cancellation, and Google
+sign-in packaging.
+
+### Approvals and integrations
+
+- Protected-tool "allow for this scope" grants are now saved before the approval is
+  reserved, so scope grants persist correctly.
+- Worker startup now stops the worker and records the failure when MCP tool
+  configuration fails, instead of leaving it half-started.
+
+### Delegation and scheduler
+
+- Opening a delegated child transcript is guarded against stale requests and
+  conversation switches.
+- Updating a deleted scheduled task now reports that it no longer exists instead of
+  silently succeeding.
+
+### Tools and providers
+
+- MCP connection setup respects cancellation instead of leaking close attempts.
+- Provider preparation is shared between validation and theme drafting.
+- Tool output truncation is byte-safe for multibyte text.
+- Removed dead contract types (`MemoryRecord`, `MemoryStore`, `ScheduledTask`).
+
+### Release bundle
+
+- The release workflow validates the `TALO_GOOGLE_OAUTH_JSON` secret and embeds the
+  Google OAuth client in the installer, so Google sign-in works in released builds.
+
+### Upgrading
+
+Install over an existing build. Chats, memory, projects, skills, schedules, and integrations are
+kept; the SQLite schema migrates in place. Installed copies update themselves through
+Settings → Advanced → Updates.
+
 ## 0.4.0 — 2026-10-23
 
 This release improves tray behavior, approval routing, theming, and the first-run
