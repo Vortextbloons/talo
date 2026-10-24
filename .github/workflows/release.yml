@@ -54,12 +54,30 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
+      - name: Check the Google OAuth client is present
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TALO_GOOGLE_OAUTH_JSON)) {
+            throw 'TALO_GOOGLE_OAUTH_JSON is empty. Add the Google Desktop OAuth client JSON as a repository secret.'
+          }
+          try {
+            $client = $env:TALO_GOOGLE_OAUTH_JSON | ConvertFrom-Json -ErrorAction Stop
+          } catch {
+            throw 'TALO_GOOGLE_OAUTH_JSON must contain the Google Desktop OAuth client JSON.'
+          }
+          if ([string]::IsNullOrWhiteSpace($client.installed.client_id)) {
+            throw 'TALO_GOOGLE_OAUTH_JSON must contain installed.client_id from a Google Desktop OAuth client.'
+          }
+        env:
+          TALO_GOOGLE_OAUTH_JSON: ${{ secrets.TALO_GOOGLE_OAUTH_JSON }}
+
       - name: Build, sign and publish
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TALO_GOOGLE_OAUTH_JSON: ${{ secrets.TALO_GOOGLE_OAUTH_JSON }}
         with:
           projectPath: .
           tauriScript: bun run tauri

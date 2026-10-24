@@ -196,11 +196,12 @@ pub fn resolve_pending(h: &mut crate::Host, app: &tauri::AppHandle, id: &str, de
     let mut config = load(&h.supervisor.data)?;
     let valid = h.integrations.pending.get(id).is_some_and(|(m,at,epoch)| at.elapsed()<Duration::from_secs(85) && *epoch==h.supervisor.worker_epoch() && live(h,m));
     let (message,_,_) = h.integrations.pending.remove(id).ok_or("Approval expired or cancelled")?;
-    let allowed = valid && ["once","scope"].contains(&decision) && crate::automation::reserve(h,message["params"]["action"].as_str().unwrap_or(""),message["params"]["scope"].as_str().unwrap_or(""));
-    if allowed && decision=="scope" {
+    let permitted = valid && ["once","scope"].contains(&decision);
+    if permitted && decision=="scope" {
         config["grants"].as_array_mut().ok_or("Invalid grants")?.push(json!({"id":uuid::Uuid::new_v4().to_string(),"action":message["params"]["action"],"scope":message["params"]["scope"],"summary":message["params"]["summary"]}));
         if let Err(error)=save(&h.supervisor.data,&config) { reply(h,message["id"].clone(),false); return Err(error); }
     }
+    let allowed = permitted && crate::automation::reserve(h,message["params"]["action"].as_str().unwrap_or(""),message["params"]["scope"].as_str().unwrap_or(""));
     let audit = h.db.execute("INSERT INTO permission_audit(id,action,resource,allowed) VALUES(?1,?2,?3,?4)",rusqlite::params![id,message["params"]["action"].as_str().unwrap_or(""),"protected tool operation",allowed]);
     reply(h,message["id"].clone(),allowed && audit.is_ok());
     let _ = app.emit("tool-approvals-changed",());

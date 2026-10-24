@@ -10,6 +10,9 @@ export class ManagedToolsExtension {
   readonly factory: ExtensionFactory;
   constructor(groups: ManagedMcpGroup[], external: McpManager, authorize: Authorize) {
     this.managed = new McpManager(authorize, () => {}, groups);
+    const delegation = groups.some(group => group.id === 'talo-delegate')
+      ? ', talo-delegate (bounded child tasks)'
+      : '';
     const proxy = external.tool();
     this.tool = {
       ...proxy, name: 'tools', label: 'Talo tools',
@@ -27,6 +30,7 @@ export class ManagedToolsExtension {
         return owner.tool(authorize).execute(id,input,signal,update,context);
       },
     };
+    this.tool.description = this.tool.description.replace(', talo-delegate (bounded child tasks)', delegation);
     this.factory = pi => { pi.registerTool(this.tool); };
   }
   async close() { await this.managed.close(); }

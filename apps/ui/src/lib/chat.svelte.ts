@@ -110,6 +110,7 @@ let pendingSnapshot: { conversationId: string; events: ChatEvent[] } | null = nu
 const MESSAGE_WINDOW = 120;
 let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
 let stopFallback: ReturnType<typeof setTimeout> | undefined;
+let delegationOpenRequest = 0;
 let sequenceByGeneration = new Map<string, number>();
 let finishedGenerations = new Set<string>();
 let promotedQueued = new Map<string, string>();
@@ -1041,6 +1042,12 @@ export async function stopGeneration(): Promise<void> {
 
 export async function openDelegationTask(taskId: string): Promise<boolean> {
   if (!isTauri()) return false;
+  const requestId = ++delegationOpenRequest;
+  const parentConversationId = chat.active?.conversation.id;
+  if (!parentConversationId) {
+    chat.childLoading = false;
+    return false;
+  }
   chat.childLoading = true;
   chat.error = '';
   try {
@@ -1048,21 +1055,25 @@ export async function openDelegationTask(taskId: string): Promise<boolean> {
       operation: 'open',
       payload: { taskId },
     });
+    if (requestId !== delegationOpenRequest || chat.active?.conversation.id !== parentConversationId) return false;
     chat.child = { ...snapshot, delegations: snapshot.delegations ?? [], queued: snapshot.queued ?? [] };
     chat.childParent = snapshot.parentConversation ?? null;
     chat.activity[taskId] = snapshot.delegationActivity ?? [];
     return true;
   } catch (value) {
+    if (requestId !== delegationOpenRequest || chat.active?.conversation.id !== parentConversationId) return false;
     chat.error = errorMessage(value);
     return false;
   } finally {
-    chat.childLoading = false;
+    if (requestId === delegationOpenRequest) chat.childLoading = false;
   }
 }
 
 export function closeDelegationTask(): void {
+  delegationOpenRequest++;
   chat.child = null;
   chat.childParent = null;
+  chat.childLoading = false;
 }
 
 export async function cancelDelegation(taskId: string): Promise<void> {

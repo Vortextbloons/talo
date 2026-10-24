@@ -426,6 +426,23 @@ interface ProviderValidation {
   latencyMs: number;
 }
 
+async function prepareProvider(
+  runtime: ModelRuntime,
+  provider: string,
+  modelId: string | undefined,
+  apiKey: string | undefined,
+  baseUrl: string | undefined,
+  reasoning: boolean,
+): Promise<{ model: Model<any>; key: string | undefined }> {
+  registerProviderEndpoint(runtime, { provider, model: modelId, baseUrl, reasoning });
+  const model = resolveModel(runtime, provider, modelId);
+  const key = effectiveApiKey(apiKey, provider, baseUrl || model.baseUrl);
+  if (key) rememberSecret(key);
+  if (!key && !(await runtime.getAuth(model))) {
+    throw new Error(`Provider is not configured: ${provider}`);
+  }
+  return { model, key };
+}
 
 
 
@@ -439,14 +456,7 @@ export async function validateProvider(
   baseUrl: string | undefined,
   reasoning: boolean,
 ): Promise<ProviderValidation> {
-  registerProviderEndpoint(runtime, { provider, model: modelId, baseUrl, reasoning });
-  const model = resolveModel(runtime, provider, modelId);
-  const key = effectiveApiKey(apiKey, provider, baseUrl || model.baseUrl);
-  if (key) rememberSecret(key);
-  if (!key) {
-    const auth = await runtime.getAuth(model);
-    if (!auth) throw new Error(`Provider is not configured: ${provider}`);
-  }
+  const { model, key } = await prepareProvider(runtime, provider, modelId, apiKey, baseUrl, reasoning);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROVIDER_PROBE_TIMEOUT_MS);
   const startedAt = Date.now();
@@ -540,14 +550,7 @@ export async function generateTheme(
   reasoning: boolean,
   description: string,
 ): Promise<ThemeDraft> {
-  registerProviderEndpoint(runtime, { provider, model: modelId, baseUrl, reasoning });
-  const model = resolveModel(runtime, provider, modelId);
-  const key = effectiveApiKey(apiKey, provider, baseUrl || model.baseUrl);
-  if (key) rememberSecret(key);
-  if (!key) {
-    const auth = await runtime.getAuth(model);
-    if (!auth) throw new Error(`Provider is not configured: ${provider}`);
-  }
+  const { model, key } = await prepareProvider(runtime, provider, modelId, apiKey, baseUrl, reasoning);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), THEME_TIMEOUT_MS);
   try {

@@ -403,8 +403,16 @@ impl Supervisor {
             last_activity: Instant::now(),
             eof_at: None,
         });
-        let config = crate::integrations::load(&self.data)?;
-        self.request("tools.configure", json!({"servers":config["servers"],"disabled":config["disabled"]}), Duration::from_secs(15)).map_err(|e|e.to_string())?;
+        let configured = (|| {
+            let config = crate::integrations::load(&self.data)?;
+            self.request("tools.configure", json!({"servers":config["servers"],"disabled":config["disabled"]}), Duration::from_secs(15)).map_err(|e|e.to_string())?;
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = configured {
+            let _ = self.stop_pi();
+            self.failures.insert("pi".into(), error.clone());
+            return Err(error);
+        }
         self.lifecycle.push_back(Lifecycle::Started);
         Ok(())
     }

@@ -94,9 +94,11 @@ sign-in.
    * pass its JSON text in `TALO_GOOGLE_OAUTH_JSON`.
    `apps/desktop/build.rs` embeds the client at compile time and rebuilds when any of these
    changes, so a released app needs no environment variable, file or setup form. Never
-   commit the downloaded JSON. Adding the local file to a checkout that was already built
-   needs one `cargo clean -p talo --manifest-path apps/desktop/Cargo.toml`; the environment
-   variables always trigger a rebuild on their own.
+   commit the downloaded JSON. For GitHub releases, add the complete JSON as the repository
+   Actions secret `TALO_GOOGLE_OAUTH_JSON`; the release workflow validates it and embeds it
+   in the installer. Adding the local file to a checkout that was already built needs one
+   `cargo clean -p talo --manifest-path apps/desktop/Cargo.toml`; the environment variables
+   always trigger a rebuild on their own.
 
 ## Learn more
 

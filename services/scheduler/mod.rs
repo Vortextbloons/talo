@@ -159,7 +159,10 @@ pub fn save(db: &Connection, mut task: Task, now: i64) -> Result<(), String> {
     if task.next_at.is_none() {
         return Err("Choose a future time".into());
     }
-    db.execute("INSERT INTO automation_tasks(id,definition,next_at,paused) VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET definition=excluded.definition,next_at=excluded.next_at,paused=excluded.paused WHERE deleted=0",params![task.id,serde_json::to_string(&task).map_err(|e|e.to_string())?,task.next_at,task.paused]).map_err(|e|e.to_string())?;
+    let changed = db.execute("INSERT INTO automation_tasks(id,definition,next_at,paused) VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET definition=excluded.definition,next_at=excluded.next_at,paused=excluded.paused WHERE deleted=0",params![task.id,serde_json::to_string(&task).map_err(|e|e.to_string())?,task.next_at,task.paused]).map_err(|e|e.to_string())?;
+    if changed == 0 {
+        return Err("That scheduled task no longer exists".into());
+    }
     Ok(())
 }
 pub fn list(db: &Connection) -> rusqlite::Result<Vec<Task>> {

@@ -30,7 +30,9 @@ export class ToolRegistry {
         let remaining=descriptor.maxResultBytes;
         return {...result,content:result.content.map(block=>{
           if(block.type!=='text')return {type:'text' as const,text:'Binary file output omitted. Open this file manually.'};
-          const text=block.text.slice(0,remaining);remaining=Math.max(0,remaining-text.length);
+          let text=Buffer.from(block.text).subarray(0,remaining).toString('utf8');
+          while(Buffer.byteLength(text)>remaining)text=Array.from(text).slice(0,-1).join('');
+          remaining=Math.max(0,remaining-Buffer.byteLength(text));
           return {type:'text' as const,text};
         })};
       }};

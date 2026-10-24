@@ -11,6 +11,24 @@ import type { ManagedTool, McpServerDefinition } from '../../../packages/contrac
 import { ManagedMcpTransport, type ManagedMcpGroup } from './managed-mcp.js';
 
 export type Authorize = (action: string, scope: string, summary: string, signal?: AbortSignal) => Promise<boolean>;
+
+function waitForSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener('abort', abort);
+    const abort = () => {
+      cleanup();
+      reject(signal.reason ?? new Error('Operation cancelled.'));
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(
+      value => { cleanup(); resolve(value); },
+      error => { cleanup(); reject(error); },
+    );
+    if (signal.aborted) abort();
+  });
+}
 const reserved = /donsetch|playwright|stagehand|chromium|chrome-devtools|browser[_-]|web[_-](search|fetch|crawl|screenshot)/iu;
 const MAX_OUTPUT = 12_000, TIMEOUT = 60_000;
 const ajv = new Ajv({ strict: false, allErrors: false, validateFormats: false });
@@ -90,8 +108,8 @@ export class McpManager {
     signal?.throwIfAborted();
     const existing = this.connections.get(id);
     if(existing && this.health.get(id)?.state==='failed' && !existing.active){await this.closeOne(id);return this.connect(id,signal);}
-    if (existing?.closing) {await existing.closing;return this.connect(id,signal);}
-    if (existing) { await existing.ready; return existing; }
+    if (existing?.closing) {await waitForSignal(existing.closing,signal);return this.connect(id,signal);}
+    if (existing) { await waitForSignal(existing.ready,signal); signal?.throwIfAborted(); return existing; }
     const c:Connection = {adapter:null,tools:new Map(),validators:new Map(),active:0,last:Date.now(),ready:Promise.resolve()};
     this.connections.set(id,c);this.updateIdleTimer();this.health.set(id,{state:'connecting',tools:[]});this.changed();
     c.ready = (async()=>{
@@ -115,10 +133,9 @@ export class McpManager {
       this.health.set(id,{state:'connected',tools:[...c.tools].map(([name,tool])=>({id:`${id}/${name}`,category:group?.category??'Integrations',description:tool.description.slice(0,500),permissions:group?[group.category==='Browser'?'browser.action':'web.public']:['mcp.call'],availability:'on-demand',timeoutMs:group?.timeoutMs??TIMEOUT,maxResultBytes:group?.maxResultBytes??MAX_OUTPUT,resources:group?.resources??[s.transport==='stdio'?'local process':'network']}))});
       c.last=Date.now(); this.changed();
     })().catch(async()=>{await c.adapter?.close();this.connections.delete(id);this.updateIdleTimer();this.failure(id,'Connection failed. Check the executable, endpoint, and credentials, then test again.');throw new Error('MCP connection failed. Check Tools & integrations.');});
-    const abort=()=>{void this.closeOne(id);};
-    signal?.addEventListener('abort',abort,{once:true});
-    try{if(signal?.aborted)abort();await c.ready;signal?.throwIfAborted();return c;}
-    finally{signal?.removeEventListener('abort',abort);}
+    await waitForSignal(c.ready,signal);
+    signal?.throwIfAborted();
+    return c;
   }
   private failure(server:string,message:string) {
     this.health.set(server,{state:'failed',tools:this.health.get(server)?.tools??[],error:message});
