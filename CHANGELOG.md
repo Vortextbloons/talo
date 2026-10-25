@@ -3,6 +3,12 @@
 All notable changes to Talo are recorded here. Versions follow semantic versioning; the
 installer, the update manifest and this file are bumped together by `bun run version:set`.
 
+## 0.4.2 ? 2026-10-24
+
+- Fixed release packaging by synchronizing Cargo.lock with the app version.
+- Version bumps now update Cargo.lock automatically to keep locked release builds working.
+- Includes all changes documented in 0.4.1 below.
+
 ## 0.4.1 — 2026-10-24
 
 Patch release fixing approvals, delegation, scheduler, MCP cancellation, and Google

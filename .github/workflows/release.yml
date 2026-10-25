@@ -89,6 +89,8 @@ jobs:
           releaseBody: |
             Talo for Windows (64-bit).
 
+            Fixes release packaging by keeping Cargo.lock synchronized with the app version.
+
             Patch release fixing protected-tool scope grants, worker startup on MCP config failure, delegated transcript races, scheduler updates for deleted tasks, MCP cancellation, and Google sign-in packaging.
 
             See the [changelog](https://github.com/Vortextbloons/talo/blob/main/CHANGELOG.md) for details.
