@@ -2,13 +2,35 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {readFile, mkdtemp, mkdir, writeFile, rm} from 'node:fs/promises';
+import {execFileSync} from 'node:child_process';
+import {tmpdir} from 'node:os';
 import {existsSync} from 'node:fs';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
 const read = relative => readFile(path.join(root, relative), 'utf8');
 const vendored = existsSync(path.join(root, 'vendor', 'runtime-manifest.json'));
+
+test('version script keeps the Cargo lockfile usable by locked release builds', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'talo-version-'));
+  try {
+    await mkdir(path.join(directory, 'apps/ui'), {recursive: true});
+    await mkdir(path.join(directory, 'apps/desktop/src'), {recursive: true});
+    for (const file of ['package.json', 'apps/ui/package.json', 'apps/desktop/tauri.conf.json']) {
+      await writeFile(path.join(directory, file), JSON.stringify({version: '0.4.0'}));
+    }
+    const manifest = path.join(directory, 'apps/desktop/Cargo.toml');
+    await writeFile(manifest, '[package]\nname = "talo"\nversion = "0.4.0"\nedition = "2021"\n');
+    await writeFile(path.join(directory, 'apps/desktop/src/main.rs'), 'fn main() {}\n');
+    execFileSync('cargo', ['generate-lockfile', '--offline', '--manifest-path', manifest]);
+    execFileSync(process.execPath, [path.join(root, 'scripts/version.mjs'), '0.4.1'], {cwd: directory});
+    const metadata = JSON.parse(execFileSync('cargo', ['metadata', '--locked', '--offline', '--format-version', '1', '--manifest-path', manifest], {encoding: 'utf8'}));
+    assert.equal(metadata.packages.find(pkg => pkg.name === 'talo').version, '0.4.1');
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
 
 test('installer config: NSIS target, brand and icons resolve', async () => {
   const config = JSON.parse(await read('apps/desktop/tauri.conf.json'));
