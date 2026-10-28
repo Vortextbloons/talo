@@ -335,6 +335,16 @@ impl ChatState {
                 emit_worker(app, WorkerState::Failed, Some(sanitize_error(&message)));
             }
             WorkerSignal::Chat(value) => {
+                if value.get("type").and_then(Value::as_str) == Some("steering_delivered") {
+                    let conversation = value.get("conversationId").and_then(Value::as_str).unwrap_or("");
+                    let generation = value.get("generationId").and_then(Value::as_str).unwrap_or("");
+                    let message = value.get("messageId").and_then(Value::as_str).unwrap_or("");
+                    if self.active.get(generation).is_some_and(|active| active.conversation_id == conversation)
+                        && storage::resolve_steering(db, message, generation, true).unwrap_or(false) {
+                        emit_steering(app, db, conversation, message);
+                    }
+                    return;
+                }
                 if value.get("type").and_then(Value::as_str) == Some("activity") {
                     let generation = value.get("generationId").and_then(Value::as_str).unwrap_or("");
                     let conversation = value.get("conversationId").and_then(Value::as_str).unwrap_or("");
@@ -649,6 +659,11 @@ impl ChatState {
         });
         let final_text = text.clone();
         let final_error = error.clone();
+        if let Ok(mut statement) = db.prepare("SELECT id FROM chat_messages WHERE generation_id=?1 AND role='user' AND status='failed'") {
+            if let Ok(ids) = statement.query_map([generation_id], |row| row.get::<_, String>(0)) {
+                for id in ids.flatten() { emit_steering(app, db, &conversation_id, &id); }
+            }
+        }
         emit_generation(
             app,
             &active.conversation_id,
@@ -936,6 +951,12 @@ fn snapshot(
 
 fn storage_error(error: storage::Error) -> String {
     error.to_string()
+}
+
+fn emit_steering(app: &AppHandle, db: &rusqlite::Connection, conversation_id: &str, message_id: &str) {
+    if let Ok(message) = storage::get_message(db, message_id) {
+        let _ = app.emit(EVENT_NAME, json!({"type":"steering", "conversationId":conversation_id, "message":message}));
+    }
 }
 
 
@@ -1307,6 +1328,7 @@ pub struct AttachmentInput {
 
 
 pub(crate) enum Continuation {
+    Steer { conversation_id: String, generation_id: String, message_id: String },
 
     Send {
         conversation_id: String,
@@ -1692,6 +1714,7 @@ impl Continuation {
             Continuation::Thinking { conversation_id, .. } => Some((conversation_id, None)),
             Continuation::ChildPrompt { .. }
             | Continuation::ThinkingApplied { .. }
+            | Continuation::Steer { .. }
             | Continuation::Accepted { .. } => None,
         }
     }
@@ -1725,6 +1748,14 @@ impl Continuation {
         }
         let reply = reply.unwrap_or_else(|| Ok(Value::Null));
         match self {
+            Continuation::Steer { conversation_id, generation_id, message_id } => {
+                if let Err(error) = reply {
+                    let _ = storage::resolve_steering(&host.db, &message_id, &generation_id, false);
+                    emit_steering(app, &host.db, &conversation_id, &message_id);
+                    return Err(session_error(error));
+                }
+                Ok(None)
+            }
             Continuation::Send {
                 conversation_id,
                 generation_id,
@@ -2749,6 +2780,32 @@ pub async fn conversation_thinking(
 
 
 
+
+#[tauri::command]
+pub async fn chat_steer(app: AppHandle, conversation_id: String, generation_id: String, message_id: String, text: String) -> Result<(), String> {
+    run_blocking(app, move |app| {
+        let shared = Arc::clone(app.state::<Shared>().inner());
+        let deferred = {
+            let mut host = shared.lock().map_err(|_| "Talo state is unavailable".to_string())?;
+            let message_id = validate_id(&message_id, "message id")?;
+            if text.trim().is_empty() || text.len() > MAX_MESSAGE_BYTES { return Err("Write a message that is not too long.".into()); }
+            if !host.chat.active.get(&generation_id).is_some_and(|active| active.conversation_id == conversation_id && active.state == GenerationState::Generating && !active.cancel_requested) {
+                return Err("The reply is no longer running. Send your message again.".into());
+            }
+            storage::insert_steering(&host.db, &message_id, &conversation_id, &generation_id, &text).map_err(storage_error)?;
+            emit_steering(app, &host.db, &conversation_id, &message_id);
+            match dispatch(&mut host.supervisor, "session.steer", json!({"conversationId":conversation_id,"generationId":generation_id,"messageId":message_id,"text":text}), Continuation::Steer { conversation_id: conversation_id.clone(), generation_id: generation_id.clone(), message_id: message_id.clone() }) {
+                Ok(deferred) => deferred,
+                Err(error) => {
+                    let _ = storage::resolve_steering(&host.db, &message_id, &generation_id, false);
+                    emit_steering(app, &host.db, &conversation_id, &message_id);
+                    return Err(error);
+                }
+            }
+        };
+        drive_shared(app, &shared, deferred)
+    }).await
+}
 
 #[tauri::command]
 pub async fn chat_send(

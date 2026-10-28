@@ -11,7 +11,8 @@
   import ToolApprovals from './components/ToolApprovals.svelte';
   import { agent, initAgent, applyAgentState, agentStateRevision, refreshAgent } from './lib/agent.svelte';
   import { chat, disposeChat, initChat, createConversation, openConversation, routing } from './lib/chat.svelte';
-  import { checkForUpdates } from './lib/updates.svelte';
+  import { checkForUpdates, updates } from './lib/updates.svelte';
+  import MessageBody from './components/MessageBody.svelte';
   import { CUSTOM_BASE_URL_EXAMPLE, DEFAULT_PREFERENCE, PROVIDERS, parseProviderPreference, providerDescriptor } from '../../../packages/contracts/src/index';
   import { tools } from './lib/tools.svelte';
   import type { Onboarding, RuntimeStatus, ServiceId, StartupSnapshot } from '../../../packages/contracts/src/index';
@@ -27,6 +28,7 @@
   const inboxCount = $derived(agent.asks.length + agent.drafts.length + agent.skillProposals.length);
   let taskFocus = $state('');
   let settingsTab = $state('');
+  let dismissedUpdate = $state('');
   function openPrimary(): void { navigatePage('Chat'); void openConversation(PRIMARY_CONVERSATION_ID); }
   function openSettings(tab?: string): void { settingsTab = tab ?? ''; navigatePage('Settings'); }
   function navigatePage(next: Page) { if (page !== next) { closeBrowser(); if (next !== 'Settings') settingsTab = ''; } page = next; }
@@ -57,6 +59,7 @@
   };
   async function refresh() { if(isTauri()) { status = await invoke<RuntimeStatus>('runtime_status'); applyRuntimeStatus(status); } }
   onMount(() => {
+    try { dismissedUpdate = localStorage.getItem('talo.update.dismissed') ?? ''; } catch {}
     let active=true;
     let unlisten:(()=>void)|undefined;
     let stopAutomation:(()=>void)|undefined;
@@ -285,6 +288,17 @@
   </main>
 </div>
 <svelte:window onkeydown={onKeydown} />
+{#if loaded && settings.complete && !editing && updates.phase === 'available' && updates.version !== dismissedUpdate}
+  <section class="update-card" aria-labelledby="update-title">
+    <div class="update-top">
+      <span class="update-icon" aria-hidden="true">↓</span>
+      <div><span class="update-label">Talo update</span><h2 id="update-title">A new version is available</h2><p>Version {updates.version} is ready to install.</p></div>
+      <button class="update-close" aria-label="Dismiss update" onclick={() => { dismissedUpdate = updates.version; try { localStorage.setItem('talo.update.dismissed', updates.version); } catch {} }}>×</button>
+    </div>
+    <div class="update-notes"><h3>What’s new</h3>{#if updates.notes}<MessageBody text={updates.notes} />{:else}<p>Release notes are not available for this update.</p>{/if}</div>
+    <div class="update-actions"><span>Talo will restart to install.</span><button class="primary" onclick={() => { dismissedUpdate = updates.version; openSettings('Advanced'); }}>View update</button></div>
+  </section>
+{/if}
 {#if loaded && (!settings.complete || editing)}
   <div class="overlay"><dialog open class="onboarding" aria-modal="true" aria-labelledby="setup-title"><span class="setup-mark"><AgentMark size={55} title="Talo" /></span><div class="steps">{step===0?'Getting acquainted':'Choosing a model'} · {step+1} of 2</div><h2 id="setup-title">{step===0?'Hi, I’m Talo.':'Where should answers come from?'}</h2>
     {#if step===0}
@@ -381,6 +395,17 @@
   button.primary{background:var(--yellow);border-color:var(--yellow);color:var(--black);font-weight:600;padding:11px 18px}
   button.primary:hover:not(:disabled){background:var(--accent-bright);border-color:var(--accent-bright)}
   .overlay{position:fixed;inset:0;background:var(--overlay);backdrop-filter:blur(5px);display:grid;place-items:center;padding:24px;z-index:5}
+  .update-card{position:fixed;right:24px;bottom:24px;z-index:5;width:min(420px,calc(100vw - 32px));max-height:min(70vh,600px);display:flex;flex-direction:column;background:var(--paper);border:1px solid var(--line-strong);border-radius:18px;color:var(--text);box-shadow:0 20px 70px rgba(0,0,0,.35);overflow:hidden}
+  .update-top{display:flex;align-items:flex-start;gap:14px;padding:20px 20px 16px}
+  .update-icon{display:grid;place-items:center;flex:none;width:38px;height:38px;border-radius:12px;background:color-mix(in srgb,var(--yellow) 16%,var(--paper));color:var(--yellow);font-size:22px;line-height:1}
+  .update-label{font-size:10px;font-weight:650;letter-spacing:.09em;text-transform:uppercase;color:var(--yellow-deep)}
+  .update-top h2{font-size:16px;letter-spacing:-.3px;margin:4px 0 5px}
+  .update-top p,.update-notes p{margin:0;color:var(--muted);font-size:12px;line-height:1.5}
+  .update-close{margin-left:auto;padding:2px 7px;border:0;background:transparent;color:var(--muted);font-size:20px;line-height:1}
+  .update-notes{min-height:0;overflow-y:auto;padding:15px 20px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-size:12px;line-height:1.55}
+  .update-notes h3{margin:0 0 10px;font-size:11px;color:var(--muted)}
+  .update-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px}
+  .update-actions span{font-size:11px;color:var(--muted)}
   .onboarding{position:relative;margin:auto;border:1px solid var(--line);color:var(--text);background:var(--paper);border-radius:24px;padding:36px;width:440px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 30px 90px rgba(0,0,0,.65)}
   .setup-mark{display:block;width:55px;margin-bottom:20px;filter:drop-shadow(0 0 26px color-mix(in srgb,var(--companion) 20%,transparent))}
   .steps{font-size:11px;color:var(--muted);margin-bottom:14px}

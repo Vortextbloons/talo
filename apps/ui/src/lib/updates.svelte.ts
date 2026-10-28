@@ -6,6 +6,7 @@ type Phase = 'idle' | 'checking' | 'current' | 'available' | 'preparing' | 'down
 
 export const updates = $state({
   phase: 'idle' as Phase,
+  version: '',
   notes: '',
   received: 0,
   total: 0,
@@ -44,10 +45,12 @@ export async function checkForUpdates(options: { quiet?: boolean } = {}): Promis
     if (!found) {
       pending = null;
       updates.phase = 'current';
+      updates.version = '';
       updates.notes = '';
       return;
     }
     pending = found;
+    updates.version = found.version;
     updates.notes = found.body ?? '';
     updates.phase = 'available';
   } catch (error) {

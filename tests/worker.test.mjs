@@ -17,6 +17,28 @@ async function filesUnder(directory) {
   return result;
 }
 
+test('steering reaches only the running conversation and is delivered to Pi', { timeout: 40000 }, async () => {
+  const data = await mkdtemp(path.join(os.tmpdir(), 'talo-steer-'));
+  const mock = await startMockProvider({ chunks: ['One', ' two', ' three'], delayMs: 300 });
+  const worker = startWorker(data);
+  try {
+    await worker.waitReady();
+    for (const id of ['one', 'two']) await worker.request(`open-${id}`, 'session.open', { conversationId: id, provider: 'custom', model: 'mock-model', baseUrl: mock.url, apiKey: mock.state.key });
+    await worker.request('prompt', 'session.prompt', { conversationId: 'one', generationId: 'generation', text: 'Start' });
+    await worker.wait(event => event.type === 'chat' && event.event?.type === 'generation' && event.event.generationId === 'generation' && event.event.delta?.text);
+    await assert.rejects(worker.request('wrong', 'session.steer', { conversationId: 'two', generationId: 'generation', messageId: 'bad', text: 'Wrong chat' }), /no longer running/);
+    await worker.request('steer', 'session.steer', { conversationId: 'one', generationId: 'generation', messageId: 'direction', text: 'Change direction' });
+    await worker.wait(event => event.type === 'chat' && event.event?.type === 'steering_delivered' && event.event.messageId === 'direction');
+    const done = await worker.waitGeneration('one', 'generation');
+    assert.equal(done.event.state, 'completed');
+    assert.ok(mock.state.requests.some(request => request.body.messages?.some(message => message.role === 'user' && JSON.stringify(message.content).includes('Change direction'))));
+  } finally {
+    await worker.kill();
+    await mock.close();
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
 test('explicit session restore rejects missing and empty files without replacing them', { timeout: 40000 }, async () => {
   const data = await mkdtemp(path.join(os.tmpdir(), 'talo-missing-session-'));
   const worker = startWorker(data);

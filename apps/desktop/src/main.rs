@@ -820,6 +820,7 @@ fn main() {
             chat::conversation_select_model,
             chat::conversation_thinking,
             chat::chat_send,
+            chat::chat_steer,
             chat::chat_retry,
             chat::chat_stop,
             chat::provider_list,

@@ -36,6 +36,18 @@ function deferred() {
   return { promise, resolve };
 }
 
+test('steering updates stay in their conversation and replace pending status', async () => {
+  const api = await store();
+  api.applySnapshot(snapshot({ messages: [] }));
+  const pending = { id: 'direction', role: 'user', text: 'Change direction', status: 'generating', generationId: 'gen' };
+  api.handleEvent({ type: 'steering', conversationId: 'other', message: pending });
+  assert.equal(api.chat.active.messages.length, 0);
+  api.handleEvent({ type: 'steering', conversationId: 'chat', message: pending });
+  api.handleEvent({ type: 'steering', conversationId: 'chat', message: { ...pending, status: 'completed' } });
+  assert.equal(api.chat.active.messages.length, 1);
+  assert.equal(api.chat.active.messages[0].status, 'completed');
+});
+
 test('stream deltas append once and reset both reply and reasoning', async () => {
   const api = await store();
   api.applySnapshot(snapshot({ messages: [{ ...message('a'), text: 'hello', reasoning: 'old' }] }));

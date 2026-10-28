@@ -68,6 +68,7 @@ export type ChatEvent = {
   | { type: 'research'; conversationId: string; generationId: string; activity: ResearchActivity }
   | { type: 'delegation'; task: DelegationTask }
   | { type: 'queue'; conversationId: string; queued: QueuedTurn[] }
+  | { type: 'steering'; conversationId: string; message: ChatMessage }
   | { type: 'session'; conversationId: string; state: 'closed' }
   | { type: 'activity'; taskId: string; parentConversationId: string; conversationId: string; generationId: string; activity: DelegationActivity };
 export interface ResearchActivity {
@@ -79,10 +80,10 @@ export interface ResearchActivity {
 
 export type WorkerMethod = 'ping' | 'shutdown' | 'models.list' | 'provider.validate' | 'theme.draft' |
   'chatgpt.begin' | 'chatgpt.poll' | 'chatgpt.refresh' | 'chatgpt.revoke' |
-  'session.open' | 'session.prompt' | 'session.retry' | 'session.deliver' | 'session.abort' | 'session.snapshot' |
+  'session.open' | 'session.prompt' | 'session.steer' | 'session.retry' | 'session.deliver' | 'session.abort' | 'session.snapshot' |
   'session.history' | 'session.thinking' | 'tools.configure' | 'tools.status' | 'tools.test' | 'tools.cancel';
 export interface WorkerRequest { id: string; method: WorkerMethod; params?: Record<string, unknown> }
 export type WorkerEvent =
   | { type: 'ready' | 'sleeping' | 'error'; message?: string }
   | { type: 'response'; id: string; result?: unknown; error?: string }
-  | { type: 'chat'; event: ChatEvent | { type: 'context'; conversationId: string; compacted: boolean; usage: unknown } };
+  | { type: 'chat'; event: ChatEvent | { type: 'context'; conversationId: string; compacted: boolean; usage: unknown } | { type: 'steering_delivered'; conversationId: string; generationId: string; messageId: string } };

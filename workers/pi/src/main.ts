@@ -164,6 +164,7 @@ const WORKER_METHODS = new Set<WorkerMethod>([
   'chatgpt.begin', 'chatgpt.poll', 'chatgpt.refresh', 'chatgpt.revoke',
   'session.open',
   'session.prompt',
+  'session.steer',
   'session.retry',
   'session.deliver',
   'session.abort',
@@ -251,6 +252,7 @@ interface Generation {
   id: string;
   conversationId: string;
   userText: string;
+  steering: { id: string; text: string }[];
 
   images: PromptImage[];
   baseLeafId: string | null;
@@ -603,6 +605,15 @@ function handleSessionEvent(record: SessionRecord, event: AgentSessionEvent): vo
     return;
   }
   if (event.type === 'message_start') {
+    if (event.message.role === 'user') {
+      const text = extractText(event.message);
+      const index = generation.steering.findIndex(item => item.text === text);
+      if (index >= 0) {
+        const [item] = generation.steering.splice(index, 1);
+        send({ type: 'chat', event: { type: 'steering_delivered', conversationId: record.conversationId, generationId: generation.id, messageId: item.id } });
+      }
+      return;
+    }
     if (event.message.role !== 'assistant') return;
     generation.text = '';
     generation.reasoning = '';
@@ -727,6 +738,7 @@ function beginGeneration(record: SessionRecord, generationId: string, text: stri
     id: generationId,
     conversationId: record.conversationId,
     userText: text,
+    steering: [],
     images: [],
     baseLeafId: manager.getLeafId(),
     started: deferred<void>(),
@@ -851,6 +863,7 @@ function finalizeGeneration(record: SessionRecord, generation: Generation): Prom
   if (generation.finalized) return Promise.resolve();
   if (generation.finalizing) return generation.finalizing;
   const task = (async () => {
+    if (generation.steering.length) record.session.agent.clearSteeringQueue();
     if (record.closing) {
       generation.finalized = true;
       return;
@@ -1441,6 +1454,25 @@ async function handle(request: WorkerRequest): Promise<void> {
         const { record, generation } = await startSessionPrompt(params);
         send({ type: 'response', id: request.id, result: { accepted: true, generationId: generation.id } });
         launchGeneration(record, generation);
+        return;
+      }
+      case 'session.steer': {
+        const conversationId = requireId(params.conversationId, 'conversationId');
+        const generationId = requireId(params.generationId, 'generationId');
+        const messageId = requireId(params.messageId, 'messageId');
+        const text = requirePromptText(params.text);
+        const record = sessions.get(conversationId);
+        const generation = record?.generation;
+        if (!record || !generation || generation.id !== generationId || record.state !== 'generating' || generation.cancelRequested || !record.session.isStreaming) throw new Error('The reply is no longer running. Send your message again.');
+        const item = { id: messageId, text };
+        generation.steering.push(item);
+        try {
+          record.session.agent.steer({ role: 'user', content: [{ type: 'text', text }], timestamp: Date.now() });
+        } catch (error) {
+          generation.steering = generation.steering.filter(entry => entry !== item);
+          throw error;
+        }
+        send({ type: 'response', id: request.id, result: { accepted: true } });
         return;
       }
       case 'session.retry': {

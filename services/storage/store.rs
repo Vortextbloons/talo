@@ -445,7 +445,7 @@ pub fn message_page(db: &Connection, conversation_id: &str, before: Option<&str>
 }
 
 fn hydrate_stream(db: &Connection, message: &mut ChatMessage) -> Result<()> {
-    if message.status != "generating" { return Ok(()); }
+    if message.status != "generating" || message.role != "assistant" { return Ok(()); }
     let mut statement = db.prepare("SELECT text,reasoning,reset FROM chat_stream_chunks WHERE generation_id=?1 ORDER BY sequence")?;
     let mut rows = statement.query(params![message.generation_id])?;
     while let Some(row) = rows.next()? {
@@ -771,6 +771,21 @@ pub fn enqueue_turn(
     Ok(())
 }
 
+pub fn insert_steering(db: &Connection, id: &str, conversation_id: &str, generation_id: &str, text: &str) -> Result<()> {
+    let changed = db.execute(&format!("INSERT INTO chat_messages(id,conversation_id,role,text,status,generation_id,error,created_at,updated_at)
+        SELECT ?1,?2,'user',?4,'generating',?3,NULL,{NOW},{NOW} WHERE EXISTS
+        (SELECT 1 FROM chat_generations WHERE id=?3 AND conversation_id=?2 AND state='generating')"),
+        params![id, conversation_id, generation_id, text])?;
+    if changed == 0 { return Err(Error::Busy); }
+    Ok(())
+}
+
+pub fn resolve_steering(db: &Connection, id: &str, generation_id: &str, delivered: bool) -> Result<bool> {
+    Ok(db.execute(&format!("UPDATE chat_messages SET status=?3,error=?4,updated_at={NOW}
+        WHERE id=?1 AND generation_id=?2 AND role='user' AND status='generating'"),
+        params![id, generation_id, if delivered { "completed" } else { "failed" }, if delivered { None } else { Some("Delivery could not be confirmed. Check the reply before sending again.") }])? > 0)
+}
+
 pub fn list_queue(db: &Connection, conversation_id: &str) -> Result<Vec<QueuedTurnRow>> {
     let mut statement = db.prepare(
         "SELECT generation_id,conversation_id,kind,text,created_at FROM chat_turn_queue
@@ -1022,6 +1037,8 @@ pub fn finalize_generation(
             params![assistant_id, text, reasoning, message_status, error],
         )?;
     }
+    tx.execute(&format!("UPDATE chat_messages SET status='failed',error='Delivery could not be confirmed. Check the reply before sending again.',updated_at={NOW}
+        WHERE conversation_id=?1 AND generation_id=?2 AND role='user' AND status='generating'"), params![conversation_id, generation_id])?;
     tx.execute(
         &format!("UPDATE chat_conversations SET updated_at={NOW} WHERE id=?1"),
         params![conversation_id],
@@ -1288,6 +1305,25 @@ mod tests {
             connection_id: id,
             model_id: "openrouter/auto".into(),
         }
+    }
+
+    #[test]
+    fn steering_delivery_and_interruption_are_scoped_to_the_generation() {
+        let mut db = database();
+        create_conversation(&db, "c1", "Chat", None).unwrap();
+        create_conversation(&db, "c2", "Other", None).unwrap();
+        start_generation(&mut db, NewGeneration { id: "g1", conversation_id: "c1", assistant_id: "a1", text: "Start", title: None }).unwrap();
+        assert!(insert_steering(&db, "wrong", "c2", "g1", "Wrong chat").is_err());
+        insert_steering(&db, "s1", "c1", "g1", "First direction").unwrap();
+        insert_steering(&db, "s2", "c1", "g1", "Second direction").unwrap();
+        assert!(!resolve_steering(&db, "s1", "other", true).unwrap());
+        assert!(resolve_steering(&db, "s1", "g1", true).unwrap());
+        finalize_generation(&mut db, "g1", "cancelled", "", None, "cancelled", None, 1).unwrap();
+        assert_eq!(get_message(&db, "s1").unwrap().status, "completed");
+        let pending = get_message(&db, "s2").unwrap();
+        assert_eq!(pending.status, "failed");
+        assert!(pending.error.unwrap().contains("could not be confirmed"));
+        assert!(!resolve_steering(&db, "s2", "g1", true).unwrap());
     }
 
     #[test]

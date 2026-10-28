@@ -86,7 +86,17 @@
   const primary = $derived(active?.conversation.id === PRIMARY_CONVERSATION_ID);
   const primaryWaiting = $derived(asksFor(PRIMARY_CONVERSATION_ID).length);
   const otherChats = $derived(chat.conversations.filter(c => c.id !== PRIMARY_CONVERSATION_ID && (c.workspaceId ?? 'general') === library.activeWorkspace && Boolean(c.archived) === showArchived));
-  const messages = $derived(chat.active?.messages ?? []);
+  const messages = $derived.by(() => {
+    const result = [...(chat.active?.messages ?? [])];
+    for (let index = 0; index < result.length; index += 1) {
+      const message = result[index];
+      if (message.role !== 'assistant' || !message.generationId) continue;
+      let end = index;
+      while (result[end + 1]?.role === 'user' && result[end + 1]?.generationId === message.generationId) end += 1;
+      if (end > index) { result.splice(index, 1); result.splice(end, 0, message); index = end; }
+    }
+    return result;
+  });
   const delegations = $derived(chat.active?.delegations ?? []);
   function calledTasks(generationId?: string | null) {
     const ids = generationId ? chat.delegated[generationId] : undefined;
@@ -908,9 +918,10 @@
               {:else if message.status === 'generating'}
                 <span class="typing" aria-label="Talo is replying"><i></i><i></i><i></i></span>
               {/if}
-              {#if message.status === 'generating' && message.text}
+              {#if message.role === 'assistant' && message.status === 'generating' && message.text}
                 <span class="cursor" aria-hidden="true"></span>
               {/if}
+              {#if message.role === 'user' && message.status === 'generating'}<p class="message-error">Sending direction…</p>{/if}
               {#if message.error}
                 <p class="message-error">{message.error}</p>
               {/if}
@@ -1139,7 +1150,7 @@
             type="submit"
             class="send"
             disabled={!connected.length || !selection || !selectionAvailable || (!text.trim() && !draftImages.length) || chat.sending || chat.preview}
-            aria-label={working ? 'Queue message' : chat.sending ? 'Sending message' : 'Send message'}
+            aria-label={working ? 'Send direction' : chat.sending ? 'Sending message' : 'Send message'}
             aria-busy={chat.sending}
           ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 19.5V5.5" /><path d="m5.5 11.5 6.5-6.5 6.5 6.5" /></svg></button>
         </div>

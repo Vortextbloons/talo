@@ -430,6 +430,14 @@ function handleGenerationEvent(event: Extract<ChatEvent, { type: 'generation' }>
 }
 
 function handleEvent(event: ChatEvent): void {
+  if (event.type === 'steering') {
+    if (chat.active?.conversation.id === event.conversationId) {
+      const index = chat.active.messages.findIndex(message => message.id === event.message.id);
+      if (index < 0) chat.active.messages.push(event.message);
+      else chat.active.messages[index] = event.message;
+    }
+    return;
+  }
   if (event.type === 'delegation') {
     applyDelegation(event.task);
     return;
@@ -980,12 +988,12 @@ export async function sendMessage(rawText: string, attachments: ChatAttachmentIn
         chat.error = 'Wait for the current reply before attaching an image.';
         return false;
       }
-      conversation.queued = [...(conversation.queued ?? []), { id: generationId, text, createdAt: new Date().toISOString() }];
-      await invoke('chat_send', {
+      if (conversation.state !== 'generating' || !conversation.generationId) throw new Error('The reply is stopping. Send your message when it finishes.');
+      await invoke('chat_steer', {
         conversationId: conversation.conversation.id,
-        generationId,
+        generationId: conversation.generationId,
+        messageId: generationId,
         text,
-        attachments: [],
       });
       return true;
     }
